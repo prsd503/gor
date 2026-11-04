@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&display=swap" rel="stylesheet">
+    <title>Owl Watcher | Admin</title>
+    <style>
+        /* Admin page specifics (shared components live in theme.css) */
+        #admin-results, #active-bookings-list { text-align: left; margin-top: 12px; }
+        #spinStatsResult:empty { display: none; }
+        #spinStatsResult { margin-top: 12px; line-height: 1.8; }
+        #bulk-section { margin-top: 12px; }
+    </style>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4f2ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="theme.css">
+    <script src="menu.js"></script>
+</head>
+<body>
+
+<nav class="main-nav" aria-label="Main navigation">
+        <div class="nav-logo">
+            <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+            <span>Owl Watcher</span>
+        </div>
+        <div class="nav-links" id="navLinks">
+            <a href="index.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>Home</span></a>
+            <a href="admin.html" class="nav-active" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg><span>Admin</span></a>
+            <a href="guard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>Guard</span></a>
+            <a href="studio.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg><span>Studio</span></a>
+            <a href="https://wa.me/919033406816"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-5A8 8 0 1 1 21 12z"/></svg><span>Contact</span></a>
+        </div>
+    </nav>
+
+    <main class="page stack">
+        <header class="page-header">
+            <span class="eyebrow">Society administration</span>
+            <h1 class="page-title">Admin portal</h1>
+            <p class="page-subtitle">Manage vehicles, notices, guards and facilities for your society.</p>
+        </header>
+
+        <!-- Login Section -->
+        <section class="card" id="login-section" aria-labelledby="adminLoginTitle">
+            <h2 id="adminLoginTitle">Sign in</h2>
+            <label for="email">Email</label>
+            <input type="email" id="email" placeholder="name@example.com" autocomplete="username">
+            <label for="pass">Password</label>
+            <input type="password" id="pass" placeholder="Password" autocomplete="current-password">
+            <div class="form-actions">
+                <button type="button" id="loginBtn" class="btn-block">Login</button>
+            </div>
+            <div class="text-center">
+                <button type="button" id="forgotPasswordBtn" class="btn-ghost">Forgot password?</button>
+            </div>
+        </section>
+
+        <!-- Master Admin Controls Panel -->
+        <section class="card card-danger" id="master-admin-panel" style="display:none;" aria-labelledby="masterTitle">
+            <h2 id="masterTitle">👑 Master admin controls</h2>
+            <label for="masterSocietyInput">Switch active society</label>
+            <div class="input-row">
+                <input type="text" id="masterSocietyInput" placeholder="Enter target society name">
+                <button type="button" id="masterSaveSocietyBtn" class="btn-danger">Update</button>
+            </div>
+            <label for="masterPhoneInput"><span class="ow-brand">Owl Watcher</span> team phone</label>
+            <div class="input-row">
+                <input type="text" id="masterPhoneInput" placeholder="Team WhatsApp number">
+                <button type="button" id="masterSavePhoneBtn" class="btn-success">Save</button>
+            </div>
+        </section>
+
+        <!-- Spin Statistics Widget (Visible only to MasterAdmin) -->
+        <section class="card card-subtle" id="masterAdminSpinSection" style="display: none;" aria-labelledby="spinTitle">
+            <h2 id="spinTitle">📊 Society spin counts</h2>
+            <label for="adminSocietyQuery">Society name</label>
+            <div class="input-row">
+                <input type="text" id="adminSocietyQuery" placeholder="Enter society name">
+                <button type="button" onclick="fetchSocietySpins()">Check spins</button>
+            </div>
+            <div id="spinStatsResult" class="note"></div>
+        </section>
+
+        <!-- Search & Manage Section -->
+        <section class="card" id="search-section" style="display:none;" aria-labelledby="searchTitle">
+            <div class="card-header">
+                <h2 class="section-title" id="searchTitle">Search &amp; manage</h2>
+                <button type="button" id="logoutBtn" class="btn-danger-soft btn-sm">Logout</button>
+            </div>
+            <label for="adminSearch">Vehicle number</label>
+            <div class="input-row">
+                <input type="text" id="adminSearch" class="uppercase" placeholder="e.g. GJ01AB1234">
+                <button type="button" id="adminSearchBtn">Search</button>
+            </div>
+            <div id="admin-results"></div>
+        </section>
+
+        <!-- Main Data & Operations Section -->
+        <div id="data-section" class="stack" style="display:none;">
+            <section class="card" aria-labelledby="registryTitle">
+                <h2 id="registryTitle">🚗 Add / edit vehicle</h2>
+                <label for="vNum">Vehicle number</label>
+                <input type="text" id="vNum" class="uppercase" placeholder="Vehicle Number">
+                <label for="fNum">Flat number / name</label>
+                <input type="text" id="fNum" class="uppercase" placeholder="Flat Number/Name">
+                <div class="row">
+                    <div>
+                        <label for="rType">Resident type</label>
+                        <select id="rType">
+                            <option value="">Select Resident Type</option>
+                            <option value="Owner">Owner</option>
+                            <option value="Tenant">Tenant</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="vType">Vehicle type</label>
+                        <select id="vType">
+                            <option value="2-Wheeler">2-Wheeler</option>
+                            <option value="3-Wheeler">3-Wheeler</option>
+                            <option value="4-Wheeler">4-Wheeler</option>
+                        </select>
+                    </div>
+                </div>
+                <label for="mNum">Mobile number</label>
+                <input type="text" id="mNum" placeholder="Mobile Number">
+                <div class="form-actions">
+                    <button type="button" id="saveBtn">Add / edit vehicle registry</button>
+                </div>
+            </section>
+
+            <section class="card" aria-labelledby="noticeAdminTitle">
+                <h2 id="noticeAdminTitle">📢 Notice board</h2>
+                <label for="todayMsg">Today's notice</label>
+                <textarea id="todayMsg" placeholder="Visible now..." rows="3"></textarea>
+                <label for="tomorrowMsg">Tomorrow's notice</label>
+                <textarea id="tomorrowMsg" placeholder="Set for tomorrow..." rows="3"></textarea>
+                <p class="note note-warning">⚠️ Publicly visible. Do not upload personal data.</p>
+                <div class="form-actions">
+                    <button type="button" id="postNoticeBtn">Update notices</button>
+                    <button type="button" id="deleteNoticeBtn" class="btn-danger-soft">Clear all notices</button>
+                </div>
+            </section>
+
+            <section class="card" aria-labelledby="guardsTitle">
+                <h2 id="guardsTitle">🛡️ Security guards</h2>
+                <label for="searchGuardName">Find a guard</label>
+                <div class="input-row">
+                    <input type="text" id="searchGuardName" placeholder="Search by name...">
+                    <button type="button" id="searchGuardBtn" class="btn-secondary">Search</button>
+                </div>
+                <label for="gEmail">Guard email (ID)</label>
+                <input type="email" id="gEmail" placeholder="Guard Email (ID)">
+                <label for="gName">Full name</label>
+                <input type="text" id="gName" placeholder="Guard Full Name">
+                <label for="gPhone">Mobile number</label>
+                <input type="text" id="gPhone" placeholder="Guard Mobile Number">
+                <div class="form-actions">
+                    <button type="button" id="addGuardBtn">Add / update guard</button>
+                    <button type="button" id="deleteGuardBtn" class="btn-danger-soft">Delete</button>
+                </div>
+            </section>
+
+            <!-- FACILITY MANAGEMENT SECTION -->
+            <section class="card" aria-labelledby="facilityNamesTitle">
+                <h2 id="facilityNamesTitle">🏢 Facility names (F1–F5)</h2>
+                <label for="name_F1">F1</label>
+                <input type="text" id="name_F1" placeholder="Name for F1 (e.g. Hall 1)">
+                <label for="name_F2">F2</label>
+                <input type="text" id="name_F2" placeholder="Name for F2 (e.g. Badminton Court)">
+                <label for="name_F3">F3</label>
+                <input type="text" id="name_F3" placeholder="Name for F3 (e.g. Gym)">
+                <label for="name_F4">F4</label>
+                <input type="text" id="name_F4" placeholder="Name for F4 (e.g. Swimming Pool)">
+                <label for="name_F5">F5</label>
+                <input type="text" id="name_F5" placeholder="Name for F5 (e.g. Club House)">
+                <div class="form-actions">
+                    <button type="button" id="saveAllFacilityNamesBtn">Save all names</button>
+                </div>
+            </section>
+
+            <!-- BOOKING SECTION -->
+            <section class="card booking-section" aria-labelledby="bookTitle">
+                <h2 id="bookTitle">📅 Book a facility</h2>
+                <label for="facilitySelect">Facility</label>
+                <select id="facilitySelect"></select>
+                <label for="bookingDate">Date</label>
+                <input type="date" id="bookingDate">
+                <div id="bookingTimeContainer"></div>
+                <div class="form-actions">
+                    <button type="button" id="bookFacilityBtn">Confirm booking</button>
+                </div>
+                <p class="note small">⚠️ Bookings older than 7 days are deleted automatically, and bookings can be made up to 6 months ahead.</p>
+                <div id="active-bookings-list"></div>
+            </section>
+
+            <section class="card" aria-labelledby="bulkTitle">
+                <h2 id="bulkTitle">📁 Bulk vehicle management</h2>
+                <label for="excelInput">CSV file</label>
+                <input type="file" id="excelInput">
+                <div class="form-actions">
+                    <button type="button" id="downloadTemplateBtn" class="btn-secondary">Download CSV template</button>
+                    <button type="button" id="importBtn">Bulk import CSV file</button>
+                </div>
+                <div id="bulk-section" style="display: none;">
+                    <div class="form-actions">
+                        <button type="button" id="bulkDeleteBtn" class="btn-danger-soft">Bulk delete</button>
+                        <button type="button" id="exportBtn" class="btn-secondary">Export all data</button>
+                    </div>
+                    <hr>
+                    <h3>🚗 Vehicle allowance limits</h3>
+                    <div class="row">
+                        <div>
+                            <label for="max4WheelerInput">Max 4-wheelers per flat</label>
+                            <input type="number" id="max4WheelerInput" placeholder="e.g. 1" min="0">
+                        </div>
+                        <div>
+                            <label for="max2WheelerInput">Max 2-wheelers per flat</label>
+                            <input type="number" id="max2WheelerInput" placeholder="e.g. 2" min="0">
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" id="saveSocietyLimitsBtn">Save vehicle limits</button>
+                    </div>
+                    <hr>
+                    <h3>🏠 Flat numbers</h3>
+                    <label for="flatsInput">Flat numbers, separated by commas (e.g. A1-101, A1-102, B1-101)</label>
+                    <textarea id="flatsInput" placeholder="A1-101, A1-102, B1-101..." rows="3"></textarea>
+                    <div class="form-actions">
+                        <button type="button" id="saveFlatsBtn">Save flat numbers</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card card-danger" aria-labelledby="dangerTitle">
+                <h2 id="dangerTitle">Danger zone</h2>
+                <p class="muted small">These actions permanently remove data.</p>
+                <div class="form-actions">
+                    <a href="deletedata.html" class="contact-btn" target="_blank">Bulk data delete</a>
+                    <a href="delete.html" class="btn btn-danger" target="_blank">Delete full account</a>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Modal Dialog -->
+    <div id="customModal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="modalMessage">
+        <div class="dialog">
+            <p id="modalMessage"></p>
+            <div class="dialog-actions">
+                <button type="button" class="btn-secondary" onclick="closeModal()">Close</button>
+                <button type="button" id="confirmDeleteBtn" class="btn-danger" onclick="window.confirmDelete()" style="display:none;">Confirm delete</button>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        if (localStorage.getItem("adminLoggedIn") === "true") {
+            document.getElementById("login-section").style.display = "none";
+            document.getElementById("search-section").style.display = "block";
+            document.getElementById("data-section").style.display = "block";
+        }
+
+        window.addEventListener("DOMContentLoaded", () => {
+            document.getElementById("logoutBtn")?.addEventListener("click", () => {
+                localStorage.removeItem("adminLoggedIn");
+                localStorage.removeItem("isAdminMaster");
+                document.getElementById("login-section").style.display = "block";
+                document.getElementById("search-section").style.display = "none";
+                document.getElementById("data-section").style.display = "none";
+                const masterPanel = document.getElementById("master-admin-panel");
+                if (masterPanel) masterPanel.style.display = "none";
+                const spinSection = document.getElementById("masterAdminSpinSection");
+                if (spinSection) spinSection.style.display = "none";
+            });
+        });
+
+        function closeModal() { document.getElementById('customModal').style.display='none'; }
+
+        // Global function for MasterAdmin spin query lookup with winner flat support
+        async function fetchSocietySpins() {
+            const societyName = document.getElementById('adminSocietyQuery').value.trim();
+            const resultDiv = document.getElementById('spinStatsResult');
+            
+            if (!societyName) {
+                resultDiv.innerText = "Please enter a society name.";
+                return;
+            }
+
+            resultDiv.innerHTML = "Fetching stats...";
+
+            try {
+                const res = await fetch(`https://api.owlwatcher.tech/api/contest/spinstats?societyName=${encodeURIComponent(societyName)}`, {
+                    headers: { 'ngrok-skip-browser-warning': 'true' }
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    
+                    const lifetime = data.totalSpins !== undefined ? data.totalSpins : (data.totalLifetimeSpins || 0);
+                    const daily = data.totalDaySpins !== undefined ? data.totalDaySpins : 0;
+                    const monthly = data.totalMonthSpins !== undefined ? data.totalMonthSpins : 0;
+                    const winnerFlat = data.winnerFlat || "None yet";
+                    
+                    resultDiv.innerHTML = `
+                        🏢 <b>Society:</b> ${data.societyName || societyName}<br>
+                        🏆 <b>Latest Winner Flat:</b> <span style="color:#2e7d32; font-weight:bold;">${winnerFlat}</span><br>
+                        ♾️ <b>Total Lifetime Spins:</b> <span style="color:#d32f2f;">${lifetime}</span><br>
+                        📅 <b>Spins Today:</b> <span style="color:#d32f2f;">${daily}</span><br>
+                        🗓️ <b>Spins This Month:</b> <span style="color:#d32f2f;">${monthly}</span>
+                    `;
+                } else {
+                    resultDiv.innerText = "Society data not found or invalid response.";
+                }
+            } catch (err) {
+                console.error("Spin Stats Error:", err);
+                resultDiv.innerText = "Error fetching statistics.";
+            }
+        }
+    </script>
+
+    <script type="module" src="admin-logic.js"></script>
+
+    <!-- Interactive Owl Audio Easter Egg -->
+    <div id="owl-container">
+        <div id="owl-icon" role="button" tabindex="0" aria-label="Play owl sound" onclick="activateOwlEffect()">
+            <img src="owl.png" alt="Owl Watcher" width="52" height="52">
+        </div>
+        <audio id="owl-audio" src="theme.mp3" preload="auto"></audio>
+    </div>
+
+
+    <script>
+      function activateOwlEffect() {
+        const container = document.getElementById('owl-container');
+        const audio = document.getElementById('owl-audio');
+        if (container.classList.contains('active-effect')) return;
+        audio.currentTime = 0;
+        audio.play().catch(error => { console.log("Audio playback blocked or file not found:", error); });
+        container.classList.add('active-effect');
+        setTimeout(() => { container.classList.remove('active-effect'); }, 2000);
+      }
+    </script>
+    <!-- Capacitor Bridge -->
+    <script src="capacitor.js"></script>
+</body>
+</html>

@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Owl Watcher - Facility Calendar</title>
+    <link href="https://fonts.googleapis.com/css2?family=Caveat&display=swap" rel="stylesheet">
+    <link href='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.css' rel='stylesheet' />
+    <style>
+        /* Facility calendar specifics (shared components live in theme.css) */
+        #eventDetails { display: none; }
+        #adminContactContainer:not(:empty) { margin-top: 14px; }
+        .calendar-card { padding: 14px; }
+        .fc .fc-toolbar { flex-wrap: wrap; gap: 10px; }
+        .fc .fc-toolbar-title { font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; }
+        .fc .fc-col-header-cell-cushion { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ow-muted); }
+        .fc .fc-daygrid-day-number { font-size: 0.85rem; font-weight: 600; }
+        .fc .fc-daygrid-day { cursor: pointer; transition: background-color 0.15s ease; }
+        @media (hover: hover) and (pointer: fine) { .fc .fc-daygrid-day:hover { background: var(--ow-surface-2); } }
+        .fc-event { display: none !important; }
+
+        .booking-count-badge {
+            display: inline-flex;
+            align-items: center;
+            margin: 4px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: var(--ow-primary);
+            color: var(--ow-on-primary);
+            font-size: 0.72rem;
+            font-weight: 700;
+            cursor: pointer;
+            animation: owPop 0.3s var(--ow-ease) both;
+        }
+        .whatsapp-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 44px;
+            padding: 10px 16px;
+            border-radius: var(--ow-radius);
+            background: var(--ow-whatsapp);
+            color: #fff;
+            font-weight: 600;
+            text-decoration: none;
+            transition: transform 0.2s var(--ow-ease), box-shadow 0.2s ease;
+        }
+        @media (hover: hover) and (pointer: fine) { .whatsapp-btn:hover { transform: translateY(-2px); box-shadow: var(--ow-shadow-hover); } }
+        .whatsapp-btn:active { transform: scale(0.97); }
+    </style>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4f2ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="theme.css">
+    <script src="menu.js"></script>
+</head>
+<body>
+
+    <nav class="main-nav" aria-label="Page navigation">
+        <div class="nav-logo">
+            <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+            <span>Owl Watcher</span>
+        </div>
+        <a href="index.html" class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+            Home
+        </a>
+    </nav>
+
+    <main class="page">
+        <header class="page-header">
+            <span class="eyebrow">Facility booking</span>
+            <h1 class="page-title" id="societyHeader">Initializing...</h1>
+            <p class="page-subtitle">Tap a date to see bookings and contact the admin.</p>
+        </header>
+
+        <section id="eventDetails" aria-live="polite">
+            <div id="dispSummaryContent"></div>
+            <div id="adminContactContainer"></div>
+        </section>
+
+        <section class="card calendar-card" aria-label="Facility calendar">
+            <div id="calendar"></div>
+        </section>
+
+        <p class="note small">⚠️ Bookings older than 7 days are deleted automatically, and bookings are shown up to 6 months ahead.</p>
+    </main>
+
+
+<script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js'></script>
+<script>
+    const API_BASE_URL = 'https://api.owlwatcher.tech/api';
+    const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
+
+    let facilityMap = {};
+    let allLoadedBookings = [];
+    let societyAdminPhone = ""; 
+
+    async function getAuthHeaders() {
+        try {
+            const tokenRes = await fetch(`${API_BASE_URL}/auth/token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...NG_HEADERS }
+            });
+            const tokenData = await tokenRes.json();
+            if (tokenData && tokenData.token) {
+                return {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${tokenData.token}`,
+                    ...NG_HEADERS
+                };
+            }
+        } catch (err) {
+            console.error("Failed to acquire auth token:", err);
+        }
+        return { ...NG_HEADERS };
+    }
+
+    function formatTimeString(isoString) {
+        if (!isoString) return '';
+        const timePart = isoString.split('T')[1];
+        if (!timePart) return '';
+        const [hour, minute] = timePart.split(':');
+        const h = parseInt(hour, 10);
+        const ampm = h >= 12 ? 'pm' : 'am';
+        const formattedHour = h % 12 || 12;
+        return `${formattedHour}:${minute} ${ampm}`;
+    }
+
+    function isSameDate(dateString, targetDateStr) {
+        if (!dateString) return false;
+        const bookingDateOnly = dateString.split('T')[0];
+        return bookingDateOnly === targetDateStr;
+    }
+
+    function showSummaryForDate(dateStr, bookings) {
+        const summaryContent = document.getElementById('dispSummaryContent');
+        const adminContactContainer = document.getElementById('adminContactContainer');
+        
+        let html = `<div style="font-size: 0.85rem; color: var(--ow-muted); margin-bottom: 5px;"><b>${dateStr}</b></div>`;
+        
+        if (bookings.length > 0) {
+            html += `<strong>Bookings Summary:</strong><br>`;
+            bookings.forEach(b => {
+                const readableName = facilityMap[b.facilityId] || b.facilityId;
+                const startTime = formatTimeString(b.start);
+                const endTime = formatTimeString(b.end);
+                html += `
+                    <div style="background: var(--ow-surface-2); padding: 6px; margin-top: 5px; border-radius: 6px; font-size: 0.9rem; text-align: left;">
+                        <b>${readableName}</b><br>
+                        <span>${startTime} - ${endTime}</span>
+                    </div>
+                `;
+            });
+        } else {
+            html += `<p style="color: var(--ow-muted); font-size: 0.95rem; margin: 5px 0;">No bookings on this day.</p>`;
+        }
+
+        summaryContent.innerHTML = html;
+
+        if (societyAdminPhone) {
+            const formattedPhone = societyAdminPhone.replace(/\D/g, '');
+            const msgText = bookings.length > 0 
+                ? `Hi, I have an inquiry regarding bookings on ${dateStr}.` 
+                : `Hi, I want to book a facility on ${dateStr}. Please assist.`;
+            
+            const encodedMsg = encodeURIComponent(msgText);
+            adminContactContainer.innerHTML = `
+                <a href="https://wa.me/${formattedPhone}?text=${encodedMsg}" target="_blank" class="whatsapp-btn">
+                    💬 Contact Admin via WhatsApp
+                </a>
+            `;
+        } else {
+            adminContactContainer.innerHTML = `<p style="color: #c0392b; font-size: 0.85rem;">Admin contact not available.</p>`;
+        }
+
+        document.getElementById('eventDetails').style.display = 'block';
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        const header = document.getElementById('societyHeader');
+        
+        const urlParams = new URLSearchParams(window.location.search);
+        let societyId = urlParams.get('societyId') || urlParams.get('society') || localStorage.getItem('savedSocietyId') || localStorage.getItem('selectedSociety') || 'Aangan';
+        let societyName = urlParams.get('societyName') || localStorage.getItem('savedSocietyName') || societyId;
+
+        if (!societyId) {
+            header.innerText = "Error: No society selected";
+            return;
+        }
+
+        header.innerText = `${societyName} Facility Calendar`;
+
+        try {
+            const headers = await getAuthHeaders();
+            
+            const facRes = await fetch(`${API_BASE_URL}/facilities/${encodeURIComponent(societyId)}`, { headers });
+            if (facRes.ok) {
+                facilityMap = await facRes.json();
+            }
+
+            const adminRes = await fetch(`${API_BASE_URL}/admins?society=${encodeURIComponent(societyName)}`, { headers });
+            if (adminRes.ok) {
+                const adminData = await adminRes.json();
+                societyAdminPhone = adminData.phone || "";
+            }
+        } catch (e) { 
+            console.error("Error loading metadata from API:", e); 
+        }
+
+        try {
+            const headers = await getAuthHeaders();
+            
+            let bookingsRes = await fetch(`${API_BASE_URL}/bookings?society=${encodeURIComponent(societyId)}`, { headers });
+            if (bookingsRes.ok) {
+                const rawBookings = await bookingsRes.json();
+                allLoadedBookings = Array.isArray(rawBookings) ? rawBookings : [];
+            }
+            
+            if (allLoadedBookings.length === 0 && societyId.toLowerCase() === 'aangan') {
+                const fallbackRes = await fetch(`${API_BASE_URL}/bookings?society=Aangan`, { headers });
+                if (fallbackRes.ok) {
+                    const fallbackData = await fallbackRes.json();
+                    if (Array.isArray(fallbackData) && fallbackData.length > 0) {
+                        allLoadedBookings = fallbackData;
+                    }
+                }
+            }
+        } catch (e) { 
+            console.error("Error loading bookings from API:", e); 
+        }
+
+        const calendarEl = document.getElementById('calendar');
+        const calendar = new FullCalendar.Calendar(calendarEl, {
+            initialView: 'dayGridMonth',
+            headerToolbar: { left: 'prev,today,next', center: 'title', right: '' },
+            
+            dayCellDidMount: (info) => {
+                const cellDateStr = info.date.toLocaleDateString('en-CA');
+                const dayBookings = allLoadedBookings.filter(b => isSameDate(b.start, cellDateStr));
+
+                if (dayBookings.length > 0) {
+                    const badge = document.createElement('div');
+                    badge.className = 'booking-count-badge';
+                    badge.innerText = `${dayBookings.length}📒`;
+                    
+                    badge.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        showSummaryForDate(cellDateStr, dayBookings);
+                    });
+
+                    info.el.querySelector('.fc-daygrid-day-frame').appendChild(badge);
+                }
+            },
+
+            dateClick: (info) => {
+                const dayBookings = allLoadedBookings.filter(b => isSameDate(b.start, info.dateStr));
+                showSummaryForDate(info.dateStr, dayBookings);
+            }
+        });
+        calendar.render();
+    });
+</script>
+
+  <!-- Owl Interactive Effect Widget -->
+   <div id="owl-container">
+    <div id="owl-icon" role="button" tabindex="0" aria-label="Play owl sound" onclick="activateOwlEffect()">
+        <img src="owl.png" alt="Owl Watcher" width="52" height="52"> 
+    </div>
+    <audio id="owl-audio" src="theme.mp3" preload="auto"></audio>
+</div>
+
+
+
+<script>
+  function activateOwlEffect() {
+    const container = document.getElementById('owl-container');
+    const audio = document.getElementById('owl-audio');
+    if (container.classList.contains('active-effect')) return;
+    audio.currentTime = 0;
+    audio.play().catch(error => {
+      console.log("Audio playback blocked or file not found:", error);
+    });
+    container.classList.add('active-effect');
+    setTimeout(() => {
+      container.classList.remove('active-effect');
+    }, 2000);
+  }
+</script>        
+
+</body>
+</html>

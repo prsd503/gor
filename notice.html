@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&family=Lexend:wght@300;400;500&display=swap" rel="stylesheet">
+    <title>Owl Watcher | Notice Details</title>
+    <style>
+        /* Notice page specifics (shared components live in theme.css) */
+        .full-content { font-size: 1.05rem; line-height: 1.75; color: var(--ow-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+    </style>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4f2ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="theme.css">
+    <script src="menu.js"></script>
+</head>
+<body>
+
+    <!-- Unified Navigation Bar -->
+    <nav class="main-nav" aria-label="Main navigation">
+        <div class="nav-logo">
+            <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+            <span>Owl Watcher</span>
+        </div>
+        <div class="nav-links" id="navLinks">
+            <a href="index.html" class="nav-active" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>Home</span></a>
+            <a href="admin.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg><span>Admin</span></a>
+            <a href="guard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>Guard</span></a>
+            <a href="studio.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg><span>Studio</span></a>
+            <a href="https://wa.me/919033406816"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-5A8 8 0 1 1 21 12z"/></svg><span>Contact</span></a>
+        </div>
+    </nav>
+
+    <main class="page">
+        <header class="page-header">
+            <span class="eyebrow">📢 Society notice</span>
+            <h1 class="page-title">Full notice</h1>
+            <p class="page-subtitle" id="notice-date">Loading date...</p>
+        </header>
+        <article class="card">
+            <div id="notice-full-content" class="full-content">Loading content...</div>
+        </article>
+        <a href="index.html" class="back-btn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+            Back to home
+        </a>
+    </main>
+
+
+    <script>
+        const API_BASE_URL = 'https://api.owlwatcher.tech/api';
+        const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
+
+        async function getAppCheckHeaders() {
+            let appCheckToken = "";
+            if (typeof firebase !== 'undefined' && firebase.appCheck) {
+                try {
+                    const appCheckResponse = await firebase.appCheck().getToken(false);
+                    appCheckToken = appCheckResponse.token;
+                } catch (err) {
+                    console.error("Failed to get Firebase App Check token:", err);
+                }
+            }
+            return { 'X-Firebase-AppCheck': appCheckToken };
+        }
+
+        async function getAuthHeaders() {
+            try {
+                const tokenResponse = await fetch(`${API_BASE_URL}/auth/token`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...NG_HEADERS }
+                });
+                if (tokenResponse.ok) {
+                    const tokenData = await tokenResponse.json();
+                    if (tokenData && tokenData.token) {
+                        const appCheckHeaders = await getAppCheckHeaders();
+                        return {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${tokenData.token}`,
+                            ...appCheckHeaders,
+                            ...NG_HEADERS
+                        };
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to acquire auth token:", err);
+            }
+
+            const fallbackAppCheck = await getAppCheckHeaders();
+            return {
+                'Content-Type': 'application/json',
+                ...fallbackAppCheck,
+                ...NG_HEADERS
+            };
+        }
+
+        async function loadFullNotice() {
+            // Parse URL parameters to retrieve societyId
+            const urlParams = new URLSearchParams(window.location.search);
+            const societyId = urlParams.get('id');
+            
+            const contentDiv = document.getElementById('notice-full-content');
+            const dateSpan = document.getElementById('notice-date');
+
+            if (!societyId) {
+                contentDiv.innerText = "Error: Invalid notice resource reference.";
+                dateSpan.innerText = "";
+                return;
+            }
+
+            try {
+                const headers = await getAuthHeaders();
+                const response = await fetch(`${API_BASE_URL}/notices/${encodeURIComponent(societyId)}`, { headers });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.todayMessage) {
+                        contentDiv.innerText = data.todayMessage;
+                        if (data.date) {
+                            dateSpan.innerText = data.date;
+                        } else {
+                            dateSpan.innerText = new Date().toLocaleDateString('en-CA');
+                        }
+                    } else {
+                        contentDiv.innerText = "No active notices for today.";
+                        dateSpan.innerText = "";
+                    }
+                } else if (response.status === 404) {
+                    contentDiv.innerText = "Notice record could not be found.";
+                    dateSpan.innerText = "";
+                } else {
+                    contentDiv.innerText = "Failed to load notice from server.";
+                    dateSpan.innerText = "";
+                }
+            } catch (error) {
+                console.error("Error reading notice archive via API:", error);
+                contentDiv.innerText = "An unexpected error occurred while fetching notice.";
+            }
+        }
+
+        window.addEventListener("DOMContentLoaded", loadFullNotice);
+    </script>
+
+    <div id="owl-container">
+        <div id="owl-icon" role="button" tabindex="0" aria-label="Play owl sound" onclick="activateOwlEffect()">
+            <img src="owl.png" alt="Owl Watcher" width="52" height="52">
+        </div>
+        <audio id="owl-audio" src="theme.mp3" preload="auto"></audio>
+    </div>
+
+
+    <script>
+      function activateOwlEffect() {
+        const container = document.getElementById('owl-container');
+        const audio = document.getElementById('owl-audio');
+
+        if (container.classList.contains('active-effect')) return;
+
+        audio.currentTime = 0;
+        audio.play().catch(error => {
+          console.log("Audio playback blocked or file not found:", error);
+        });
+
+        container.classList.add('active-effect');
+
+        setTimeout(() => {
+          container.classList.remove('active-effect');
+        }, 2000);
+      }
+    </script>
+    
+</body>
+</html>

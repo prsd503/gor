@@ -1,0 +1,14 @@
+{
+  "greetings": {
+    "society_alpha_bday": {
+      "title": "Happy 5th Work Anniversary, John! 🥳",
+      "message": "Wishing you continued success and great milestones ahead from the management team.",
+      "animationStyle": "bounce"
+    },
+    "society_beta_wedding": {
+      "title": "Happy Wedding Anniversary! 💍✨",
+      "message": "May your years ahead be filled with lasting joy and companionship.",
+      "animationStyle": "spin"
+    }
+  }
+}

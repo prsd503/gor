@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&family=Lexend:wght@300;400;500&display=swap" rel="stylesheet">
+    <title>Owl Watcher | Portal</title>
+    
+    <!-- Firebase App & Firestore SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        html body { 
+            font-family: 'Caveat', cursive; 
+            background: radial-gradient(circle at center, #1a1c29 0%, #0d0e15 100%); 
+            color: #f5f5f5; 
+            text-align: center; 
+            padding: 10px; 
+            margin: 0;
+            overflow-x: hidden;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        html body.ad-theme {
+            font-family: var(--ow-font);
+            background: var(--ow-bg);
+            color: var(--ow-text);
+        }
+
+        /* App bar comes from theme.css; on this page it floats above the full-screen greeting */
+        nav.main-nav { justify-content: center; position: fixed; left: 12px; right: 12px; width: auto; margin: 0 auto; z-index: 20; }
+
+        .nav-logo {
+            font-family: 'Caveat', cursive;
+            color: var(--ow-text);
+            font-size: clamp(1.6rem, 4.5vw, 2rem);
+            font-weight: 700;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .greeting-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            border-radius: 20px;
+            max-width: 550px;
+            width: 92%;
+            margin: 90px auto 24px auto;
+            padding: clamp(20px, 5vw, 40px);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5), 0 0 25px rgba(255, 204, 0, 0.1);
+            position: relative;
+            z-index: 10;
+            box-sizing: border-box;
+            animation: cardFloat 4s ease-in-out infinite alternate;
+        }
+
+        body.ad-theme .greeting-card {
+            background: var(--ow-surface);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+            border: none;
+            border-radius: 16px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            animation: none;
+            text-align: left;
+            max-width: 600px;
+            overflow: hidden;
+            padding: 0;
+        }
+
+        body.ad-theme .greeting-card::before {
+            content: "";
+            display: block;
+            height: 6px;
+            background: linear-gradient(90deg, #a1887f, #8d6e63, #5d4037);
+            width: 100%;
+        }
+
+        .ad-content-wrapper {
+            padding: 32px;
+        }
+
+        @keyframes cardFloat {
+            0% { transform: translateY(0px); }
+            100% { transform: translateY(-6px); }
+        }
+
+        h1 { 
+            font-size: clamp(2.2rem, 7vw, 3.2rem); 
+            color: #ff6b81; 
+            margin: 12px 0; 
+            text-shadow: 0 0 15px rgba(255, 107, 129, 0.4);
+            line-height: 1.1;
+        }
+
+        body.ad-theme h1 {
+            font-family: var(--ow-font);
+            font-size: 1.75rem;
+            font-weight: 800;
+            color: var(--ow-text);
+            text-shadow: none;
+            margin-top: 0;
+            margin-bottom: 20px;
+            letter-spacing: -0.02em;
+        }
+
+        p { 
+            font-size: clamp(1.3rem, 4vw, 1.6rem); 
+            color: #e0e0e0; 
+            line-height: 1.4; 
+            margin-bottom: 25px;
+        }
+
+        body.ad-theme p {
+            font-family: var(--ow-font);
+            font-size: 1rem;
+            font-weight: 400;
+            color: var(--ow-text);
+            background: var(--ow-bg);
+            padding: 22px;
+            border-radius: 10px;
+            line-height: 1.65;
+            border: 1px solid var(--ow-border);
+            border-left: 5px solid var(--ow-border-strong);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+            margin-bottom: 30px;
+            letter-spacing: 0.01em;
+        }
+
+        .back-btn {
+            background: var(--ow-primary);
+            color: white;
+            border: none; 
+            padding: 10px 24px;
+            border-radius: 12px;
+            font-size: clamp(1.2rem, 3.5vw, 1.4rem);
+            font-family: 'Caveat', cursive;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            box-shadow: 0 5px 15px rgba(255, 71, 87, 0.4);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        body.ad-theme .back-btn {
+            background: var(--ow-primary);
+            color: #ffffff;
+            font-family: var(--ow-font);
+            font-size: 0.95rem;
+            font-weight: 600;
+            padding: 10px 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(141, 110, 99, 0.3);
+            transition: all 0.2s ease;
+        }
+
+        .back-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 8px 20px rgba(255, 71, 87, 0.6);
+        }
+
+        body.ad-theme .back-btn:hover {
+            transform: translateY(-1px);
+            background: var(--ow-primary-strong);
+            box-shadow: 0 6px 15px -2px rgba(141, 110, 99, 0.4);
+        }
+        
+        canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 2;
+        }
+    </style>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4f2ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="theme.css">
+    <script src="menu.js"></script>
+</head>
+<body>
+
+    <nav class="main-nav" aria-label="Page header">
+        <div class="nav-logo" id="navLogoText">
+            <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+            Owl Watcher
+        </div>
+    </nav>
+
+    <canvas id="fireworksCanvas" style="display: none;"></canvas>
+
+    <div class="greeting-card" id="greetingCardContainer">
+        <div class="ad-content-wrapper">
+            <h1 id="greetTitle">Loading...</h1>
+            <p id="greetMessage">Please wait while we load your content.</p>
+            <a href="index.html" class="back-btn" id="actionBtn" style="display: none;">Back</a>
+        </div>
+    </div>
+
+    <script>
+        // Firebase Client Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBEYKHQpy_VjmgjYIwQOPjXth1bghYsf9M",
+            authDomain: "finder-owl.firebaseapp.com", 
+            projectId: "finder-owl",
+            storageBucket: "finder-owl.firebasestorage.app",
+            messagingSenderId: "1011347100861",
+            appId: "1:1011347100861:web:24246f9a4eb24d812cd3d4"
+        };
+
+        let db = null;
+        try {
+            if (!firebase.apps.length) {
+                firebase.initializeApp(firebaseConfig);
+            }
+            db = firebase.firestore();
+        } catch (e) {
+            console.log("Firebase initialization error:", e);
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const type = urlParams.get('type');
+        const greetingId = urlParams.get('id') || '3'; 
+        const greetTitle = document.getElementById('greetTitle');
+        const greetMessage = document.getElementById('greetMessage');
+        const actionBtn = document.getElementById('actionBtn');
+        const fireworksCanvas = document.getElementById('fireworksCanvas');
+        const navLogoText = document.getElementById('navLogoText');
+
+        // Configured Ngrok Backend URL
+        const BACKEND_URL = "https://api.owlwatcher.tech";
+async function fetchGreetingData() {
+    // 1. Try Backend API first via Ngrok using your existing /api/ads/local/Aangan route
+    try {
+        const response = await fetch(`${BACKEND_URL}/api/ads/local/Aangan`, {
+            headers: { 'ngrok-skip-browser-warning': 'true' }
+        });
+        if (response.ok) {
+            const data = await response.json();
+            if (data) {
+                // Check if it matches a direct map key (e.g. "society_wish_bday1")
+                if (data[greetingId]) {
+                    return data[greetingId];
+                }
+                
+                // Otherwise, scan all map entries for matching greetingId or id
+                const items = Object.values(data);
+                const foundItem = items.find(item => item && (item.greetingId === greetingId || item.id === greetingId));
+                if (foundItem) return foundItem;
+            }
+        }
+    } catch (err) {
+        console.log("Backend API offline, falling back to direct Firestore...");
+    }
+
+    // 2. Fallback: Direct Firestore Read (if backend fails)
+    if (db) {
+        try {
+            const docRef = db.collection('ads').doc('Aangan');
+            const docSnap = await docRef.get();
+            if (docSnap.exists) {
+                const data = docSnap.data();
+                if (data[greetingId]) {
+                    return data[greetingId];
+                }
+                const items = Object.values(data);
+                const foundItem = items.find(item => item && (item.greetingId === greetingId || item.id === greetingId));
+                if (foundItem) return foundItem;
+            }
+        } catch (fbErr) {
+            console.error("Direct Firebase fallback error:", fbErr);
+        }
+    }
+
+    return null;
+}
+
+        
+
+        if (type === 'ad') {
+            document.body.classList.add('ad-theme');
+            navLogoText.innerHTML = `<img src="owl.png" alt="Owl Watcher logo" width="42" height="42"> Owl Watcher`;
+
+            async function loadAdData() {
+                const data = await fetchGreetingData();
+                if (data && (data.title || data.message)) {
+                    greetTitle.innerText = data.title || "Advertisement Details";
+                    greetMessage.innerText = data.message || "Reviewing comprehensive campaign metrics, target audience insights, and performance records.";
+                } else {
+                    greetTitle.innerText = "Ad Details";
+                    greetMessage.innerText = "Explore professional advertisement details, and campaign insights here.";
+                }
+                actionBtn.style.display = 'inline-block';
+                actionBtn.innerText = "Back";
+            }
+            loadAdData();
+
+        } else if (type === 'wish') {
+            fireworksCanvas.style.display = 'block';
+            actionBtn.style.display = 'inline-block';
+            actionBtn.innerText = "Back";
+
+            async function loadGreetingData() {
+                const data = await fetchGreetingData();
+                if (data && (data.title || data.message)) {
+                    if (data.title) greetTitle.innerText = data.title;
+                    if (data.message) greetMessage.innerText = data.message;
+                } else {
+                    greetTitle.innerText = "Greetings!";
+                    greetMessage.innerHTML = "Wishing you a wonderful celebration filled with joy, success, and happiness from everyone at <span class=\"ow-brand\">Owl Watcher</span>!";
+                }
+            }
+
+            loadGreetingData();
+
+            const canvas = fireworksCanvas;
+            const ctx = canvas.getContext("2d");
+
+            function resizeCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            class FireworkParticle {
+                constructor(x, y, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.color = color;
+                    this.angle = Math.random() * Math.PI * 2;
+                    this.speed = Math.random() * 5 + 2;
+                    this.friction = 0.95;
+                    this.gravity = 0.08;
+                    this.alpha = 1;
+                    this.decay = Math.random() * 0.015 + 0.01;
+                }
+                update() {
+                    this.speed *= this.friction;
+                    this.x += Math.cos(this.angle) * this.speed;
+                    this.y += Math.sin(this.angle) * this.speed + this.gravity;
+                    this.alpha -= this.decay;
+                }
+                draw() {
+                    ctx.save();
+                    ctx.globalAlpha = this.alpha;
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+            }
+
+            let fireworks = [];
+            const colors = ['#ff4757', '#2ed573', '#1e90ff', '#ffa502', '#9b59b6', '#ff6b81', '#00d2d3'];
+
+            function createFirework() {
+                const x = Math.random() * canvas.width;
+                const y = Math.random() * (canvas.height / 2);
+                const chosenColor = colors[Math.floor(Math.random() * colors.length)];
+                for (let i = 0; i < 50; i++) {
+                    fireworks.push(new FireworkParticle(x, y, chosenColor));
+                }
+            }
+
+            function animateFireworks() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                fireworks.forEach((particle, index) => {
+                    particle.update();
+                    particle.draw();
+                    if (particle.alpha <= 0) {
+                        fireworks.splice(index, 1);
+                    }
+                });
+                requestAnimationFrame(animateFireworks);
+            }
+
+            setInterval(createFirework, 1100);
+            animateFireworks();
+        } else {
+            greetTitle.innerText = "Owl Watcher Portal";
+            greetMessage.innerText = "Please specify a valid type parameter (?type=wish or ?type=ad) in your URL.";
+            actionBtn.style.display = 'inline-block';
+            actionBtn.innerText = "Go Home";
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&family=Lexend:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>Owl Watcher | Home</title>
+    <style>
+        /* Home page specifics (shared components live in theme.css) */
+        #society-verification, #vehicle-search { animation: owRise 0.5s var(--ow-ease) both; }
+        .society-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+        .society-header .page-title { overflow-wrap: anywhere; }
+
+        #notice-board { display: none; }
+        #notice-content {
+            color: var(--ow-text);
+            line-height: 1.6;
+            overflow-wrap: anywhere;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+        }
+
+        .score-pills { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+        .game-canvas-container {
+            position: relative;
+            width: 100%;
+            max-width: 520px;
+            height: 170px;
+            margin: 0 auto 12px;
+            overflow: hidden;
+            border: 1px solid var(--ow-border);
+            border-radius: var(--ow-radius);
+            background: var(--ow-bg);
+            cursor: pointer;
+        }
+        #gameCanvas { display: block; width: 100%; height: 100%; }
+        #gameActionBtn { max-width: 260px; margin: 0 auto; }
+
+        .result-item { padding: 14px 0; text-align: left; border-bottom: 1px solid var(--ow-border); }
+        .result-item:last-child { border-bottom: 0; }
+
+        #fireCanvas { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 9999; display: none; }
+
+        /* Welcome overlay stays black (matches the owl video background) in both light and dark mode,
+           so its text uses fixed light-on-black colours instead of the theme tokens */
+        #startOverlay {
+            background: #000;
+            --ow-text: #f5efe9;
+            --ow-accent: #f19aa6;
+            --ow-primary-text: #dcab82;
+            --ow-border: rgba(255, 255, 255, 0.14);
+            --ow-chip-on-splash: rgba(255, 255, 255, 0.07);
+            /* Keep the welcome screen as designed: its own font and button finish */
+            --ow-font: 'Lexend', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --ow-btn-shadow: var(--ow-shadow-sm);
+            line-height: normal;
+            font-feature-settings: normal;
+        }
+        #startOverlay p { line-height: normal; }
+        #startOverlay h1 { letter-spacing: -0.01em; }
+        #startOverlay button { letter-spacing: normal; min-height: 0; line-height: normal; }
+        #startOverlay #audioToggleBtn { overflow: visible; }
+    </style>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4f2ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="theme.css">
+    <script src="menu.js"></script>
+</head>
+<body>
+
+<!-- Audio Elements for Game Effects & Background Music -->
+<audio id="jumpSound" src="jump.wav" preload="auto"></audio>
+<audio id="hitSound" src="hit.wav" preload="auto"></audio>
+<audio id="hsSound" src="hs.wav" preload="auto"></audio>
+<audio id="gameMusic" src="game.mp3" preload="auto" loop></audio>
+
+<div id="startOverlay" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; z-index: 10000; display: flex; justify-content: center; align-items: center; flex-direction: column; padding: 20px; box-sizing: border-box;">
+    <div style="max-width: 500px; width: 90%; text-align: center;">
+        <div style="position: relative; margin-bottom: 15px;">
+            <video id="welcomeVideo" autoplay muted loop playsinline style="width: 100%; max-height: 180px; object-fit: contain; border-radius: 12px; display: block;">
+                <source src="animate.mp4" type="video/mp4">
+                Your browser does not support the video tag.
+            </video> 
+            <button type="button" id="audioToggleBtn" onclick="toggleVideoAudio()" style="position: absolute; bottom: 10px; right: 10px; background: rgba(0, 0, 0, 0.6); color: var(--ow-accent); border: none; border-radius: 50%; width: 36px; height: 36px; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; transition: background 0.2s;" title="Unmute Video">
+                🔇 Unmute
+            </button>
+        </div>
+
+        <h1 id="overlayWelcomeText" style="font-family: var(--ow-font-brand); font-weight: 700; color: var(--ow-text); margin-bottom: 5px; font-size: 3.4rem; line-height: 1.1; white-space: pre-line;">Owl Watcher</h1>        
+        
+        <p style="font-family: sans-serif; color: var(--ow-accent); font-size: 0.95rem; margin-bottom: 25px; font-weight: 600; letter-spacing: 0.5px;">
+            Vehicle Management System
+        </p>
+
+        <div style="display: flex; justify-content: center; gap: 15px; margin-bottom: 25px; font-family: sans-serif; font-size: 0.8rem; color: var(--ow-primary-text);">
+            <span style="background: var(--ow-chip-on-splash); padding: 6px 12px; border-radius: 999px; border: 1px solid var(--ow-border); color: var(--ow-text);">🛡️ Active Guard Info</span>
+            <span style="background: var(--ow-chip-on-splash); padding: 6px 12px; border-radius: 999px; border: 1px solid var(--ow-border); color: var(--ow-text);">⚡ Instant Vehicle Search</span>
+            <span style="background: var(--ow-chip-on-splash); padding: 6px 12px; border-radius: 999px; border: 1px solid var(--ow-border); color: var(--ow-text);">📸 Photo Studio</span>
+        </div>
+
+        <button type="button" id="startButton" style="font-family: var(--ow-font); font-size: 1.8rem; padding: 12px 35px; cursor:pointer; background: var(--ow-primary); color: white; border: none; border-radius: 12px;">Enter Portal</button>
+    </div>
+</div>
+
+<nav class="main-nav" aria-label="Main navigation">
+        <div class="nav-logo">
+            <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+            <span>Owl Watcher</span>
+        </div>
+        <div class="nav-links" id="navLinks">
+            <a href="index.html" class="nav-active" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>Home</span></a>
+            <a href="admin.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg><span>Admin</span></a>
+            <a href="guard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>Guard</span></a>
+            <a href="studio.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg><span>Studio</span></a>
+            <a href="https://wa.me/919033406816"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-5A8 8 0 1 1 21 12z"/></svg><span>Contact</span></a>
+        </div>
+    </nav>
+
+    <main class="page" id="main">
+        <!-- Step 1: choose a society -->
+        <section id="society-verification" aria-labelledby="findSocietyTitle">
+            <header class="page-header">
+                <span class="eyebrow">Welcome</span>
+                <h1 class="page-title" id="findSocietyTitle">Find your society</h1>
+                <p class="page-subtitle">Search vehicles, see the guard on duty and keep up with society notices.</p>
+            </header>
+
+            <div class="card">
+                <label for="societyInput">Society name</label>
+                <div class="input-row">
+                    <div class="field-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                        <input type="text" id="societyInput" placeholder="Enter society name" autocomplete="off">
+                    </div>
+                    <button type="button" id="verifyBtn">Continue
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <section class="card" id="ad-billboard-global" aria-labelledby="globalAdTitle">
+                <div class="card-header">
+                    <h2 class="section-title" id="globalAdTitle">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>
+                        Global billboard
+                    </h2>
+                    <div class="carousel-nav ad-controls" id="globalAdControls" style="display: none;">
+                        <button type="button" class="icon-btn" id="prevGlobalAdBtn" aria-label="Previous ad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+                        <button type="button" class="icon-btn" id="nextGlobalAdBtn" aria-label="Next ad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
+                    </div>
+                </div>
+                <div class="global-ad-slider-container" id="globalAdSlider">
+                    <div class="ad-placeholder" id="global-ad-placeholder"><img src="loading.svg" alt="Loading ads" width="120" height="120"></div>
+                </div>
+                <div class="card-footer">
+                    <span class="chip">Sponsored</span>
+                    <a id="globalAdLink" href="https://wa.me/919033406816?text=Hi%20I%20want%20to%20apply%20for%20global%20ad%20in%20Owl%20Watcher" target="_blank" class="ad-link">Advertise globally here</a>
+                </div>
+            </section>
+
+            <!-- Owl Jump game -->
+            <section class="card game-box" aria-labelledby="gameTitle">
+                <div class="card-header">
+                    <h2 class="section-title" id="gameTitle">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7" width="20" height="12" rx="4"/><path d="M7 11v4M5 13h4"/><circle cx="16" cy="12" r="1"/><circle cx="18" cy="14" r="1"/></svg>
+                        Owl Jump
+                    </h2>
+                    <div class="score-pills">
+                        <span class="chip" id="gameScore">Score: 0</span>
+                        <span class="chip" id="gameHighScore">High Score: 0</span>
+                    </div>
+                </div>
+                <div class="game-canvas-container" id="gameContainer">
+                    <canvas id="gameCanvas" width="400" height="160">Owl Jump game</canvas>
+                </div>
+                <button type="button" id="gameActionBtn" class="btn-secondary btn-block">Jump / Start</button>
+                <p class="muted small text-center" style="margin: 10px 0 0;">Tap the game or press Space to jump.</p>
+            </section>
+        </section>
+
+        <!-- Step 2: society dashboard -->
+        <section id="vehicle-search" style="display:none;" aria-labelledby="displaySocietyName">
+            <header class="page-header society-header">
+                <div>
+                    <span class="eyebrow">Your society</span>
+                    <h1 class="page-title" id="displaySocietyName"></h1>
+                </div>
+                <button type="button" id="switchSocietyBtn" class="btn-outline btn-sm">Change</button>
+            </header>
+
+            <div class="card">
+                <label for="vehicleInput">Find a vehicle owner</label>
+                <div class="input-row">
+                    <div class="field-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                        <input type="text" id="vehicleInput" class="uppercase" placeholder="Vehicle number, e.g. GJ01AB1234" autocomplete="off">
+                    </div>
+                    <button type="button" id="searchBtn">Search</button>
+                </div>
+            </div>
+
+            <nav class="tiles" aria-label="Quick actions">
+                <a id="factlityPage" href="#" class="tile">
+                    <span class="tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></span>
+                    Facility booking
+                </a>
+                <a id="addVehiclePageBtn" href="#" class="tile">
+                    <span class="tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 16h14l-1.5-6.2A2 2 0 0 0 15.6 8H8.4a2 2 0 0 0-1.9 1.8z"/><path d="M3 16h18v3H3z"/><path d="M12 2v4M10 4h4"/></svg></span>
+                    Add vehicle
+                </a>
+                <button type="button" id="backToHomeBtn" class="tile tile-danger">
+                    <span class="tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-5h6v5"/></svg></span>
+                    Switch society
+                </button>
+            </nav>
+
+            <div id="guard-container"></div>
+
+            <section id="notice-board" class="card" aria-labelledby="noticeDate">
+                <div class="card-header">
+                    <h2 class="section-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11v2a1 1 0 0 0 1 1h3l6 4V6L7 10H4a1 1 0 0 0-1 1z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg>
+                        <span class="notice-date" id="noticeDate">Notice board</span>
+                    </h2>
+                </div>
+                <div id="notice-content">Loading latest society notices...</div>
+                <div class="card-footer">
+                    <span class="chip">Society notice</span>
+                    <a id="readMoreNoticeLink" href="#" class="link" style="display: none;">Read more</a>
+                </div>
+            </section>
+
+            <section class="card" id="ad-billboard" aria-labelledby="localAdTitle">
+                <div class="card-header">
+                    <h2 class="section-title" id="localAdTitle">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18"/><path d="M12 8C10 8 8 7 8 5s2-2 4 1c2-3 4-3 4-1s-2 3-4 3z"/></svg>
+                        Wishes, offers &amp; ads
+                    </h2>
+                    <div class="carousel-nav ad-controls" id="adControls" style="display: none;">
+                        <button type="button" class="icon-btn" id="prevAdBtn" aria-label="Previous post"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+                        <button type="button" class="icon-btn" id="nextAdBtn" aria-label="Next post"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
+                    </div>
+                </div>
+                <div class="ad-slider-container" id="adSlider">
+                    <div class="ad-placeholder" id="ad-placeholder">Space available</div>
+                </div>
+                <div class="card-footer">
+                    <span class="chip">Birthdays &amp; local offers</span>
+                    <a id="localAdLink" href="#" target="_blank" class="ad-link">Contact for Posting Paid Content Here!</a>
+                </div>
+            </section>
+        </section>
+    </main>
+
+    <div id="resultModal" class="modal" role="dialog" aria-modal="true" aria-label="Search result">
+        <div class="modal-content">
+            <span class="close" role="button" tabindex="0" aria-label="Close" onclick="document.getElementById('resultModal').style.display='none'">&times;</span>
+            <div id="result"></div>
+        </div>
+    </div>
+
+<script>
+    const API_BASE_URL = "https://api.owlwatcher.tech/api";
+    const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
+
+    async function getAppCheckHeaders() {
+        let appCheckToken = "";
+        if (typeof firebase !== 'undefined' && firebase.appCheck) {
+            try {
+                const appCheckResponse = await firebase.appCheck().getToken(false);
+                appCheckToken = appCheckResponse.token;
+            } catch (err) {
+                console.error("Failed to get Firebase App Check token:", err);
+            }
+        }
+        return { 'X-Firebase-AppCheck': appCheckToken };
+    }
+
+    async function getAuthHeaders() {
+        try {
+            const tokenResponse = await fetch(`${API_BASE_URL}/auth/token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...NG_HEADERS }
+            });
+            if (tokenResponse.ok) {
+                const tokenData = await tokenResponse.json();
+                if (tokenData && tokenData.token) {
+                    const appCheckHeaders = await getAppCheckHeaders();
+                    return {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${tokenData.token}`,
+                        ...appCheckHeaders,
+                        ...NG_HEADERS
+                    };
+                }
+            }
+        } catch (err) {
+            console.error("Failed to acquire auth token:", err);
+        }
+        
+        const fallbackAppCheck = await getAppCheckHeaders();
+        return { 
+            'Content-Type': 'application/json', 
+            ...fallbackAppCheck,
+            ...NG_HEADERS 
+        };
+    }
+
+    const modal = document.getElementById("resultModal");
+    let currentSociety = "";
+    let guardUnsubscribe = null;
+    let adInterval = null;
+    let globalAdInterval = null;
+    
+    let owlWatcherTeamPhone = "919033406816";
+    
+    let currentIndex = 0;
+    let totalSlides = 0;
+    let currentGlobalIndex = 0;
+    let totalGlobalSlides = 0;
+
+    function showModal(content) { document.getElementById("result").innerHTML = content; modal.style.display = "block"; }
+    window.onclick = (event) => { if (event.target == modal) modal.style.display = "none"; };
+
+    async function fetchTeamPhone() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/config`, { headers: NG_HEADERS });
+            if (response.ok) {
+                const data = await response.json();
+                if (data.teamPhone) {
+                    owlWatcherTeamPhone = data.teamPhone.replace(/\D/g, '');
+                }
+                if (data.welcomeMessage) {
+                    const welcomeEl = document.getElementById('overlayWelcomeText');
+                    if (welcomeEl) {
+                        welcomeEl.innerHTML = data.welcomeMessage.replace(/\n/g, '<br>');
+                    }
+                }
+            }
+        } catch (err) {
+            console.error("Failed to fetch dynamic master admin phone, using fallback.", err);
+        }
+    }
+
+    function updateAdLinks(societyName = "") {
+        const globalAdLink = document.getElementById("globalAdLink");
+        if (globalAdLink) {
+            const globalText = encodeURIComponent("Hi I want to apply for global ad in Owl Watcher");
+            globalAdLink.href = `https://wa.me/${owlWatcherTeamPhone}?text=${globalText}`;
+        }
+
+        const localAdLink = document.getElementById("localAdLink");
+        if (localAdLink && societyName) {
+            const localText = encodeURIComponent(`Hi I want to apply for local-society post in Owl Watcher for ${societyName}`);
+            localAdLink.href = `https://wa.me/${owlWatcherTeamPhone}?text=${localText}`;
+            localAdLink.innerText = `Contact for Posting Paid Content in ${societyName}!`;
+        }
+    }
+
+    // Owl Jump Game Logic Implementation
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreDisplay = document.getElementById('gameScore');
+    const highScoreDisplay = document.getElementById('gameHighScore');
+    const gameActionBtn = document.getElementById('gameActionBtn');
+    const gameContainer = document.getElementById('gameContainer');
+    
+    // Load fixed owl image asset
+    const owlImg = new Image();
+    owlImg.src = "owl1.png"; 
+
+    let gameRunning = false;
+    let gameScore = 0;
+    let storedHighScore = parseInt(localStorage.getItem('owlGameHighScore')) || 0;
+    highScoreDisplay.innerText = `High Score: ${storedHighScore}`;
+    let animationFrameId = null;
+
+    let owl = {
+        x: 40,
+        y: 104,
+        width: 28,
+        height: 28,
+        dy: 0,
+        jumpForce: -8.5,
+        gravity: 0.5,
+        grounded: true
+    };
+
+    let obstacles = [];
+    let obstacleTimer = 0;
+    let obstacleInterval = 100; // frames between obstacles
+
+    function resetGame() {
+        owl.y = 104;
+        owl.dy = 0;
+        owl.grounded = true;
+        obstacles = [];
+        gameScore = 0;
+        obstacleTimer = 0;
+        scoreDisplay.innerText = `Score: ${gameScore}`;
+    }
+
+    function triggerJump() {
+        if (!gameRunning) {
+            startGame();
+            return;
+        }
+        if (owl.grounded) {
+            owl.dy = owl.jumpForce;
+            owl.grounded = false;
+            
+            // Play jump sound
+            const jumpAudio = document.getElementById('jumpSound');
+            if (jumpAudio) {
+                jumpAudio.currentTime = 0;
+                jumpAudio.play().catch(err => console.log("Audio play blocked:", err));
+            }
+        }
+    }
+
+    function startGame() {
+        if (gameRunning) return;
+        resetGame();
+        gameRunning = true;
+        gameActionBtn.innerText = "Jump";
+        
+        // Start background game music (game.mp3)
+        const gameMusic = document.getElementById('gameMusic');
+        if (gameMusic) {
+            gameMusic.currentTime = 0;
+            gameMusic.play().catch(err => console.log("Background music play blocked:", err));
+        }
+
+        loop();
+    }
+
+    function gameOver() {
+        gameRunning = false;
+        cancelAnimationFrame(animationFrameId);
+        
+        // Stop background game music
+        const gameMusic = document.getElementById('gameMusic');
+        if (gameMusic) {
+            gameMusic.pause();
+            gameMusic.currentTime = 0;
+        }
+        
+        // Play hit sound when hitting tree/game over
+        const hitAudio = document.getElementById('hitSound');
+        if (hitAudio) {
+            hitAudio.currentTime = 0;
+            hitAudio.play().catch(err => console.log("Audio play blocked:", err));
+        }
+        
+        // Check if High Score is beaten at game over
+        if (gameScore > storedHighScore) {
+            storedHighScore = gameScore;
+            localStorage.setItem('owlGameHighScore', storedHighScore);
+            highScoreDisplay.innerText = `High Score: ${storedHighScore}`;
+            
+            // Play high score sound (hs.wav) exactly once on game over if new record set
+            const hsAudio = document.getElementById('hsSound');
+            if (hsAudio) {
+                hsAudio.currentTime = 0;
+                hsAudio.play().catch(err => console.log("Audio play blocked:", err));
+            }
+        }
+        
+        gameActionBtn.innerText = "Play Again";
+    }
+
+    function updateGame() {
+        // Owl Physics
+        owl.dy += owl.gravity;
+        owl.y += owl.dy;
+
+        // Ground collision
+        if (owl.y > 104) {
+            owl.y = 104;
+            owl.dy = 0;
+            owl.grounded = true;
+        }
+
+        // Obstacles generation & movement with varied hurdle patterns
+        obstacleTimer++;
+        if (obstacleTimer >= obstacleInterval) {
+            obstacleTimer = 0;
+            obstacleInterval = Math.floor(Math.random() * 50) + 85;
+            
+            let obstacleType = Math.random();
+            if (obstacleType < 0.4) {
+                // Pattern 1: Single normal tree on the ground
+                obstacles.push({
+                    x: canvas.width,
+                    y: 110,
+                    width: 20,
+                    height: 24,
+                    speed: 3.5
+                });
+            } else if (obstacleType < 0.75) {
+                // Pattern 2: Double trees together side-by-side
+                obstacles.push({
+                    x: canvas.width,
+                    y: 110,
+                    width: 20,
+                    height: 24,
+                    speed: 3.5
+                });
+                obstacles.push({
+                    x: canvas.width + 32,
+                    y: 110,
+                    width: 20,
+                    height: 24,
+                    speed: 3.5
+                });
+            } else {
+                // Pattern 3: Two trees one above the other
+                obstacles.push({
+                    x: canvas.width,
+                    y: 110,
+                    width: 20,
+                    height: 24,
+                    speed: 3.5
+                });
+                obstacles.push({
+                    x: canvas.width,
+                    y: 84,
+                    width: 20,
+                    height: 24,
+                    speed: 3.5
+                });
+            }
+        }
+
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            obstacles[i].x -= obstacles[i].speed;
+
+            // Collision check (AABB bounding box)
+            if (
+                owl.x < obstacles[i].x + obstacles[i].width - 4 &&
+                owl.x + owl.width - 4 > obstacles[i].x &&
+                owl.y < obstacles[i].y + obstacles[i].height &&
+                owl.y + owl.height > obstacles[i].y
+            ) {
+                gameOver();
+            }
+
+            // Remove off-screen obstacles & increment score
+            if (obstacles[i].x + obstacles[i].width < 0) {
+                obstacles.splice(i, 1);
+                gameScore += 10;
+                scoreDisplay.innerText = `Score: ${gameScore}`;
+            }
+        }
+    }
+
+    // Game colours follow the light/dark theme tokens from theme.css
+    const themeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    let gameColors = {};
+    function refreshGameColors() {
+        const css = getComputedStyle(document.documentElement);
+        gameColors = {
+            bg: css.getPropertyValue('--ow-bg').trim() || "#fdf6e3",
+            line: css.getPropertyValue('--ow-primary').trim() || "#8d6e63",
+            text: css.getPropertyValue('--ow-text').trim() || "rgba(93, 64, 55, 0.8)"
+        };
+    }
+    refreshGameColors();
+    themeQuery.addEventListener('change', () => { refreshGameColors(); if (!gameRunning) drawGame(); });
+
+    function drawGame() {
+        ctx.fillStyle = gameColors.bg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw Ground Line
+        ctx.strokeStyle = gameColors.line;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, 134);
+        ctx.lineTo(canvas.width, 134);
+        ctx.stroke();
+
+        // Draw Fixed Image Owl using owl.png instead of emoji
+        if (owlImg.complete) {
+            ctx.drawImage(owlImg, owl.x, owl.y, owl.width, owl.height);
+        }
+
+        // Draw Obstacles (🪵)
+        for (let obs of obstacles) {
+            ctx.font = "20px sans-serif";
+            ctx.fillText("🪵", obs.x, obs.y);
+        }
+
+        if (!gameRunning && gameScore === 0) {
+            ctx.fillStyle = gameColors.text;
+            ctx.font = "bold 18px 'Caveat', cursive";
+            ctx.textAlign = "center";
+            ctx.fillText("Click Jump or Space to Start", canvas.width / 2, canvas.height / 2 - 10);
+        } else if (!gameRunning && gameScore > 0) {
+            ctx.fillStyle = "rgba(211, 47, 47, 0.9)";
+            ctx.font = "bold 20px 'Caveat', cursive";
+            ctx.textAlign = "center";
+            ctx.fillText(`Game Over! Score: ${gameScore}`, canvas.width / 2, canvas.height / 2 - 10);
+        }
+    }
+    
+    function loop() {
+        if (!gameRunning) return;
+        updateGame();
+        drawGame();
+        animationFrameId = requestAnimationFrame(loop);
+    }
+
+    drawGame();
+
+    gameActionBtn.addEventListener('click', triggerJump);
+    gameContainer.addEventListener('click', (e) => {
+        triggerJump();
+    });
+    window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+            if (document.getElementById('society-verification').style.display !== 'none') {
+                e.preventDefault();
+                triggerJump();
+            }
+        }
+    });
+
+    async function setupGuard(societyIdOrName) {
+        const guardContainer = document.getElementById("guard-container");
+        if (!guardContainer) return;
+
+        guardContainer.innerHTML = `<p class="muted small">Loading active guard info...</p>`;
+        
+        try {
+            const headers = await getAuthHeaders();
+            let listRes = await fetch(`${API_BASE_URL}/societies/${encodeURIComponent(societyIdOrName)}/active-guard`, { headers });
+            if (!listRes.ok && currentSociety && currentSociety !== societyIdOrName) {
+                listRes = await fetch(`${API_BASE_URL}/societies/${encodeURIComponent(currentSociety)}/active-guard`, { headers });
+            }
+
+            if (listRes.ok) {
+                const resultData = await listRes.json();
+                let found = null;
+
+                if (Array.isArray(resultData)) {
+                    found = resultData.find(s => s.id == societyIdOrName || s.name?.toLowerCase() === societyIdOrName.toLowerCase() || (currentSociety && s.name?.toLowerCase() === currentSociety.toLowerCase()));
+                } else if (resultData && typeof resultData === 'object') {
+                    found = resultData;
+                }
+
+                if (found && (found.activeGuardName || found.name || found.id)) {
+                    const guardName = found.activeGuardName;
+                    const guardPhone = found.activeGuardPhone;
+
+                    if (guardName) {
+                        const cleanPhone = guardPhone ? guardPhone.replace(/\D/g, '') : '';
+                        const initials = guardName.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join('');
+                        guardContainer.innerHTML = `
+                            <section class="card status-card" aria-label="Security guard on duty">
+                                <div class="avatar" aria-hidden="true">${initials}</div>
+                                <div class="status-body">
+                                    <span class="chip chip-live">Live · On duty</span>
+                                    <strong>${guardName}</strong>
+                                    <span class="muted small">Security guard</span>
+                                </div>
+                                ${cleanPhone ? `<a href="tel:${cleanPhone}" class="btn btn-success btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg>Call</a>` : ''}
+                            </section>
+                        `;
+                        return;
+                    }
+                }
+            }
+            guardContainer.innerHTML = "";
+        } catch (err) {
+            console.error("Failed to load active guard info:", err);
+            guardContainer.innerHTML = "";
+        }
+    }
+
+    function changeSlide(direction) {
+        const slider = document.getElementById("adSlider");
+        const slides = slider.getElementsByClassName("ad-slide");
+        if (slides.length <= 1) return;
+
+        slides[currentIndex].style.display = "none";
+        slides[currentIndex].classList.remove("active");
+        
+        if (direction === "next") {
+            currentIndex = (currentIndex + 1) % slides.length;
+        } else if (direction === "prev") {
+            currentIndex = (currentIndex - 1 + slides.length) % slides.length;
+        }
+        
+        slides[currentIndex].style.display = "flex";
+        slides[currentIndex].classList.add("active");
+    }
+
+    function changeGlobalSlide(direction) {
+        const slider = document.getElementById("globalAdSlider");
+        const slides = slider.getElementsByClassName("global-ad-slide");
+        if (slides.length <= 1) return;
+
+        slides[currentGlobalIndex].classList.remove("active");
+        if (direction === "next") {
+            currentGlobalIndex = (currentGlobalIndex + 1) % slides.length;
+        } else if (direction === "prev") {
+            currentGlobalIndex = (currentGlobalIndex - 1 + slides.length) % slides.length;
+        }
+        slides[currentGlobalIndex].classList.add("active");
+    }
+
+    function startAdTimer() {
+        if (adInterval) clearInterval(adInterval);
+        const slider = document.getElementById("adSlider");
+        const slides = slider.getElementsByClassName("ad-slide");
+        if (slides.length > 1) {
+            adInterval = setInterval(() => { changeSlide("next"); }, 5000);
+        }
+    }
+
+    function startGlobalAdTimer() {
+        if (globalAdInterval) clearInterval(globalAdInterval);
+        const slider = document.getElementById("globalAdSlider");
+        const slides = slider.getElementsByClassName("global-ad-slide");
+        if (slides.length > 1) {
+            globalAdInterval = setInterval(() => { changeGlobalSlide("next"); }, 5000);
+        }
+    }
+
+    async function loadGlobalAdsPreLogin() {
+        const slider = document.getElementById("globalAdSlider");
+        const controls = document.getElementById("globalAdControls");
+        if (globalAdInterval) clearInterval(globalAdInterval);
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/ads/global`, { headers: NG_HEADERS });
+            const ads = await response.json();
+
+            if (!Array.isArray(ads) || ads.length === 0) {
+                slider.innerHTML = `<div class="ad-placeholder" id="global-ad-placeholder">Space available for your content</div>`;
+                if (controls) controls.style.display = "none";
+                return;
+            }
+
+            slider.innerHTML = "";
+            ads.forEach((adData, index) => {
+                if (adData && adData.imageUrl) {
+                    const contestLink = `contest.html?adImg=${encodeURIComponent(adData.imageUrl)}`;
+                    slider.innerHTML += `
+                        <div class="global-ad-slide">
+                            <div class="ad-media" style="--ad-bg: url('${adData.imageUrl}');"><img src="${adData.imageUrl}" alt="Global promotion"></div>
+                            <a href="${contestLink}" class="btn btn-block">Join the contest</a>
+                        </div>`;
+                }
+            });
+
+            const slides = slider.getElementsByClassName("global-ad-slide");
+            totalGlobalSlides = slides.length;
+            currentGlobalIndex = 0;
+
+            if (totalGlobalSlides > 0) {
+                slides[currentGlobalIndex].classList.add("active");
+                if (totalGlobalSlides > 1) {
+                    if (controls) controls.style.display = "flex";
+                    startGlobalAdTimer();
+                } else {
+                    if (controls) controls.style.display = "none";
+                }
+            } else {
+                slider.innerHTML = `<div class="ad-placeholder" id="global-ad-placeholder">Space available for your content</div>`;
+                if (controls) controls.style.display = "none";
+            }
+        } catch (error) {
+            console.error("Error setting up pre-login global ad banner:", error);
+        }
+    }
+
+    async function loadNoticeBoard(societyIdOrName) {
+        const board = document.getElementById("notice-board");
+        const noticeContentEl = document.getElementById("notice-content");
+        const noticeDateEl = document.getElementById("noticeDate");
+        const readMoreLink = document.getElementById("readMoreNoticeLink");
+        
+        if (!board || !noticeContentEl) return;
+
+        try {
+            const headers = await getAuthHeaders();
+            const response = await fetch(`${API_BASE_URL}/notices/${encodeURIComponent(societyIdOrName)}`, { headers });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.todayMessage) {
+                    noticeContentEl.innerText = data.todayMessage;
+                    if (data.date && noticeDateEl) {
+                        noticeDateEl.innerText = "Society notice · " + data.date;
+                    }
+                    
+                    if (readMoreLink) {
+                        readMoreLink.href = `notice.html?id=${encodeURIComponent(societyIdOrName)}`;
+                        readMoreLink.style.display = "inline-block";
+                    }
+                    board.style.display = "block";
+                    return;
+                }
+            }
+            board.style.display = "none";
+        } catch (err) {
+            console.error("Failed to load notice board:", err);
+            board.style.display = "none";
+        }
+    }
+
+    async function loadAds(societyId) {
+        const slider = document.getElementById("adSlider");
+        const controls = document.getElementById("adControls");
+        if (adInterval) clearInterval(adInterval);
+
+        try {
+            const headers = await getAuthHeaders();
+            let response = await fetch(`${API_BASE_URL}/ads/local/${encodeURIComponent(societyId)}`, { headers });
+            
+            if (!response.ok) {
+                response = await fetch(`${API_BASE_URL}/ads/local/${encodeURIComponent(societyId.toLowerCase())}`, { headers });
+            }
+            if (!response.ok && currentSociety) {
+                response = await fetch(`${API_BASE_URL}/ads/local/${encodeURIComponent(currentSociety)}`, { headers });
+            }
+
+            const rawText = response.ok ? await response.text() : "";
+            let ads = [];
+            try {
+                ads = rawText ? JSON.parse(rawText) : [];
+            } catch (parseErr) {
+                console.error("Failed to parse ads JSON:", parseErr);
+            }
+
+            if (!Array.isArray(ads) || ads.length === 0) {
+                slider.innerHTML = `<div class="ad-placeholder" id="ad-placeholder">Space available</div>`;
+                if (controls) controls.style.display = "none";
+                return;
+            }
+
+            slider.innerHTML = "";
+            ads.forEach((adData) => {
+                if (adData && adData.imageUrl) {
+                    const titleLower = (adData.title || "").toLowerCase();
+                    const isWish = adData.type === 'wish' || adData.isWish || 
+                                   titleLower.includes('birthday') || 
+                                   titleLower.includes('anniversary') || 
+                                   titleLower.includes('congrats') ||
+                                   titleLower.includes('wish');
+
+                    let actionLinkHtml = "";
+                    const targetId = adData.greetingId || adData.id || 'society_default';
+
+                    if (isWish) {
+                        actionLinkHtml = `<a href="greet.html?type=wish&id=${targetId}" class="btn btn-block">Check greetings</a>`;
+                    } else {
+                        actionLinkHtml = `<a href="greet.html?type=ad&id=${targetId}" class="btn btn-secondary btn-block">Check ad details</a>`;
+                    }
+
+                    slider.innerHTML += `
+                        <div class="ad-slide" style="display: none;">
+                            <div class="ad-media" style="--ad-bg: url('${adData.imageUrl}');"><img src="${adData.imageUrl}" alt="Community post"></div>
+                            ${actionLinkHtml}
+                        </div>`;
+                }
+            });
+
+            const slides = slider.getElementsByClassName("ad-slide");
+            totalSlides = slides.length;
+            currentIndex = 0;
+
+            if (totalSlides > 0) {
+                slides[currentIndex].style.display = "flex";
+                slides[currentIndex].classList.add("active");
+                if (totalSlides > 1) {
+                    if (controls) controls.style.display = "flex";
+                    startAdTimer();
+                } else {
+                    if (controls) controls.style.display = "none";
+                }
+            } else {
+                slider.innerHTML = `<div class="ad-placeholder" id="ad-placeholder">Space available</div>`;
+                if (controls) controls.style.display = "none";
+            }
+        } catch (error) {
+            console.error("Exception caught inside loadAds:", error);
+        }
+    }
+
+    document.getElementById("nextAdBtn").addEventListener("click", () => { changeSlide("next"); startAdTimer(); });
+    document.getElementById("prevAdBtn").addEventListener("click", () => { changeSlide("prev"); startAdTimer(); });
+    document.getElementById("nextGlobalAdBtn").addEventListener("click", () => { changeGlobalSlide("next"); startGlobalAdTimer(); });
+    document.getElementById("prevGlobalAdBtn").addEventListener("click", () => { changeGlobalSlide("prev"); startGlobalAdTimer(); });
+
+    function showSearchScreen(societyName, societyId) {
+        currentSociety = societyName;
+        document.getElementById("society-verification").style.display = "none";
+        document.getElementById("vehicle-search").style.display = "block";
+        document.getElementById("displaySocietyName").innerText = currentSociety;
+
+        document.getElementById("factlityPage").href = "facility.html";
+        document.getElementById("addVehiclePageBtn").href = `entry.html?societyId=${encodeURIComponent(societyId)}`;
+
+        updateAdLinks(societyName);
+        if (globalAdInterval) clearInterval(globalAdInterval);
+        
+        setupGuard(societyId || societyName);
+        loadAds(societyId || societyName);
+        loadNoticeBoard(societyId || societyName); 
+    }
+
+    function clearSocietySession() {
+        localStorage.removeItem("savedSocietyName");
+        localStorage.removeItem("savedSocietyId");
+        localStorage.removeItem("societyLoginTime");
+        localStorage.removeItem("authToken");
+        if (guardUnsubscribe) guardUnsubscribe();
+        if (adInterval) clearInterval(adInterval);
+        currentSociety = "";
+        document.getElementById("vehicleInput").value = "";
+        document.getElementById("societyInput").value = "";
+        document.getElementById("vehicle-search").style.display = "none";
+        document.getElementById("society-verification").style.display = "block";
+        updateAdLinks();
+        loadGlobalAdsPreLogin();
+    }
+
+    document.getElementById("verifyBtn").addEventListener("click", async () => {
+        const inputRaw = document.getElementById("societyInput").value.trim();
+        if (!inputRaw) return showModal("<p>⚠️ Please enter a society name.</p>");
+        
+        try {
+            const headers = await getAuthHeaders();
+            const response = await fetch(`${API_BASE_URL}/societies/verify?name=${encodeURIComponent(inputRaw)}`, { headers });
+            
+            if (response.ok) {
+                const match = await response.json();
+                const serverName = match.name || match.id || inputRaw;
+                
+                localStorage.setItem("savedSocietyName", serverName);
+                localStorage.setItem("savedSocietyId", serverName); 
+                localStorage.setItem("societyLoginTime", Date.now().toString());
+                
+                showSearchScreen(serverName, serverName); 
+            } else { 
+                showModal("<p>❌ Society not found.</p>"); 
+            }
+        } catch (err) {
+            showModal("<p>❌ Error connecting to server.</p>");
+        }
+    });
+
+    document.getElementById("searchBtn").addEventListener("click", async () => {
+        const vNum = document.getElementById("vehicleInput").value.trim().toUpperCase();
+        if (!vNum) return showModal("<p>⚠️ Please enter a vehicle number.</p>");
+        
+        try {
+           const headers = await getAuthHeaders();
+           const response = await fetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(currentSociety)}&vehicleNumber=${encodeURIComponent(vNum)}`, { headers });
+
+           if (!response.ok) throw new Error(`Server responded with status ${response.status}`);
+
+           const matches = await response.json();
+           if (matches.length > 0) {
+               let htmlContent = "";
+               matches.forEach(data => {
+                   const msg = encodeURIComponent(`(Using: Owl-Watcher) Hello, vehicle ${data.vehicleNumber} of ${data.flatNumber}`);
+                   htmlContent += `<div class="result-item">✅ Vehicle: <b>${data.vehicleNumber}</b><br>Flat/Name: <b>${data.flatNumber}</b><br><div hidden><a href="https://wa.me/${data.mobileNumber?.replace(/\D/g, '')}?text=${msg}" target="_blank" class="btn-msg">💬 Message Admin</a></div></div>`;
+               });
+               showModal(htmlContent);
+           } else { 
+               showModal("<p>❌ Vehicle not found.</p>"); 
+           }
+        } catch (err) {
+           showModal("<p>❌ Error searching vehicle.</p>");
+        }
+    });
+
+    document.getElementById("switchSocietyBtn").addEventListener("click", clearSocietySession);
+    document.getElementById("backToHomeBtn").addEventListener("click", clearSocietySession);
+    
+    async function updateContactUsWhatsAppLink() {
+        try {
+            await fetchTeamPhone();
+            const whatsappLinks = document.querySelectorAll('a[href*="wa.me"]');
+            whatsappLinks.forEach(link => {
+                const urlObj = new URL(link.href);
+                link.href = `https://wa.me/${owlWatcherTeamPhone}${urlObj.search}`;
+            });
+        } catch (err) {
+            console.error("Failed to update WhatsApp links:", err);
+        }
+    }
+    
+    window.addEventListener("DOMContentLoaded", async () => {
+        await fetchTeamPhone();
+        await updateContactUsWhatsAppLink();
+        updateAdLinks();
+
+        const savedName = localStorage.getItem("savedSocietyName");
+        const savedId = localStorage.getItem("savedSocietyId");
+        const loginTime = localStorage.getItem("societyLoginTime");
+        
+        if (savedName && savedId && loginTime) {
+            const elapsed = Date.now() - parseInt(loginTime, 10);
+            const fifteenMinutes = 15 * 60 * 1000;
+
+            if (elapsed >= fifteenMinutes) {
+                clearSocietySession();
+            } else {
+                showSearchScreen(savedName, savedId);
+                setTimeout(clearSocietySession, fifteenMinutes - elapsed);
+            }
+        } else {
+            loadGlobalAdsPreLogin();
+        }
+    });
+    
+    document.getElementById('startButton').addEventListener('click', function() {
+        const welcomeVideo = document.getElementById('welcomeVideo');
+        if (welcomeVideo) {
+            welcomeVideo.pause();
+            welcomeVideo.currentTime = 0;
+        }
+        document.getElementById('startOverlay').style.display = 'none';
+    });
+
+    function toggleVideoAudio() {
+        const video = document.getElementById("welcomeVideo");
+        const btn = document.getElementById("audioToggleBtn");
+        
+        if (video.muted) {
+            video.muted = false;
+            btn.innerText = "🔊";
+            btn.title = "Mute Video";
+        } else {
+            video.muted = true;
+            btn.innerText = "🔇";
+            btn.title = "Unmute Video";
+        }
+    }
+
+    function activateOwlEffect() {
+        const container = document.getElementById('owl-container');
+        const audio = document.getElementById('owl-audio');
+
+        if (container.classList.contains('active-effect')) return;
+
+        audio.currentTime = 0;
+        audio.play().catch(error => { console.log("Audio playback blocked:", error); });
+
+        container.classList.add('active-effect');
+        setTimeout(() => { container.classList.remove('active-effect'); }, 2000);
+
+        const canvas = document.getElementById('fireCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.style.display = 'block';
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        let particles = [];
+        for (let i = 0; i < 150; i++) {
+            particles.push({
+                x: Math.random() * canvas.width,
+                y: canvas.height + Math.random() * 100,
+                size: Math.random() * 5 + 2,
+                speedY: Math.random() * 5 + 2,
+                color: '#e67e22'
+            });
+        }
+
+        function animateFlames() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            particles.forEach(p => {
+                p.y -= p.speedY;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            if (particles[0] && particles[0].y > -50) {
+                requestAnimationFrame(animateFlames);
+            } else {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                canvas.style.display = 'none';
+            }
+        }
+        animateFlames();
+    }
+</script> 
+<!-- Capacitor Bridge -->
+<script src="capacitor.js"></script>
+<!-- Owl Animation Container Placed Exclusively Inside Vehicle Search Page -->
+<div id="owl-container">
+    <div id="owl-icon" role="button" tabindex="0" aria-label="Play owl sound" onclick="activateOwlEffect()">
+        <img src="owl.png" alt="Owl Watcher" width="52" height="52">
+    </div>
+    <audio id="owl-audio" src="theme.mp3" preload="auto"></audio>
+</div>
+
+<canvas id="fireCanvas"></canvas>
+
+</body>
+</html>

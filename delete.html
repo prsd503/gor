@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delete Account | Owl Watcher</title>
+    <style>
+        /* Delete pages (shared components live in theme.css) */
+        .check-list { margin: 0 0 16px; padding-left: 20px; line-height: 1.8; }
+    </style>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4f2ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="theme.css">
+    <script src="menu.js"></script>
+</head>
+<body>
+
+    <nav class="main-nav" aria-label="Page navigation">
+        <div class="nav-logo">
+            <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+            <span>Owl Watcher</span>
+        </div>
+        <a href="admin.html" class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+            Admin
+        </a>
+    </nav>
+
+    <main class="page">
+        <header class="page-header">
+            <span class="eyebrow">Account</span>
+            <h1 class="page-title">Delete account</h1>
+            <p class="page-subtitle">Request permanent closure of your account.</p>
+        </header>
+
+        <section class="card card-danger" aria-labelledby="deleteTitle">
+            <h2 id="deleteTitle">⚠️ Before you continue</h2>
+            <p><b>Disclaimer:</b> This action will permanently close your <span class="ow-brand">Owl Watcher</span> account.</p>
+            <p>By submitting, you acknowledge that:</p>
+            <ul class="check-list">
+                <li>All your registry data will be removed.</li>
+                <li>We will prepare and send your full data to you via email.</li>
+                <li>Your account access will be revoked shortly after.</li>
+            </ul>
+            <div class="form-actions">
+                <button type="button" id="submitDeleteBtn" class="btn-danger">Submit deletion request</button>
+            </div>
+        </section>
+
+        <a href="admin.html" class="back-btn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+            Back to admin portal
+        </a>
+    </main>
+
+    <script type="module" src="delete-logic.js"></script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&display=swap" rel="stylesheet">
+    <title>Security Guard Portal | Owl Watcher</title>
+
+    <style>
+        /* Guard page specifics (shared components live in theme.css) */
+        #portalSection { display: none; }
+        #result:not(:empty) { margin-top: 12px; padding: 14px 16px; border-radius: var(--ow-radius); background: var(--ow-surface-2); border: 1px solid var(--ow-border); }
+    </style>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4f2ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="theme.css">
+    <script src="menu.js"></script>
+</head>
+<body>
+
+    <!-- Professional Navigation -->
+<nav class="main-nav" aria-label="Main navigation">
+        <div class="nav-logo">
+            <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+            <span>Owl Watcher</span>
+        </div>
+        <div class="nav-links" id="navLinks">
+            <a href="index.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>Home</span></a>
+            <a href="admin.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg><span>Admin</span></a>
+            <a href="guard.html" class="nav-active" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>Guard</span></a>
+            <a href="studio.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg><span>Studio</span></a>
+            <a href="https://wa.me/919033406816"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-5A8 8 0 1 1 21 12z"/></svg><span>Contact</span></a>
+        </div>
+    </nav>
+
+    <main class="page stack">
+        <header class="page-header">
+            <span class="eyebrow">Security desk</span>
+            <h1 class="page-title">Guard portal</h1>
+            <p class="page-subtitle">Start your shift and look up vehicle owners in seconds.</p>
+        </header>
+
+        <!-- Login Section -->
+        <section class="card" id="login-section" aria-labelledby="guardLoginTitle">
+            <h2 id="guardLoginTitle">Sign in</h2>
+            <label for="email">Email</label>
+            <input type="email" id="email" placeholder="name@example.com" autocomplete="username">
+            <label for="pass">Password</label>
+            <input type="password" id="pass" placeholder="Password" autocomplete="current-password">
+            <div class="form-actions">
+                <button type="button" id="loginBtn" class="btn-block">Login</button>
+            </div>
+            <div class="text-center">
+                <span class="forgot-link" id="forgotPasswordBtn" role="button" tabindex="0">Forgot password?</span>
+            </div>
+        </section>
+
+        <!-- Portal Section -->
+        <div id="portalSection" class="stack">
+            <section class="card" aria-labelledby="shiftTitle">
+                <h2 class="section-title" id="shiftTitle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                    Start your shift
+                </h2>
+                <label for="guardSelect">Guard on duty</label>
+                <select id="guardSelect"><option>Loading...</option></select>
+                <div class="form-actions">
+                    <button type="button" id="activateBtn">Set me active</button>
+                </div>
+            </section>
+            <section class="card" aria-labelledby="lookupTitle">
+                <h2 class="section-title" id="lookupTitle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    Vehicle lookup
+                </h2>
+                <label for="vSearch">Vehicle number</label>
+                <div class="input-row">
+                    <input type="text" id="vSearch" class="uppercase" placeholder="e.g. GJ01AB1234">
+                    <button type="button" id="searchBtn">Search owner</button>
+                </div>
+                <div id="result"></div>
+            </section>
+            <button type="button" id="logoutBtn" class="btn-danger-soft btn-block" style="display:none;">Logout</button>
+        </div>
+    </main>
+
+    <!-- Custom Modal Window -->
+    <div id="customModal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="modalMessage">
+        <div class="dialog">
+            <p id="modalMessage"></p>
+            <div class="dialog-actions">
+                <button type="button" id="closeModalBtn" onclick="closeModal()">OK</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Owl Interactive Effect Widget -->
+   <div id="owl-container">
+    <div id="owl-icon" role="button" tabindex="0" aria-label="Play owl sound" onclick="activateOwlEffect()">
+        <img src="owl.png" alt="Owl Watcher" width="52" height="52"> 
+    </div>
+    <audio id="owl-audio" src="theme.mp3" preload="auto"></audio>
+</div>
+
+
+
+<script>
+  function activateOwlEffect() {
+    const container = document.getElementById('owl-container');
+    const audio = document.getElementById('owl-audio');
+    if (container.classList.contains('active-effect')) return;
+    audio.currentTime = 0;
+    audio.play().catch(error => {
+      console.log("Audio playback blocked or file not found:", error);
+    });
+    container.classList.add('active-effect');
+    setTimeout(() => {
+      container.classList.remove('active-effect');
+    }, 2000);
+  }
+</script>        
+
+    <!-- Capacitor Bridge -->
+    <script src="capacitor.js"></script>
+    <!-- Core Application & Guard Logic Modules -->
+    <script type="module" src="app.js"></script>
+    <script type="module" src="guard-logic.js"></script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Data | Owl Watcher</title>
+    <style>
+        /* Delete pages (shared components live in theme.css) */
+        .check-list { margin: 0 0 16px; padding-left: 20px; line-height: 1.8; }
+    </style>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4f2ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="theme.css">
+    <script src="menu.js"></script>
+</head>
+<body>
+
+    <nav class="main-nav" aria-label="Page navigation">
+        <div class="nav-logo">
+            <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+            <span>Owl Watcher</span>
+        </div>
+        <a href="admin.html" class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+            Admin
+        </a>
+    </nav>
+
+    <main class="page">
+        <header class="page-header">
+            <span class="eyebrow">Data</span>
+            <h1 class="page-title">Data deletion request</h1>
+            <p class="page-subtitle">Choose what you would like to remove from our registry.</p>
+        </header>
+
+        <section class="card" aria-label="Deletion request">
+            <label for="deleteOption">What to delete</label>
+            <select id="deleteOption">
+                <option value="Specific Vehicle">Delete Specific Vehicle Data</option>
+                <option value="All Data">Delete All Society Data</option>
+            </select>
+            <label for="details">Vehicle number (if specific)</label>
+            <input type="text" id="details" placeholder="Enter Vehicle Number (if specific)">
+            <div class="form-actions">
+                <button type="button" id="submitDeleteReq" class="btn-success">Submit request via WhatsApp</button>
+            </div>
+        </section>
+
+        <a href="admin.html" class="back-btn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+            Back to admin portal
+        </a>
+    </main>
+
+    <script type="module" src="deletedata-logic.js"></script>
+</body>
+</html>
