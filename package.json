@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test --test-reporter=spec tests/*.test.js",
+    "check": "node --check force-update.js && node --check menu.js && node --input-type=module --check < app.js && node --input-type=module --check < admin-logic.js && node --input-type=module --check < guard-logic.js && node --input-type=module --check < delete-logic.js && node --input-type=module --check < deletedata-logic.js"
   },
   "keywords": [],
   "author": "",
@@ -15,5 +16,8 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "firebase-admin": "^14.2.0"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
   }
 }

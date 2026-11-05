@@ -1,0 +1,8 @@
+// MERGE this match block into your EXISTING cloud.firestore rules, inside:
+// service cloud.firestore { match /databases/{database}/documents { ... } }
+// Do NOT replace all your existing rules with this fragment.
+// Console/Admin SDK writes bypass rules; client SDK writes are forbidden.
+match /app_config/appVersion {
+  allow read: if true;
+  allow write: if false;
+}
