@@ -1,0 +1,11 @@
+{
+  "android": {
+    "minimumVersion": "1.0.0",
+    "storeUrl": ""
+  },
+  "ios": {
+    "minimumVersion": "1.0.0",
+    "storeUrl": ""
+  },
+  "message": "A new version of Owl Watcher is required. Please update to continue."
+}
