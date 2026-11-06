@@ -6,6 +6,8 @@
     'use strict';
 
     var CONFIG_PATH = ['app_config', 'appVersion'];
+    // Backend read uses the Admin SDK, so it works even when native App Check attestation fails.
+    var VERSION_API = 'https://api.owlwatcher.tech/api/app-version';
     var CHECK_INTERVAL = 60000;
     var REQUEST_TIMEOUT = 10000;
     var DISMISSAL_KEY_PREFIX = 'owl-update-popup:dismissed:';
@@ -419,6 +421,32 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
         };
     }
 
+    /* Prefer the backend endpoint (Admin SDK, no client App Check dependency); fall back
+     * to the direct Firestore read so an API outage does not disable the popup. */
+    function createPolicyLoader(win, importModule, apiUrl) {
+        var firestoreLoad = createFirestorePolicyLoader(importModule);
+        var endpoint = apiUrl || VERSION_API;
+        return function loadPolicy() {
+            if (!win || typeof win.fetch !== 'function') return firestoreLoad();
+            return win.fetch(endpoint, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+                cache: 'no-store'
+            }).then(function (response) {
+                if (!response.ok) throw new Error('Version API returned ' + response.status);
+                return response.json();
+            }).then(function (data) {
+                if (!data || typeof data !== 'object') throw new Error('Invalid version API response.');
+                return data;
+            }).catch(function (error) {
+                if (win.console && typeof win.console.warn === 'function') {
+                    win.console.warn('[update-popup] Version API unavailable, using Firestore:', error && error.message ? error.message : error);
+                }
+                return firestoreLoad();
+            });
+        };
+    }
+
     function startNativeUpdatePrompt(win, importModule) {
         var platform = getNativePlatform(win);
         if (!platform) return null;
@@ -433,7 +461,7 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
                 if (!appPlugin || typeof appPlugin.getInfo !== 'function') return Promise.reject(new Error('Capacitor App plugin is missing.'));
                 return Promise.resolve(appPlugin.getInfo()).then(function (info) { return info.version; });
             },
-            loadPolicy: createFirestorePolicyLoader(importModule),
+            loadPolicy: createPolicyLoader(win, importModule),
             openStore: function (url) {
                 var browser = capacitor && capacitor.Plugins && capacitor.Plugins.Browser;
                 if (browser && typeof browser.open === 'function') return browser.open({ url: url });
@@ -460,6 +488,7 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
         parseVersion: parseVersion, compareVersions: compareVersions, validStoreUrl: validStoreUrl,
         validatePolicy: validatePolicy, evaluateVersion: evaluateVersion, getNativePlatform: getNativePlatform,
         createUpdatePrompt: createUpdatePrompt, createFirestorePolicyLoader: createFirestorePolicyLoader,
+        createPolicyLoader: createPolicyLoader,
         startNativeUpdatePrompt: startNativeUpdatePrompt
     };
     if (typeof module === 'object' && module.exports) { module.exports = api; return; }

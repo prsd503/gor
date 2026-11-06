@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test --test-reporter=spec tests/*.test.js",
-    "check": "node --check app-check.mjs && node --check update-popup.js && node --check menu.js && node --input-type=module --check < app.js && node --input-type=module --check < admin-logic.js && node --input-type=module --check < guard-logic.js && node --input-type=module --check < delete-logic.js && node --input-type=module --check < deletedata-logic.js"
+    "check": "node --check app-check.mjs && node --check update-popup.js && node --check menu.js && node --check server/index.js && node --check server/lib/version-policy.js && node --check server/lib/auth.js && node --check server/lib/security.js && node --input-type=module --check < app.js && node --input-type=module --check < admin-logic.js && node --input-type=module --check < guard-logic.js && node --input-type=module --check < delete-logic.js && node --input-type=module --check < deletedata-logic.js"
   },
   "keywords": [],
   "author": "",
@@ -15,7 +15,10 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "firebase-admin": "^14.2.0"
+    "express-rate-limit": "^7.5.1",
+    "firebase-admin": "^14.2.0",
+    "jsonwebtoken": "^9.0.3",
+    "node-cron": "^3.0.3"
   },
   "devDependencies": {
     "jsdom": "^26.1.0"
