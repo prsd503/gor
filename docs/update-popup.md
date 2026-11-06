@@ -13,7 +13,7 @@ The shared web app shows a **dismissible** native update popup on every HTML pag
 - **Fails open:** missing/invalid configuration, App plugin errors, timeouts, offline reads, or denied Firestore access hide the popup and log a console warning. They never block the app.
 - Uses the actual native marketing version, not `package.json` or Android `versionCode`.
 
-Implementation: `update-popup.js`. It reuses `app.js`'s Firebase app/native App Check bridge and requests the policy with `getDocFromServer()`.
+Implementation: `update-popup.js` and `app-check.mjs`. The popup reuses `app.js`'s Firebase app/native App Check bridge, waits for native App Check initialization, and requests the policy with `getDocFromServer()`. See [the native App Check guide](app-check.md) for debug/release setup.
 
 ## Native wrapper setup
 
@@ -30,7 +30,7 @@ npm install @capacitor/app@8 @capacitor/browser@8
 npx cap sync
 ```
 
-Use `@7` for Core 7. Copy the updated web assets, including `update-popup.js` and all updated HTML files, into the wrapper's configured `webDir` (`www` in the existing setup), then run:
+Use `@7` for Core 7. Copy the updated web assets, including `app.js`, `app-check.mjs`, `update-popup.js`, and all updated HTML files, into the wrapper's configured `webDir` (`www` in the existing setup), then run:
 
 ```sh
 npx cap sync android
@@ -90,12 +90,12 @@ match /app_config/appVersion {
 }
 ```
 
-Do not replace unrelated rules. If Firestore App Check enforcement is enabled, the native App Check bridge must still work for the read to succeed; failure simply skips the popup. Emulators may need Firebase's debug provider registered for development.
+Do not replace unrelated rules. If Firestore App Check enforcement is enabled, the native App Check bridge must still work for the read to succeed; failure simply skips the popup. Debug builds need an explicit native debug signal and a registered Firebase debug token; see [the native App Check guide](app-check.md).
 
 ## Release checklist
 
 1. Increment native `versionName` / `CFBundleShortVersionString` and store build number.
-2. Include the latest web assets and `update-popup.js`.
+2. Include the latest web assets, `app.js`, `app-check.mjs`, and `update-popup.js`.
 3. Release to the appropriate store.
 4. Set that platform's `minimumVersion` to the version you want older installs to be offered.
 5. Test older, equal, and newer installs.

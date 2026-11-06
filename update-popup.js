@@ -263,7 +263,9 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
             offer = null;
             hide();
             if (win.console && typeof win.console.warn === 'function') {
-                win.console.warn('[update-popup] Check skipped:', error && error.message ? error.message : error);
+                var detail = error && error.message ? error.message : error;
+                if (error && error.code) detail = error.code + ': ' + detail;
+                win.console.warn('[update-popup] Check skipped:', detail);
             }
             return 'unavailable';
         }
@@ -393,7 +395,11 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
                 ]).then(function (modules) {
                     // Reuse the existing Firebase app and its native App Check bridge.
                     var sdk = modules[1];
-                    return { sdk: sdk, ref: sdk.doc.apply(null, [modules[0].db].concat(CONFIG_PATH)) };
+                    return {
+                        sdk: sdk,
+                        ref: sdk.doc.apply(null, [modules[0].db].concat(CONFIG_PATH)),
+                        appCheckReady: modules[0].appCheckReady
+                    };
                 });
                 clientPromise = pending;
                 pending.catch(function () { if (clientPromise === pending) clientPromise = null; });
@@ -402,7 +408,10 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
         }
         return function loadPolicy() {
             return client().then(function (firestore) {
-                return firestore.sdk.getDocFromServer(firestore.ref).then(function (snapshot) {
+                // Wait for native App Check initialization before the first Firestore token request.
+                return Promise.resolve(firestore.appCheckReady).then(function () {
+                    return firestore.sdk.getDocFromServer(firestore.ref);
+                }).then(function (snapshot) {
                     if (!snapshot.exists()) throw new Error('The app version policy has not been configured.');
                     return snapshot.data();
                 });
