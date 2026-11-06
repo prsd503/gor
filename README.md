@@ -1,10 +1,11 @@
 # gor
 gor
 
-## Mandatory mobile updates
+## Optional mobile update popup
 
-Android/iOS builds use a Firestore-controlled update gate on every page. See
-[the setup and release checklist](docs/force-updates.md) before distributing a build.
-The ordinary browser website is not gated.
+Android/iOS builds show a dismissible Firestore-controlled update popup when the
+installed version is lower than the configured version. See
+[the setup and release checklist](docs/update-popup.md). Users can choose Later and
+keep using the app; the ordinary browser website is unaffected.
 
 Run `npm ci`, `npm test`, and `npm run check` to validate the shared web app.
