@@ -13,7 +13,7 @@ The shared web app shows a **dismissible** native update popup on every HTML pag
 - **Fails open:** missing/invalid configuration, App plugin errors, timeouts, offline reads, or denied Firestore access hide the popup and log a console warning. They never block the app.
 - Uses the actual native marketing version, not `package.json` or Android `versionCode`.
 
-Implementation: `update-popup.js` and `app-check.mjs`. The popup reuses `app.js`'s Firebase app/native App Check bridge, waits for native App Check initialization, and requests the policy with `getDocFromServer()`. See [the native App Check guide](app-check.md) for debug/release setup.
+Implementation: `update-popup.js` and `app-check.mjs`. The popup first reads `GET /api/app-version` from the backend, which uses the Firebase Admin SDK and therefore does not depend on client App Check attestation. If that API is unreachable it falls back to a direct Firestore `getDocFromServer()` read through `app.js`'s native App Check bridge. See [the backend API guide](backend-api.md) and [the native App Check guide](app-check.md).
 
 ## Native wrapper setup
 

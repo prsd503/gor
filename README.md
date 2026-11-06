@@ -10,4 +10,7 @@ keep using the app; the ordinary browser website is unaffected.
 
 Native debug/release App Check setup: [docs/app-check.md](docs/app-check.md).
 
+Backend API (version endpoint, auth, App Check enforcement): [docs/backend-api.md](docs/backend-api.md).
+The server lives in `server/` and is deployed separately from the static frontend.
+
 Run `npm ci`, `npm test`, and `npm run check` to validate the shared web app.

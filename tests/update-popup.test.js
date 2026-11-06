@@ -457,3 +457,29 @@ test('fail-open warning includes Firebase error codes', async t => {
     assert.equal(await prompt.check(), 'unavailable');
     assert.ok(warnings.some(line => /permission-denied: Missing or insufficient permissions\./.test(line)));
 });
+
+test('policy loader prefers the backend API and skips Firestore entirely', async () => {
+    let firestoreCalls = 0;
+    const win = { fetch: async url => {
+        assert.equal(url, 'https://api.owlwatcher.tech/api/app-version');
+        return { ok: true, json: async () => policy('android', '2.8.0') };
+    }, console: { warn() {} } };
+    const load = popupApi.createPolicyLoader(win, async () => { firestoreCalls += 1; return {}; });
+    assert.deepEqual(await load(), policy('android', '2.8.0'));
+    assert.equal(firestoreCalls, 0, 'API success must not touch Firestore or App Check');
+});
+
+test('policy loader falls back to Firestore when the API fails', async () => {
+    const warnings = [];
+    const win = { fetch: async () => ({ ok: false, status: 503 }), console: { warn: (...a) => warnings.push(a.join(' ')) } };
+    const load = popupApi.createPolicyLoader(win, mockImports([{ exists: () => true, data: () => policy() }]));
+    assert.deepEqual(await load(), policy());
+    assert.ok(warnings.some(w => /Version API unavailable/.test(w)));
+});
+
+test('policy loader falls back when fetch rejects or is unavailable', async () => {
+    const rejecting = { fetch: async () => { throw new Error('offline'); }, console: { warn() {} } };
+    assert.deepEqual(await popupApi.createPolicyLoader(rejecting, mockImports([{ exists: () => true, data: () => policy() }]))(), policy());
+    const noFetch = { console: { warn() {} } };
+    assert.deepEqual(await popupApi.createPolicyLoader(noFetch, mockImports([{ exists: () => true, data: () => policy() }]))(), policy());
+});
