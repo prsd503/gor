@@ -2,6 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebas
 import { getAuth } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getFirestore } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { initializeAppCheck, ReCaptchaV3Provider, CustomProvider, getToken } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check.js";
+import { createNativeAppCheckBridge, detectNativeDebugBuild } from "./app-check.mjs";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBEYKHQpy_VjmgjYIwQOPjXth1bghYsf9M",
@@ -19,53 +20,35 @@ export const db = getFirestore(app);
 const isNativeApp = window.location.href.includes("capacitor://") || window.Capacitor?.isNativePlatform();
 
 let appCheckInstance;
+export let appCheckDebug = false;
+export let appCheckReady = Promise.resolve(false);
 
 /**
  * BRIDGING LOGIC:
- * This ensures that when the Firebase JS SDK (Auth/Firestore) needs a token,
- * it correctly asks the Native Capacitor Plugin for the Play Integrity token.
+ * The JS SDK asks the native Capacitor plugin for App Check tokens. Native initialization
+ * must finish before the first token request, and debug mode must come from the native
+ * binary (BuildConfig.DEBUG / DEBUG), never from a URL or browser heuristic.
  */
 if (isNativeApp) {
   const FirebaseAppCheckPlugin = window.Capacitor?.Plugins?.FirebaseAppCheck;
 
   if (FirebaseAppCheckPlugin) {
-    // Check if we are in a debug environment via the NativeConfig bridge
-    const isDebugMode = window.NativeConfig?.isDebug() || false;
-
-    // 1. Initialize the native side first
-    FirebaseAppCheckPlugin.initialize({
-      provider: 'playIntegrity',
-      debugToken: isDebugMode, // Dynamically enable debug token ONLY in debug builds
-      isTokenAutoRefreshEnabled: true,
-    }).catch(err => {
-      console.error("Native App Check Init Error:", err);
-      if (isDebugMode && err.message?.includes("Too many attempts")) {
-        console.error("DEBUG TIP: App Check is rate-limited. Register your debug token (found in Logcat under DebugAppCheckProvider) in Firebase Console.");
-      }
+    appCheckDebug = detectNativeDebugBuild(window);
+    const bridge = createNativeAppCheckBridge({
+      app,
+      plugin: FirebaseAppCheckPlugin,
+      initializeAppCheck,
+      CustomProvider,
+      debug: appCheckDebug,
+      logger: console
     });
-
-    // 2. Wrap the native plugin in a CustomProvider for the JS SDK
-    const provider = new CustomProvider({
-      getToken: async () => {
-        try {
-          const result = await FirebaseAppCheckPlugin.getToken();
-          return {
-            token: result.token,
-            expireTimeMillis: Date.now() + (30 * 60 * 1000) // Estimate 30 mins
-          };
-        } catch (err) {
-          console.error("CustomProvider failed to get native token. Full error details:", JSON.stringify(err, Object.getOwnPropertyNames(err)));
-          // This usually happens if the device is not certified or the SHA-256 is missing in Firebase Console
-          throw err;
-        }
-      }
-    });
-
-    appCheckInstance = initializeAppCheck(app, {
-      provider,
-      isTokenAutoRefreshEnabled: true
-    });
-    console.log("App Check Bridged: JS SDK will now use Native Play Integrity tokens.");
+    appCheckInstance = bridge.appCheckInstance;
+    appCheckReady = bridge.ready;
+    console.log(
+      appCheckDebug
+        ? "App Check Bridged: native DEBUG provider; register the printed debug token in Firebase Console."
+        : "App Check Bridged: native attestation provider (Play Integrity/App Attest)."
+    );
   } else {
     console.warn("FirebaseAppCheck plugin missing. App Check will not work on native.");
   }

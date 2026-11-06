@@ -429,3 +429,31 @@ test('example policy is valid once real store URLs are supplied', () => {
     assert.equal(popupApi.validatePolicy(example, 'android').minimumVersion, '1.0.0');
     assert.equal(popupApi.validatePolicy(example, 'ios').minimumVersion, '1.0.0');
 });
+
+test('Firestore loader waits for native App Check readiness before reading the policy', async () => {
+    const ready = deferred();
+    let reads = 0;
+    const load = popupApi.createFirestorePolicyLoader(async url => {
+        if (url === './app.js') return { db: {}, appCheckReady: ready.promise };
+        return {
+            doc: (...args) => ({ path: args.slice(1).join('/') }),
+            getDocFromServer: async () => { reads += 1; return { exists: () => true, data: () => policy() }; }
+        };
+    });
+    const pending = load();
+    await tick();
+    assert.equal(reads, 0);
+    ready.resolve(true);
+    assert.deepEqual(await pending, policy());
+    assert.equal(reads, 1);
+});
+
+test('fail-open warning includes Firebase error codes', async t => {
+    const warnings = [];
+    const { prompt, win } = harness(t, {
+        loadPolicy: async () => { throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }); }
+    });
+    win.console.warn = (...args) => warnings.push(args.map(String).join(' '));
+    assert.equal(await prompt.check(), 'unavailable');
+    assert.ok(warnings.some(line => /permission-denied: Missing or insufficient permissions\./.test(line)));
+});
