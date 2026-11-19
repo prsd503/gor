@@ -418,7 +418,7 @@
             ? 'bouquet.html?' + params.toString()
             : new URL('bouquet.html?' + params.toString(), window.location.href).href;
         el.gifLink.value = url;
-        el.linkHint.textContent = 'Send this link too — they can open the bouquet and make it their own.';
+        el.linkHint.textContent = 'Optional. The link re-creates the bouquet on their device so they can make their own.';
     }
 
     function updateSendHint() {
@@ -429,56 +429,52 @@
             '🌷 An E-Bouquet by Owl Watcher for you 🌷',
             flowerNames.length ? 'Made with ' + flowerNames.join(', ') + '.' : '',
             payload.note ? '\n"' + payload.note + '"' : '',
-            payload.from ? '— ' + payload.from : '',
-            '\nOpen your own at owlwatcher.tech/bouquet.html'
+            payload.from ? '— ' + payload.from : ''
         ].filter(Boolean).join('\n');
         state.shareText = text;
-        el.sendHint.textContent = 'WhatsApp opens with your note ready. Attach the GIF from your downloaded files.';
+        el.sendHint.textContent = 'Sends the bouquet as an actual image, not a link.';
     }
 
-    async function downloadGif() {
+    function gifFile() {
         if (!state.gifBlob) return null;
         const filename = 'ebouquet-owlwatcher-' + Date.now() + '.gif';
-        const file = new File([state.gifBlob], filename, { type: 'image/gif' });
+        return new File([state.gifBlob], filename, { type: 'image/gif' });
+    }
 
-        // Browsers that support it can hand the file straight to the share
-        // sheet, where WhatsApp will appear as a target with the image attached.
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            try {
-                await navigator.share({ files: [file], text: state.shareText || '' });
-                return { direct: true, filename };
-            } catch (err) {
-                if (err && err.name === 'AbortError') return { direct: true, filename, cancelled: true };
-                // fall through to the download route
-            }
-        }
+    function saveGif(file) {
         const url = URL.createObjectURL(state.gifBlob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = filename;
+        a.download = file.name;
         document.body.appendChild(a);
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
-        return { direct: false, filename };
     }
 
-    async function sendToWhatsApp() {
-        if (!state.gifBlob) return;
-        // Always save the GIF first: on phones the WhatsApp tab opens over the
-        // page, so the download has to start while we still have the gesture.
-        const result = await downloadGif();
-        if (result && result.cancelled) return;
+    // The GIF itself is what gets shared. Browsers that can hand a real file to
+    // the OS share sheet (phones especially) do that, so WhatsApp receives an
+    // image - never a link. Everything else downloads the file and opens a chat
+    // as a convenience, with the note pre-filled.
+    async function sendBouquet() {
+        const file = gifFile();
+        if (!file) return;
 
-        const attachHint = result && result.direct
-            ? 'Check WhatsApp — your bouquet GIF should already be attached.'
-            : 'Your GIF is saved to Downloads. In WhatsApp, tap 📎 → Gallery (or Document → GIF) → your latest file.';
-        const text = [state.shareText || '', result && !result.direct ? '\n\n📎 GIF saved as ' + result.filename : '']
-            .filter(Boolean).join('');
-        el.sendHint.textContent = attachHint;
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            try {
+                await navigator.share({ files: [file], text: state.shareText || '' });
+                el.sendHint.textContent = 'Shared — pick WhatsApp and your bouquet goes in as an image.';
+                return;
+            } catch (err) {
+                if (err && err.name === 'AbortError') return;
+                // fall through: the share sheet refused, so save + open a chat
+            }
+        }
 
-        // wa.me works on mobile and desktop; the text pre-fills the chat.
-        window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+        saveGif(file);
+        el.sendHint.textContent = 'Bouquet GIF saved as ' + file.name +
+            '. Attach it in WhatsApp with 📎 → Photos.';
+        window.open('https://wa.me/?text=' + encodeURIComponent(state.shareText || ''), '_blank', 'noopener');
     }
 
     async function copyLink() {
@@ -542,7 +538,7 @@
             invalidateExport();
         });
         el.createBtn.addEventListener('click', createGif);
-        el.sendGifBtn.addEventListener('click', sendToWhatsApp);
+        el.sendGifBtn.addEventListener('click', sendBouquet);
         el.copyLink.addEventListener('click', copyLink);
         document.addEventListener('visibilitychange', () => { if (!document.hidden) drawPreview(); });
     }

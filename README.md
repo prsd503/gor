@@ -32,6 +32,8 @@ Everything runs in the browser:
 | `gif-encoder.js` | dependency-free GIF89a writer (median-cut palette, LZW, delta frames) |
 | `assets/flowers/*.png` | the ten bloom cut-outs (320 px, transparent) |
 
-No bouquet image is uploaded: the page encodes the GIF locally and `wa.me` only carries
-the text. A compact `bouquet.html?b=rose,lily&m=…&f=…` link rebuilds the same bouquet on
-another device.
+The page shares the finished GIF as a real image, never as a link: it hands the file to
+the OS share sheet (`navigator.share` with files) so WhatsApp receives the animation
+itself. Nothing is uploaded - the GIF is encoded locally. Browsers without file sharing
+download the GIF and open a text-only chat as a fallback. A compact
+`bouquet.html?b=rose,lily&m=…&f=…` link is still available for anyone who prefers it.

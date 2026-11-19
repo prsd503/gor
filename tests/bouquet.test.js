@@ -73,6 +73,95 @@ test('bouquet page keeps the Owl Watcher chrome and loads the shared scripts', (
     assert.ok(game > -1 && link > game, 'E-Bouquet button sits under the game');
 });
 
+test('the GIF footer credits Owl Watcher without a web address', () => {
+    const drawn = [];
+    const canvas = { width: 440, height: 550 };
+    const ctx = stubContext(canvas);
+    const spy = new Proxy(ctx, {
+        get(target, prop) {
+            if (prop === 'fillText') return (text) => { drawn.push(String(text)); };
+            if (prop === 'measureText') return (text) => ({ width: String(text).length * 7 });
+            return target[prop];
+        },
+        set(target, prop, value) { target[prop] = value; return true; }
+    });
+    engine.drawCard(spy, {
+        width: 440, height: 550,
+        images: { 0: { width: 320, height: 300 } },
+        owlImg: { width: 516, height: 484 }, seed: 7, time: 0,
+        flowers: ['rose'], message: '', from: ''
+    });
+    // drawSpaced() renders letter-by-letter, so join everything that was drawn
+    const allText = drawn.join('');
+    assert.match(allText, /MADE WITH OWL WATCHER/i, 'credit line is drawn');
+    assert.ok(!/owlwatcher\.(tech|com)/i.test(allText), 'the site address is gone from the card');
+    assert.ok(!/https?:|www\./i.test(allText), 'no URL anywhere on the card');
+});
+
+test('the share button sends the GIF file and does not add a link', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (id) => doc.getElementById(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    ['rose', 'lily', 'daisy', 'tulip', 'peony', 'zinnia'].forEach((id) => {
+        doc.querySelector('.flower-btn[data-flower="' + id + '"]')
+            .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    click('createBtn');
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+    assert.ok(page.state.gifBlob, 'gif was built');
+
+    // phones: the OS share sheet receives the actual file
+    const shared = [];
+    window.navigator.canShare = () => true;
+    window.navigator.share = async (payload) => { shared.push(payload); };
+    let openedUrl = null;
+    window.open = (url) => { openedUrl = url; return null; };
+
+    click('sendGifBtn');
+    await settle();
+    assert.equal(shared.length, 1, 'share sheet opened once');
+    const file = shared[0].files[0];
+    assert.equal(file.type, 'image/gif');
+    assert.match(file.name, /\.gif$/);
+    assert.equal(openedUrl, null, 'no wa.me link when the file was shared');
+    assert.ok(!/[?&]text=[^]*owlwatcher\.tech/i.test(shared[0].text || ''),
+        'share text carries no site link');
+});
+
+test('fallback sharing saves the GIF and opens a text-only chat', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (id) => doc.getElementById(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    ['rose', 'lily', 'daisy', 'tulip', 'peony', 'zinnia'].forEach((id) => {
+        doc.querySelector('.flower-btn[data-flower="' + id + '"]')
+            .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    click('createBtn');
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+
+    window.navigator.canShare = undefined;   // desktop browsers without file sharing
+    let openedUrl = null;
+    window.open = (url) => { openedUrl = url; return null; };
+    const clicked = [];
+    window.HTMLAnchorElement.prototype.click = function () { clicked.push(this.download); };
+
+    click('sendGifBtn');
+    await settle();
+    assert.equal(clicked.length, 1, 'the GIF downloads');
+    assert.match(clicked[0], /\.gif$/);
+    assert.ok(openedUrl && openedUrl.startsWith('https://wa.me/?text='), 'chat link opens as a fallback');
+});
+
+test('the arrangement buttons are compact, not stretched', () => {
+    const css = html.slice(html.indexOf('.preview-actions'), html.indexOf('.preview-actions') + 400);
+    assert.ok(css.includes('flex: 0 0 auto'), 'buttons size to their content');
+    assert.ok(!/flex:\s*1 1 170px/.test(html), 'no full-width stretching rule remains');
+});
+
 test('flower picker enforces the 6 to 10 bloom rule', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
