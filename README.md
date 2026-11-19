@@ -18,7 +18,8 @@ Run `npm ci`, `npm test`, and `npm run check` to validate the shared web app.
 ## E-Bouquet
 
 `bouquet.html` — reachable from the button under Owl Jump on the home page — lets a
-visitor pick 6–10 blooms from a set of ten watercolour flowers, nudge the arrangement,
+visitor pick 6–10 blooms from a set of ten watercolour flowers (up to 10 of any single
+variety), nudge the arrangement,
 switch the greenery, write a short note and share the result as an animated GIF
 (*E-Bouquet by Owl Watcher*) over WhatsApp.
 
@@ -32,6 +33,8 @@ Everything runs in the browser:
 | `gif-encoder.js` | dependency-free GIF89a writer (median-cut palette, LZW, delta frames) |
 | `assets/flowers/*.png` | the ten bloom cut-outs (320 px, transparent) |
 
-No bouquet image is uploaded: the page encodes the GIF locally and `wa.me` only carries
-the text. A compact `bouquet.html?b=rose,lily&m=…&f=…` link rebuilds the same bouquet on
-another device.
+The page shares the finished GIF as a real image, never as a link: it hands the file to
+the OS share sheet (`navigator.share` with files) so WhatsApp receives the animation
+itself. Nothing is uploaded - the GIF is encoded locally. Browsers without file sharing
+download the GIF and open a text-only chat as a fallback. A compact
+`bouquet.html?b=rose,lily&m=…&f=…` link is still available for anyone who prefers it.

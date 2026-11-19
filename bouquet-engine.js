@@ -766,12 +766,14 @@
     ctx.restore();
   }
 
+  // Credit line only - no web address, so the GIF reads as a gift rather than
+  // an advert when it lands in a chat.
   function drawFooter(ctx, o) {
     ctx.save();
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(255, 233, 200, 0.55)';
     ctx.font = CAPS(Math.round(o.width * 0.0225));
-    drawSpaced(ctx, 'MADE WITH OWL WATCHER  ·  OWLWATCHER.TECH', o.width / 2, o.y, o.width * 0.0055);
+    drawSpaced(ctx, 'MADE WITH OWL WATCHER', o.width / 2, o.y, o.width * 0.0055);
     ctx.restore();
   }
 

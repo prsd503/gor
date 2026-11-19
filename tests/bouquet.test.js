@@ -73,37 +73,216 @@ test('bouquet page keeps the Owl Watcher chrome and loads the shared scripts', (
     assert.ok(game > -1 && link > game, 'E-Bouquet button sits under the game');
 });
 
-test('flower picker enforces the 6 to 10 bloom rule', async (t) => {
+test('the GIF footer credits Owl Watcher without a web address', () => {
+    const drawn = [];
+    const canvas = { width: 440, height: 550 };
+    const ctx = stubContext(canvas);
+    const spy = new Proxy(ctx, {
+        get(target, prop) {
+            if (prop === 'fillText') return (text) => { drawn.push(String(text)); };
+            if (prop === 'measureText') return (text) => ({ width: String(text).length * 7 });
+            return target[prop];
+        },
+        set(target, prop, value) { target[prop] = value; return true; }
+    });
+    engine.drawCard(spy, {
+        width: 440, height: 550,
+        images: { 0: { width: 320, height: 300 } },
+        owlImg: { width: 516, height: 484 }, seed: 7, time: 0,
+        flowers: ['rose'], message: '', from: ''
+    });
+    // drawSpaced() renders letter-by-letter, so join everything that was drawn
+    const allText = drawn.join('');
+    assert.match(allText, /MADE WITH OWL WATCHER/i, 'credit line is drawn');
+    assert.ok(!/owlwatcher\.(tech|com)/i.test(allText), 'the site address is gone from the card');
+    assert.ok(!/https?:|www\./i.test(allText), 'no URL anywhere on the card');
+});
+
+test('the share button sends the GIF file and does not add a link', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
     const page = window.OwBouquetPage;
-    const buttons = () => Array.from(doc.querySelectorAll('.flower-btn'));
-    const buttonFor = (id) => doc.querySelector('.flower-btn[data-flower="' + id + '"]');
-    const click = (btn) => btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-    assert.equal(buttons().length, 10, 'ten flowers offered');
-    assert.equal(page.MAX_BLOOMS, 10);
-    assert.equal(page.MIN_BLOOMS, 6);
+    const click = (id) => doc.getElementById(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
-    // one of each reaches the ceiling
-    buttons().forEach(click);
-    assert.equal(page.totalBlooms(), 10);
-    buttons().forEach((btn) => assert.equal(btn.disabled, false, 'selected blooms stay removable'));
+    ['rose', 'lily', 'daisy', 'tulip', 'peony', 'zinnia'].forEach((id) => {
+        doc.querySelector('.flower-btn[data-flower="' + id + '"]')
+            .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    click('createBtn');
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+    assert.ok(page.state.gifBlob, 'gif was built');
 
-    // tapping a selected flower removes it, which frees a slot again
-    click(buttonFor('rose'));
+    // phones: the OS share sheet receives the actual file
+    const shared = [];
+    window.navigator.canShare = () => true;
+    window.navigator.share = async (payload) => { shared.push(payload); };
+    let openedUrl = null;
+    window.open = (url) => { openedUrl = url; return null; };
+
+    click('sendGifBtn');
+    await settle();
+    assert.equal(shared.length, 1, 'share sheet opened once');
+    const file = shared[0].files[0];
+    assert.equal(file.type, 'image/gif');
+    assert.match(file.name, /\.gif$/);
+    assert.equal(openedUrl, null, 'no wa.me link when the file was shared');
+    assert.ok(!/[?&]text=[^]*owlwatcher\.tech/i.test(shared[0].text || ''),
+        'share text carries no site link');
+});
+
+test('fallback sharing saves the GIF and opens a text-only chat', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (id) => doc.getElementById(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    ['rose', 'lily', 'daisy', 'tulip', 'peony', 'zinnia'].forEach((id) => {
+        doc.querySelector('.flower-btn[data-flower="' + id + '"]')
+            .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    click('createBtn');
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+
+    window.navigator.canShare = undefined;   // desktop browsers without file sharing
+    let openedUrl = null;
+    window.open = (url) => { openedUrl = url; return null; };
+    const clicked = [];
+    window.HTMLAnchorElement.prototype.click = function () { clicked.push(this.download); };
+
+    click('sendGifBtn');
+    await settle();
+    assert.equal(clicked.length, 1, 'the GIF downloads');
+    assert.match(clicked[0], /\.gif$/);
+    assert.ok(openedUrl && openedUrl.startsWith('https://wa.me/?text='), 'chat link opens as a fallback');
+});
+
+test('the arrangement buttons are compact, not stretched', () => {
+    const css = html.slice(html.indexOf('.preview-actions'), html.indexOf('.preview-actions') + 400);
+    assert.ok(css.includes('flex: 0 0 auto'), 'buttons size to their content');
+    assert.ok(!/flex:\s*1 1 170px/.test(html), 'no full-width stretching rule remains');
+});
+
+test('the home page entry point is a proper feature card', () => {
+    const home = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const dom = new JSDOM(home);
+    const link = dom.window.document.getElementById('ebouquetBtn');
+    const gameBtnIndex = home.indexOf('id="gameActionBtn"');
+    const linkIndex = home.indexOf('id="ebouquetBtn"');
+    dom.window.close();
+
+    assert.equal(link.tagName, 'A', 'still a real link');
+    assert.equal(link.getAttribute('href'), 'bouquet.html');
+    assert.ok(link.className.includes('ebouquet-link'), 'uses its own component class');
+    assert.ok(gameBtnIndex > -1 && linkIndex > gameBtnIndex, 'sits under the Owl Jump game');
+
+    // structured content rather than an emoji on a default button
+    assert.ok(link.querySelector('.eb-icon svg'), 'has a bouquet glyph');
+    assert.ok(link.querySelector('.eb-title'), 'has a title');
+    assert.ok(link.querySelector('.eb-sub'), 'has a supporting line');
+    assert.ok(link.querySelector('.eb-go svg'), 'has a chevron affordance');
+    assert.equal(link.querySelector('.eb-title').textContent.trim(), 'E-Bouquet');
+    assert.ok(!/\u{1F490}/u.test(link.textContent), 'no emoji in the label');
+
+    // the old generic button styling is gone
+    assert.ok(!/id="ebouquetBtn" class="btn-block"/.test(home), 'not a plain full-width button');
+    assert.ok(home.includes('.ebouquet-link {'), 'component styles are defined');
+});
+
+test('a single flower can be picked up to ten times', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const tile = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"]');
+    const addBtn = (id) => tile(id).querySelector('.flower-btn');
+    const minusBtn = (id) => tile(id).querySelector('.flower-minus');
+
+    // tap the same rose over and over
+    for (let i = 0; i < 10; i++) click(addBtn('rose'));
+    assert.equal(page.totalBlooms(), 10, 'ten of the same flower');
+    assert.equal(page.state.counts.rose, 10);
+    assert.equal(tile('rose').dataset.count, '10');
+    assert.equal(tile('rose').querySelector('.flower-count').textContent, '10');
+
+    // an eleventh tap is refused
+    click(addBtn('rose'));
+    assert.equal(page.totalBlooms(), 10, 'never more than ten blooms');
+
+    // every other flower is now blocked because the bouquet is full
+    assert.equal(addBtn('lily').disabled, true);
+    assert.equal(addBtn('sunflower').disabled, true);
+
+    // the minus takes one back and frees a slot
+    click(minusBtn('rose'));
     assert.equal(page.totalBlooms(), 9);
-    assert.equal(page.state.counts.rose, undefined);
-    click(buttonFor('lily'));
-    assert.equal(page.totalBlooms(), 8);
-    assert.ok(buttons().every((btn) => !btn.disabled));
+    assert.equal(page.state.counts.rose, 9);
+    assert.equal(addBtn('lily').disabled, false, 'space again after removing');
+});
 
-    // the bouquet can never hold more than ten blooms
-    click(buttonFor('rose'));
-    click(buttonFor('lily'));
+test('flowers can be mixed and removed down to nothing', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const addBtn = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"] .flower-btn');
+    const minusBtn = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"] .flower-minus');
+
+    for (let i = 0; i < 4; i++) click(addBtn('rose'));
+    for (let i = 0; i < 3; i++) click(addBtn('lily'));
+    assert.equal(page.totalBlooms(), 7);
+    assert.equal(page.state.counts.rose, 4);
+    assert.equal(page.state.counts.lily, 3);
+
+    // the minus is hidden for flowers that are not in the bouquet
+    assert.equal(minusBtn('daisy').hidden, true);
+    assert.equal(minusBtn('rose').hidden, false);
+
+    // draining a flower removes it entirely
+    for (let i = 0; i < 4; i++) click(minusBtn('rose'));
+    assert.equal(page.state.counts.rose, undefined);
+    assert.equal(page.totalBlooms(), 3);
+    assert.equal(minusBtn('rose').hidden, true, 'minus hides once the flower is gone');
+
+    // tapping minus on an empty flower does nothing
+    click(minusBtn('rose'));
+    assert.equal(page.totalBlooms(), 3);
+});
+
+test('the bouquet holds at most ten blooms in total', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const addBtn = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"] .flower-btn');
+
+    // fill with a mix: 5 rose + 5 lily is exactly ten
+    for (let i = 0; i < 5; i++) { click(addBtn('rose')); click(addBtn('lily')); }
     assert.equal(page.totalBlooms(), 10);
-    click(buttonFor('rose'));                     // 9
-    click(buttonFor('rose'));                     // 10 again
-    assert.equal(page.totalBlooms(), 10);
+    assert.equal(page.state.counts.rose, 5);
+    assert.equal(page.state.counts.lily, 5);
+
+    // a flower not in the bouquet cannot be added
+    assert.equal(addBtn('zinnia').disabled, true);
+    // a flower already in it stays tappable
+    assert.equal(addBtn('rose').disabled, false);
+});
+
+test('clear all empties the bouquet', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const addBtn = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"] .flower-btn');
+
+    click(addBtn('rose')); click(addBtn('rose')); click(addBtn('lily'));
+    assert.equal(page.totalBlooms(), 3);
+
+    const clear = doc.getElementById('clearBloomsBtn');
+    assert.equal(clear.hidden, false, 'clear is offered while blooms are picked');
+    click(clear);
+    assert.equal(page.totalBlooms(), 0);
+    assert.deepEqual(Object.keys(page.state.counts), []);
+    assert.equal(clear.hidden, true, 'clear hides on an empty bouquet');
 });
 
 test('the counter warns until the minimum number of blooms is chosen', async (t) => {
