@@ -409,7 +409,7 @@ test('website bootstrap does not import Firebase or insert a popup', t => {
 
 test('every HTML page loads the bridge and optional prompt in head before app logic', () => {
     const pages = fs.readdirSync(root).filter(name => name.endsWith('.html'));
-    assert.equal(pages.length, 11);
+    assert.equal(pages.length, 12);
     for (const name of pages) {
         const html = fs.readFileSync(path.join(root, name), 'utf8');
         const head = html.slice(0, html.indexOf('</head>'));

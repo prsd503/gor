@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Owl Watcher | E-Bouquet</title>
+    <meta name="description" content="Build a bouquet of 6 to 10 blooms, add a message, and send it as an animated E-Bouquet GIF on WhatsApp.">
+    <style>
+        /* E-Bouquet page specifics (shared components live in theme.css) */
+        .bouquet-hero { text-align: center; }
+        .bouquet-hero .page-title { font-family: var(--ow-font-brand); font-size: clamp(2.3rem, 2rem + 2.4vw, 3.1rem); }
+        .step-badge {
+            display: inline-grid;
+            place-items: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: var(--ow-primary-soft);
+            color: var(--ow-primary-text);
+            font-size: 0.72rem;
+            font-weight: 800;
+            flex: none;
+        }
+        .pick-counter { font-variant-numeric: tabular-nums; }
+        .pick-counter.is-low { color: var(--ow-danger); }
+        .pick-counter.is-good { color: var(--ow-success); }
+
+        /* ---- flower picker ---- */
+        .flower-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+            gap: 10px;
+        }
+        .flower-btn {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 6px 8px;
+            border: 1.5px solid var(--ow-border);
+            border-radius: var(--ow-radius);
+            background: var(--ow-surface-2);
+            color: var(--ow-text);
+            font-family: var(--ow-font);
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            text-transform: uppercase;
+            cursor: pointer;
+            box-shadow: none;
+            min-height: 0;
+            transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s var(--ow-ease), box-shadow 0.2s ease;
+        }
+        .flower-btn img { width: 100%; max-width: 62px; aspect-ratio: 1; object-fit: contain; pointer-events: none; }
+        .flower-btn .flower-name { pointer-events: none; }
+        .flower-btn .flower-count {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            display: grid;
+            place-items: center;
+            min-width: 20px;
+            height: 20px;
+            padding: 0 5px;
+            border-radius: 999px;
+            background: var(--ow-primary);
+            color: #fff;
+            font-size: 0.7rem;
+            font-weight: 800;
+            opacity: 0;
+            transform: scale(0.6);
+            transition: opacity 0.18s ease, transform 0.22s var(--ow-spring);
+            pointer-events: none;
+        }
+        .flower-btn[data-count]:not([data-count="0"]) { border-color: var(--ow-primary); background: var(--ow-primary-soft); }
+        .flower-btn[data-count]:not([data-count="0"]) .flower-count { opacity: 1; transform: none; }
+        @media (hover: hover) and (pointer: fine) {
+            .flower-btn:hover { border-color: var(--ow-border-strong); transform: translateY(-2px); box-shadow: var(--ow-shadow-sm); }
+        }
+        .flower-btn:active { transform: scale(0.96); }
+        .flower-btn.is-at-max { opacity: 0.45; }
+
+        /* ---- live preview ---- */
+        .preview-shell {
+            position: relative;
+            width: 100%;
+            max-width: 360px;
+            margin: 0 auto;
+            border-radius: var(--ow-radius-lg);
+            overflow: hidden;
+            box-shadow: var(--ow-shadow);
+            border: 1px solid var(--ow-border);
+            background: #1b1338;
+        }
+        .preview-shell canvas { display: block; width: 100%; height: auto; }
+        .preview-note { text-align: center; margin: 12px 0 0; }
+
+        /* ---- message box ---- */
+        .message-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        #messageInput { min-height: 92px; }
+        #charCount { font-variant-numeric: tabular-nums; font-size: 0.78rem; color: var(--ow-muted); }
+        #charCount.is-near { color: var(--ow-danger); }
+
+        /* ---- share ---- */
+        .share-grid { display: grid; gap: 10px; }
+        .share-result {
+            display: none;
+            text-align: center;
+            padding: 16px;
+            border-radius: var(--ow-radius);
+            background: var(--ow-surface-2);
+            border: 1px dashed var(--ow-border-strong);
+            margin-top: 14px;
+        }
+        .share-result.is-visible { display: block; animation: owRise 0.4s var(--ow-ease) both; }
+        .share-result img { display: block; width: 100%; max-width: 260px; height: auto; margin: 0 auto 12px; border-radius: var(--ow-radius-sm); }
+        .progress-track { height: 6px; border-radius: 999px; background: var(--ow-chip); overflow: hidden; margin: 10px 0; }
+        .progress-bar { height: 100%; width: 0; border-radius: 999px; background: var(--ow-primary); transition: width 0.2s ease; }
+        .notice { padding: 12px 14px; border-radius: var(--ow-radius); font-size: 0.9rem; font-weight: 600; margin: 12px 0 0; }
+        .notice-warn { background: var(--ow-danger-soft); color: var(--ow-danger); }
+        .notice-ok { background: rgba(30, 158, 90, 0.12); color: var(--ow-success); }
+        #sendGifBtn { background: var(--ow-whatsapp); }
+        .share-hint { margin: 10px 0 0; }
+        .link-row { display: flex; gap: 8px; margin-top: 12px; }
+        .link-row input { margin: 0; flex: 1 1 auto; min-width: 0; font-size: 0.82rem; }
+        .link-row button { flex: none; }
+
+        /* fine-tune controls: small square nudges under a full-width select */
+        .arrange-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+        .arrange-grid select { flex: 1 1 100%; margin: 0 0 4px; }
+        .arrange-grid button { flex: 0 0 auto; min-width: 44px; }
+
+        @media (max-width: 420px) {
+            .flower-grid { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 8px; }
+            .flower-btn { font-size: 0.64rem; padding: 8px 3px 6px; }
+            .flower-btn img { max-width: 54px; }
+            /* keep the two arrangement buttons tappable and full width */
+            .preview-actions { flex-direction: column; align-items: stretch; }
+            .preview-actions > * { width: 100%; }
+        }
+        .preview-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+        .preview-actions > * { flex: 1 1 170px; }
+    </style>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4f2ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="theme.css">
+    <!-- Native bridge must load before the optional update prompt. -->
+    <script src="capacitor.js"></script>
+    <script src="update-popup.js"></script>
+    <script src="menu.js"></script>
+</head>
+<body>
+
+<nav class="main-nav" aria-label="Page navigation">
+    <div class="nav-logo">
+        <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+        <span>Owl Watcher</span>
+    </div>
+    <a href="index.html" class="btn btn-secondary btn-sm">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+        Home
+    </a>
+</nav>
+
+<main class="page">
+    <header class="page-header bouquet-hero">
+        <span class="eyebrow">🌷 New from Owl Watcher</span>
+        <h1 class="page-title">E-Bouquet</h1>
+        <p class="page-subtitle">Pick 6 to 10 blooms, arrange them the way you like, tuck in some greenery and a note — then send it as a living bouquet on WhatsApp.</p>
+    </header>
+
+    <!-- Step 1: choose flowers -->
+    <section class="card" aria-labelledby="pickTitle">
+        <div class="card-header">
+            <h2 class="section-title" id="pickTitle">
+                <span class="step-badge" aria-hidden="true">1</span>
+                Pick your blooms
+            </h2>
+            <span class="chip pick-counter" id="pickCounter" aria-live="polite">0 / 6–10</span>
+        </div>
+        <p class="small muted" style="margin: 0 0 14px;">Tap a flower to add it. Tap again to remove. Up to 10 blooms in total.</p>
+        <div class="flower-grid" id="flowerGrid" role="group" aria-label="Available flowers"></div>
+        <p class="notice" id="pickNotice" hidden></p>
+    </section>
+
+    <!-- Step 2: arrange -->
+    <section class="card" aria-labelledby="arrangeTitle">
+        <div class="card-header">
+            <h2 class="section-title" id="arrangeTitle">
+                <span class="step-badge" aria-hidden="true">2</span>
+                Arrange &amp; greenery
+            </h2>
+            <span class="chip" id="greeneryChip">Greenery: classic</span>
+        </div>
+
+        <div class="preview-shell">
+            <canvas id="previewCanvas" width="440" height="550" role="img" aria-label="Preview of your bouquet"></canvas>
+        </div>
+        <p class="small muted preview-note">This is exactly what your friend will see.</p>
+
+        <div class="preview-actions">
+            <button type="button" class="btn-outline btn-sm" id="shuffleBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="m15 15 6 6"/><path d="M4 4l5 5"/></svg>
+                Try a new arrangement
+            </button>
+            <button type="button" class="btn-outline btn-sm" id="greeneryBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>
+                Change greenery
+            </button>
+        </div>
+
+        <details style="margin-top: 14px;">
+            <summary class="small" style="cursor: pointer; font-weight: 600; color: var(--ow-primary-text);">Fine-tune placement</summary>
+            <p class="small muted" style="margin: 8px 0 10px;">Select a bloom, then nudge it with the arrows. Changes are saved automatically.</p>
+            <div class="arrange-grid" id="arrangeControls" style="display: none;">
+                <select id="arrangeSelect" aria-label="Select a bloom to adjust"></select>
+                <button type="button" class="btn-outline btn-sm" data-nudge="left" aria-label="Move left">←</button>
+                <button type="button" class="btn-outline btn-sm" data-nudge="up" aria-label="Move up">↑</button>
+                <button type="button" class="btn-outline btn-sm" data-nudge="down" aria-label="Move down">↓</button>
+                <button type="button" class="btn-outline btn-sm" data-nudge="right" aria-label="Move right">→</button>
+                <button type="button" class="btn-outline btn-sm" data-nudge="front">Bring to front</button>
+                <button type="button" class="btn-outline btn-sm" data-nudge="reset">Reset</button>
+            </div>
+        </details>
+    </section>
+
+    <!-- Step 3: message -->
+    <section class="card" aria-labelledby="messageTitle">
+        <div class="card-header">
+            <h2 class="section-title" id="messageTitle">
+                <span class="step-badge" aria-hidden="true">3</span>
+                Write your note
+            </h2>
+        </div>
+        <label for="messageInput">Your message</label>
+        <textarea id="messageInput" maxlength="220" placeholder="For the person who makes every ordinary day feel like spring…"></textarea>
+        <div class="message-meta">
+            <span class="small muted">Keep it short — it sits on the card under your bouquet.</span>
+            <span id="charCount">0 / 220</span>
+        </div>
+        <label for="fromInput">From (optional)</label>
+        <input type="text" id="fromInput" maxlength="28" placeholder="Your name" autocomplete="name">
+    </section>
+
+    <!-- Step 4: share -->
+    <section class="card" aria-labelledby="shareTitle">
+        <div class="card-header">
+            <h2 class="section-title" id="shareTitle">
+                <span class="step-badge" aria-hidden="true">4</span>
+                Create &amp; share
+            </h2>
+        </div>
+        <p class="small muted" style="margin: 0 0 14px;">We turn your bouquet into a short animated GIF — stars twinkling, blooms swaying — stamped <b>E-Bouquet by Owl Watcher</b>.</p>
+
+        <div class="share-grid">
+            <button type="button" id="createBtn" class="btn-lg">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg>
+                Create my bouquet GIF
+            </button>
+            <div class="progress-track" id="progressWrap" hidden><div class="progress-bar" id="progressBar"></div></div>
+            <p class="notice" id="shareNotice" hidden></p>
+        </div>
+
+        <div class="share-result" id="shareResult">
+            <img id="gifPreview" alt="Your animated E-Bouquet">
+            <p class="small muted" id="gifMeta" style="margin: 0 0 12px;"></p>
+            <button type="button" class="btn-block" id="sendGifBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-5A8 8 0 1 1 21 12z"/></svg>
+                Share on WhatsApp
+            </button>
+            <p class="small muted share-hint" id="sendHint"></p>
+
+            <div class="link-row">
+                <input type="text" id="gifLink" readonly aria-label="Link to your E-Bouquet">
+                <button type="button" class="btn-outline btn-sm" id="copyLinkBtn">Copy</button>
+            </div>
+            <p class="small muted" id="linkHint" style="margin: 8px 0 0;"></p>
+        </div>
+    </section>
+
+    <p class="small muted text-center" style="margin: 4px 0 0;">
+        Made by the Owl Watcher team · <a href="index.html">Back to home</a>
+    </p>
+</main>
+
+<div id="owl-container">
+    <div id="owl-icon" role="button" tabindex="0" aria-label="Play owl sound" onclick="activateOwlEffect()">
+        <img src="owl.png" alt="Owl Watcher" width="52" height="52">
+    </div>
+    <audio id="owl-audio" src="theme.mp3" preload="auto"></audio>
+</div>
+
+<script src="bouquet-engine.js"></script>
+<script src="gif-encoder.js"></script>
+<script src="bouquet-app.js"></script>
+<script>
+    function activateOwlEffect() {
+        const container = document.getElementById('owl-container');
+        const audio = document.getElementById('owl-audio');
+        if (!container || container.classList.contains('active-effect')) return;
+        if (audio) {
+            audio.currentTime = 0;
+            audio.play().catch(function (error) { console.log('Audio playback blocked or file not found:', error); });
+        }
+        container.classList.add('active-effect');
+        setTimeout(function () { container.classList.remove('active-effect'); }, 2000);
+    }
+</script>
+</body>
+</html>
