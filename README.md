@@ -18,7 +18,8 @@ Run `npm ci`, `npm test`, and `npm run check` to validate the shared web app.
 ## E-Bouquet
 
 `bouquet.html` — reachable from the button under Owl Jump on the home page — lets a
-visitor pick 6–10 blooms from a set of ten watercolour flowers, nudge the arrangement,
+visitor pick 6–10 blooms from a set of ten watercolour flowers (up to 10 of any single
+variety), nudge the arrangement,
 switch the greenery, write a short note and share the result as an animated GIF
 (*E-Bouquet by Owl Watcher*) over WhatsApp.
 

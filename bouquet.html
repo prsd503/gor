@@ -31,12 +31,17 @@
             grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
             gap: 10px;
         }
+        /* Each cell is a tile with two actions: the picture adds a bloom, the
+           small minus takes one away. */
+        .flower-tile { position: relative; }
         .flower-btn {
             position: relative;
             display: flex;
             flex-direction: column;
             align-items: center;
             gap: 6px;
+            width: 100%;
+            height: 100%;
             padding: 10px 6px 8px;
             border: 1.5px solid var(--ow-border);
             border-radius: var(--ow-radius);
@@ -54,7 +59,7 @@
         }
         .flower-btn img { width: 100%; max-width: 62px; aspect-ratio: 1; object-fit: contain; pointer-events: none; }
         .flower-btn .flower-name { pointer-events: none; }
-        .flower-btn .flower-count {
+        .flower-count {
             position: absolute;
             top: 6px;
             right: 6px;
@@ -72,14 +77,46 @@
             transform: scale(0.6);
             transition: opacity 0.18s ease, transform 0.22s var(--ow-spring);
             pointer-events: none;
+            z-index: 1;
         }
-        .flower-btn[data-count]:not([data-count="0"]) { border-color: var(--ow-primary); background: var(--ow-primary-soft); }
-        .flower-btn[data-count]:not([data-count="0"]) .flower-count { opacity: 1; transform: none; }
+        .flower-minus {
+            position: absolute;
+            top: 6px;
+            left: 6px;
+            z-index: 2;
+            display: grid;
+            place-items: center;
+            width: 22px;
+            height: 22px;
+            min-height: 0;
+            padding: 0;
+            border: 0;
+            border-radius: 50%;
+            background: var(--ow-surface);
+            color: var(--ow-primary-text);
+            font-size: 0.95rem;
+            font-weight: 700;
+            line-height: 1;
+            box-shadow: var(--ow-shadow-sm), inset 0 0 0 1.5px var(--ow-border-strong);
+            opacity: 0;
+            transform: scale(0.7);
+            pointer-events: none;
+            transition: opacity 0.18s ease, transform 0.22s var(--ow-spring), background-color 0.2s ease;
+        }
+        .flower-tile[data-count]:not([data-count="0"]) { border-radius: var(--ow-radius); }
+        .flower-tile[data-count]:not([data-count="0"]) .flower-btn { border-color: var(--ow-primary); background: var(--ow-primary-soft); }
+        .flower-tile[data-count]:not([data-count="0"]) .flower-count { opacity: 1; transform: none; }
+        .flower-tile[data-count]:not([data-count="0"]) .flower-minus { opacity: 1; transform: none; pointer-events: auto; }
         @media (hover: hover) and (pointer: fine) {
             .flower-btn:hover { border-color: var(--ow-border-strong); transform: translateY(-2px); box-shadow: var(--ow-shadow-sm); }
+            .flower-minus:hover { background: var(--ow-primary); color: #fff; }
         }
         .flower-btn:active { transform: scale(0.96); }
+        .flower-minus:active { transform: scale(0.9); }
+        /* [hidden] must win over the display rules above */
+        .flower-minus[hidden], .picker-tools button[hidden] { display: none !important; }
         .flower-btn.is-at-max { opacity: 0.45; }
+        .picker-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
 
         /* ---- live preview ---- */
         .preview-shell {
@@ -189,8 +226,11 @@
             </h2>
             <span class="chip pick-counter" id="pickCounter" aria-live="polite">0 / 6–10</span>
         </div>
-        <p class="small muted" style="margin: 0 0 14px;">Tap a flower to add it. Tap again to remove. Up to 10 blooms in total.</p>
+        <p class="small muted" style="margin: 0 0 14px;">Tap a flower to add a bloom — tap as many times as you like, up to 10 of the same kind and 10 in total. Use the <b>−</b> to take one back.</p>
         <div class="flower-grid" id="flowerGrid" role="group" aria-label="Available flowers"></div>
+        <div class="picker-tools">
+            <button type="button" class="btn-ghost btn-sm" id="clearBloomsBtn">Clear all blooms</button>
+        </div>
         <p class="notice" id="pickNotice" hidden></p>
     </section>
 

@@ -17,6 +17,8 @@
 
     const MIN_BLOOMS = 6;
     const MAX_BLOOMS = 10;
+    // A single variety can fill the whole bouquet if the sender wants that.
+    const MAX_PER_FLOWER = 10;
     const MAX_MESSAGE = 220;
     const MAX_FROM = 28;
 
@@ -65,6 +67,7 @@
         grid: document.getElementById('flowerGrid'),
         counter: document.getElementById('pickCounter'),
         notice: document.getElementById('pickNotice'),
+        clearBlooms: document.getElementById('clearBloomsBtn'),
         canvas: document.getElementById('previewCanvas'),
         shuffle: document.getElementById('shuffleBtn'),
         greenery: document.getElementById('greeneryBtn'),
@@ -124,68 +127,107 @@
     function renderFlowerGrid() {
         el.grid.innerHTML = '';
         FLOWERS.forEach((flower) => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'flower-btn';
-            btn.dataset.flower = flower.id;
-            btn.setAttribute('aria-pressed', 'false');
-            btn.innerHTML =
+            const tile = document.createElement('div');
+            tile.className = 'flower-tile';
+            tile.dataset.flower = flower.id;
+
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.className = 'flower-btn';
+            add.dataset.flower = flower.id;
+            add.innerHTML =
                 '<span class="flower-count" aria-hidden="true">0</span>' +
-                '<img src="assets/flowers/' + flower.id + '.png" alt="' + flower.name + '" width="68" height="68" loading="lazy">' +
+                '<img src="assets/flowers/' + flower.id + '.png" alt="" width="68" height="68" loading="lazy">' +
                 '<span class="flower-name">' + flower.name + '</span>';
-            btn.addEventListener('click', () => toggleFlower(flower.id));
-            el.grid.appendChild(btn);
+            add.addEventListener('click', () => addBloom(flower.id));
+
+            const minus = document.createElement('button');
+            minus.type = 'button';
+            minus.className = 'flower-minus';
+            minus.dataset.flower = flower.id;
+            minus.setAttribute('aria-label', 'Remove one ' + flower.name);
+            minus.textContent = '−';
+            minus.addEventListener('click', (event) => {
+                event.stopPropagation();
+                removeBloom(flower.id);
+            });
+
+            tile.appendChild(add);
+            tile.appendChild(minus);
+            el.grid.appendChild(tile);
         });
         syncFlowerGrid();
     }
 
     function syncFlowerGrid() {
-        const capped = totalBlooms() >= MAX_BLOOMS;
-        el.grid.querySelectorAll('.flower-btn').forEach((btn) => {
-            const id = btn.dataset.flower;
+        const total = totalBlooms();
+        el.grid.querySelectorAll('.flower-tile').forEach((tile) => {
+            const id = tile.dataset.flower;
             const n = state.counts[id] || 0;
-            btn.dataset.count = String(n);
-            btn.setAttribute('aria-pressed', n > 0 ? 'true' : 'false');
-            btn.querySelector('.flower-count').textContent = String(n);
-            // Once the bouquet is full only flowers already in it stay active:
-            // tapping those removes a bloom and frees a slot.
+            const flower = FLOWERS.find(f => f.id === id);
+            const add = tile.querySelector('.flower-btn');
+            const minus = tile.querySelector('.flower-minus');
+
+            tile.dataset.count = String(n);
+            add.dataset.count = String(n);
+            tile.querySelector('.flower-count').textContent = String(n);
+
+            // A bouquet holds at most MAX_BLOOMS, so once it is full only the
+            // flowers already in it can still be topped up.
+            const capped = total >= MAX_BLOOMS;
             const blocked = capped && n === 0;
-            btn.classList.toggle('is-at-max', blocked);
-            btn.disabled = blocked;
-            btn.setAttribute('aria-label', FLOWERS.find(f => f.id === id).name + ', ' + n + ' selected');
+            add.disabled = blocked;
+            add.classList.toggle('is-at-max', blocked);
+            add.setAttribute('aria-label', flower.name + ', ' + n + ' in the bouquet. Add another.');
+            minus.hidden = n === 0;
+            minus.setAttribute('aria-label', 'Remove one ' + flower.name);
         });
 
-        const total = totalBlooms();
         el.counter.textContent = total + ' / ' + MIN_BLOOMS + '–' + MAX_BLOOMS;
         el.counter.className = 'chip pick-counter ' + (total >= MIN_BLOOMS ? 'is-good' : 'is-low');
+        if (el.clearBlooms) el.clearBlooms.hidden = total === 0;
 
         if (total < MIN_BLOOMS) {
             setNotice(el.notice, 'Add ' + (MIN_BLOOMS - total) + ' more bloom' + (MIN_BLOOMS - total === 1 ? '' : 's') + ' to continue.', 'warn');
         } else if (total >= MAX_BLOOMS) {
-            setNotice(el.notice, 'Lovely — that is a full bouquet. Tap a flower to swap it out.', 'ok');
+            setNotice(el.notice, 'Lovely — that is a full bouquet. Use − to swap one out.', 'ok');
         } else {
             setNotice(el.notice, '', 'ok');
         }
     }
 
-    function toggleFlower(id) {
-        const total = totalBlooms();
+    function afterBloomChange() {
+        syncFlowerGrid();
+        refreshArrangeSelect();
+        drawPreview();
+        invalidateExport();
+    }
+
+    function addBloom(id) {
         const current = state.counts[id] || 0;
-        if (current === 0 && total >= MAX_BLOOMS) {
-            // full bouquet: nudge the counter, the button is disabled in the UI
+        if (totalBlooms() >= MAX_BLOOMS) {
             el.counter.animate(
                 [{ transform: 'translateX(0)' }, { transform: 'translateX(-3px)' }, { transform: 'translateX(3px)' }, { transform: 'translateX(0)' }],
                 { duration: 220 }
             );
             return;
         }
-        if (current === 0) state.counts[id] = 1;
-        else if (current === 1) delete state.counts[id];
+        state.counts[id] = Math.min(MAX_PER_FLOWER, current + 1);
+        afterBloomChange();
+    }
+
+    function removeBloom(id) {
+        const current = state.counts[id] || 0;
+        if (current <= 0) return;
+        if (current === 1) delete state.counts[id];
         else state.counts[id] = current - 1;
-        syncFlowerGrid();
-        refreshArrangeSelect();
-        drawPreview();
-        invalidateExport();
+        afterBloomChange();
+    }
+
+    function clearBlooms() {
+        state.counts = {};
+        state.nudges = {};
+        afterBloomChange();
     }
 
     // --------------------------------------------------------- arrangement --
@@ -518,6 +560,7 @@
 
     // --------------------------------------------------------------- init --
     function bindEvents() {
+        if (el.clearBlooms) el.clearBlooms.addEventListener('click', clearBlooms);
         el.shuffle.addEventListener('click', shuffleArrangement);
         el.greenery.addEventListener('click', cycleGreenery);
         el.arrangeControls.addEventListener('click', (event) => {
@@ -572,7 +615,8 @@
 
     // expose a couple of internals for tests / debugging
     window.OwBouquetPage = {
-        FLOWERS, MIN_BLOOMS, MAX_BLOOMS, state,
+        FLOWERS, MIN_BLOOMS, MAX_BLOOMS, MAX_PER_FLOWER, state,
+        addBloom, removeBloom, clearBlooms,
         totalBlooms, selectedFlowerIds, drawCardTo
     };
 

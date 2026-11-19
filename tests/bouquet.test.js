@@ -162,37 +162,101 @@ test('the arrangement buttons are compact, not stretched', () => {
     assert.ok(!/flex:\s*1 1 170px/.test(html), 'no full-width stretching rule remains');
 });
 
-test('flower picker enforces the 6 to 10 bloom rule', async (t) => {
+test('a single flower can be picked up to ten times', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
     const page = window.OwBouquetPage;
-    const buttons = () => Array.from(doc.querySelectorAll('.flower-btn'));
-    const buttonFor = (id) => doc.querySelector('.flower-btn[data-flower="' + id + '"]');
-    const click = (btn) => btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-    assert.equal(buttons().length, 10, 'ten flowers offered');
-    assert.equal(page.MAX_BLOOMS, 10);
-    assert.equal(page.MIN_BLOOMS, 6);
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const tile = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"]');
+    const addBtn = (id) => tile(id).querySelector('.flower-btn');
+    const minusBtn = (id) => tile(id).querySelector('.flower-minus');
 
-    // one of each reaches the ceiling
-    buttons().forEach(click);
-    assert.equal(page.totalBlooms(), 10);
-    buttons().forEach((btn) => assert.equal(btn.disabled, false, 'selected blooms stay removable'));
+    // tap the same rose over and over
+    for (let i = 0; i < 10; i++) click(addBtn('rose'));
+    assert.equal(page.totalBlooms(), 10, 'ten of the same flower');
+    assert.equal(page.state.counts.rose, 10);
+    assert.equal(tile('rose').dataset.count, '10');
+    assert.equal(tile('rose').querySelector('.flower-count').textContent, '10');
 
-    // tapping a selected flower removes it, which frees a slot again
-    click(buttonFor('rose'));
+    // an eleventh tap is refused
+    click(addBtn('rose'));
+    assert.equal(page.totalBlooms(), 10, 'never more than ten blooms');
+
+    // every other flower is now blocked because the bouquet is full
+    assert.equal(addBtn('lily').disabled, true);
+    assert.equal(addBtn('sunflower').disabled, true);
+
+    // the minus takes one back and frees a slot
+    click(minusBtn('rose'));
     assert.equal(page.totalBlooms(), 9);
-    assert.equal(page.state.counts.rose, undefined);
-    click(buttonFor('lily'));
-    assert.equal(page.totalBlooms(), 8);
-    assert.ok(buttons().every((btn) => !btn.disabled));
+    assert.equal(page.state.counts.rose, 9);
+    assert.equal(addBtn('lily').disabled, false, 'space again after removing');
+});
 
-    // the bouquet can never hold more than ten blooms
-    click(buttonFor('rose'));
-    click(buttonFor('lily'));
+test('flowers can be mixed and removed down to nothing', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const addBtn = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"] .flower-btn');
+    const minusBtn = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"] .flower-minus');
+
+    for (let i = 0; i < 4; i++) click(addBtn('rose'));
+    for (let i = 0; i < 3; i++) click(addBtn('lily'));
+    assert.equal(page.totalBlooms(), 7);
+    assert.equal(page.state.counts.rose, 4);
+    assert.equal(page.state.counts.lily, 3);
+
+    // the minus is hidden for flowers that are not in the bouquet
+    assert.equal(minusBtn('daisy').hidden, true);
+    assert.equal(minusBtn('rose').hidden, false);
+
+    // draining a flower removes it entirely
+    for (let i = 0; i < 4; i++) click(minusBtn('rose'));
+    assert.equal(page.state.counts.rose, undefined);
+    assert.equal(page.totalBlooms(), 3);
+    assert.equal(minusBtn('rose').hidden, true, 'minus hides once the flower is gone');
+
+    // tapping minus on an empty flower does nothing
+    click(minusBtn('rose'));
+    assert.equal(page.totalBlooms(), 3);
+});
+
+test('the bouquet holds at most ten blooms in total', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const addBtn = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"] .flower-btn');
+
+    // fill with a mix: 5 rose + 5 lily is exactly ten
+    for (let i = 0; i < 5; i++) { click(addBtn('rose')); click(addBtn('lily')); }
     assert.equal(page.totalBlooms(), 10);
-    click(buttonFor('rose'));                     // 9
-    click(buttonFor('rose'));                     // 10 again
-    assert.equal(page.totalBlooms(), 10);
+    assert.equal(page.state.counts.rose, 5);
+    assert.equal(page.state.counts.lily, 5);
+
+    // a flower not in the bouquet cannot be added
+    assert.equal(addBtn('zinnia').disabled, true);
+    // a flower already in it stays tappable
+    assert.equal(addBtn('rose').disabled, false);
+});
+
+test('clear all empties the bouquet', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const addBtn = (id) => doc.querySelector('.flower-tile[data-flower="' + id + '"] .flower-btn');
+
+    click(addBtn('rose')); click(addBtn('rose')); click(addBtn('lily'));
+    assert.equal(page.totalBlooms(), 3);
+
+    const clear = doc.getElementById('clearBloomsBtn');
+    assert.equal(clear.hidden, false, 'clear is offered while blooms are picked');
+    click(clear);
+    assert.equal(page.totalBlooms(), 0);
+    assert.deepEqual(Object.keys(page.state.counts), []);
+    assert.equal(clear.hidden, true, 'clear hides on an empty bouquet');
 });
 
 test('the counter warns until the minimum number of blooms is chosen', async (t) => {
