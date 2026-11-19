@@ -98,7 +98,7 @@ test('the GIF footer credits Owl Watcher without a web address', () => {
     assert.ok(!/https?:|www\./i.test(allText), 'no URL anywhere on the card');
 });
 
-test('the share button sends the GIF file and does not add a link', async (t) => {
+test('the download button saves the GIF file', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
     const page = window.OwBouquetPage;
@@ -112,25 +112,49 @@ test('the share button sends the GIF file and does not add a link', async (t) =>
     for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
     assert.ok(page.state.gifBlob, 'gif was built');
 
-    // phones: the OS share sheet receives the actual file
+    const downloaded = [];
+    window.HTMLAnchorElement.prototype.click = function () { downloaded.push(this.download); };
+    let opened = null;
+    window.open = (url) => { opened = url; return null; };
+
+    click('downloadGifBtn');
+    await settle();
+    assert.equal(downloaded.length, 1, 'exactly one file download');
+    assert.match(downloaded[0], /\.gif$/, 'a .gif lands on disk');
+    assert.equal(opened, null, 'no third-party site is opened');
+});
+
+test('the share button hands the GIF file to the share sheet', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (id) => doc.getElementById(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    ['rose', 'lily', 'daisy', 'tulip', 'peony', 'zinnia'].forEach((id) => {
+        doc.querySelector('.flower-btn[data-flower="' + id + '"]')
+            .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    click('createBtn');
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+    assert.ok(page.state.gifBlob, 'gif was built');
+
     const shared = [];
     window.navigator.canShare = () => true;
     window.navigator.share = async (payload) => { shared.push(payload); };
-    let openedUrl = null;
-    window.open = (url) => { openedUrl = url; return null; };
+    let opened = null;
+    window.open = (url) => { opened = url; return null; };
 
-    click('sendGifBtn');
+    click('shareGifBtn');
     await settle();
     assert.equal(shared.length, 1, 'share sheet opened once');
     const file = shared[0].files[0];
-    assert.equal(file.type, 'image/gif');
+    assert.equal(file.type, 'image/gif', 'the animation itself is shared');
     assert.match(file.name, /\.gif$/);
-    assert.equal(openedUrl, null, 'no wa.me link when the file was shared');
-    assert.ok(!/[?&]text=[^]*owlwatcher\.tech/i.test(shared[0].text || ''),
-        'share text carries no site link');
+    assert.equal(opened, null, 'no chat service is opened');
+    assert.ok(!/owlwatcher\.tech/i.test(shared[0].text || ''), 'share text carries no site link');
 });
 
-test('fallback sharing saves the GIF and opens a text-only chat', async (t) => {
+test('sharing without a share sheet downloads the GIF instead', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
     const page = window.OwBouquetPage;
@@ -144,17 +168,30 @@ test('fallback sharing saves the GIF and opens a text-only chat', async (t) => {
     for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
 
     window.navigator.canShare = undefined;   // desktop browsers without file sharing
-    let openedUrl = null;
-    window.open = (url) => { openedUrl = url; return null; };
-    const clicked = [];
-    window.HTMLAnchorElement.prototype.click = function () { clicked.push(this.download); };
+    let opened = null;
+    window.open = (url) => { opened = url; return null; };
+    const downloaded = [];
+    window.HTMLAnchorElement.prototype.click = function () { downloaded.push(this.download); };
 
-    click('sendGifBtn');
+    click('shareGifBtn');
     await settle();
-    assert.equal(clicked.length, 1, 'the GIF downloads');
-    assert.match(clicked[0], /\.gif$/);
-    assert.ok(openedUrl && openedUrl.startsWith('https://wa.me/?text='), 'chat link opens as a fallback');
+    assert.equal(downloaded.length, 1, 'the GIF is saved as a fallback');
+    assert.match(downloaded[0], /\.gif$/);
+    assert.equal(opened, null, 'nothing is opened in a new tab');
 });
+
+test('no WhatsApp integration remains in the bouquet page', () => {
+    const app = fs.readFileSync(path.join(root, 'bouquet-app.js'), 'utf8');
+    assert.ok(!/wa\.me/i.test(app) && !/wa\.me/i.test(html), 'no click-to-chat link');
+    assert.ok(!/whatsapp/i.test(app) && !/whatsapp/i.test(html), 'no WhatsApp-specific wording or styling');
+    assert.ok(doc0(html, 'downloadGifBtn') && doc0(html, 'shareGifBtn'), 'download and share are the two actions');
+    assert.ok(!doc0(html, 'sendGifBtn'), 'the old single send button is gone');
+});
+
+// tiny presence helper so the markup test stays readable
+function doc0(source, id) {
+    return source.includes('id="' + id + '"');
+}
 
 test('the arrangement buttons are compact, not stretched', () => {
     const css = html.slice(html.indexOf('.preview-actions'), html.indexOf('.preview-actions') + 400);

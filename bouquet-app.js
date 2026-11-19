@@ -3,8 +3,9 @@
 // Flow: pick 6-10 blooms -> arrange (seeded, reproducible) -> write a note ->
 // render the animated card on a canvas -> encode a GIF in the browser -> share.
 //
-// Nothing leaves the device: the GIF is built locally and the WhatsApp link
-// only carries a text message, so we never need a backend or file host.
+// Nothing leaves the device: the GIF is built locally and either downloaded as
+// a file or handed to the OS share sheet, so we never need a backend or file
+// host.
 (function () {
     'use strict';
 
@@ -22,8 +23,8 @@
     const MAX_MESSAGE = 220;
     const MAX_FROM = 28;
 
-    // Card canvas size for the GIF. 440x550 keeps the animation under ~1.5 MB
-    // (WhatsApp's own sticker limit is far lower, but a document send is fine).
+    // Card canvas size for the GIF. 440x550 keeps the animation under ~1.5 MB,
+    // small enough to send as a normal chat attachment.
     const CARD_W = 440;
     const CARD_H = 550;
     const PREVIEW_W = 440;
@@ -84,7 +85,8 @@
         shareResult: document.getElementById('shareResult'),
         gifPreview: document.getElementById('gifPreview'),
         gifMeta: document.getElementById('gifMeta'),
-        sendGifBtn: document.getElementById('sendGifBtn'),
+        downloadGifBtn: document.getElementById('downloadGifBtn'),
+        shareGifBtn: document.getElementById('shareGifBtn'),
         sendHint: document.getElementById('sendHint'),
         gifLink: document.getElementById('gifLink'),
         copyLink: document.getElementById('copyLinkBtn'),
@@ -474,7 +476,7 @@
             payload.from ? '— ' + payload.from : ''
         ].filter(Boolean).join('\n');
         state.shareText = text;
-        el.sendHint.textContent = 'Sends the bouquet as an actual image, not a link.';
+        el.sendHint.textContent = 'Download the file, or share it straight into a chat.';
     }
 
     function gifFile() {
@@ -483,7 +485,11 @@
         return new File([state.gifBlob], filename, { type: 'image/gif' });
     }
 
-    function saveGif(file) {
+    // Save the GIF to the device. Nothing is uploaded and no other app is
+    // involved: the file simply lands in the browser's download folder.
+    function downloadGif() {
+        const file = gifFile();
+        if (!file) return;
         const url = URL.createObjectURL(state.gifBlob);
         const a = document.createElement('a');
         a.href = url;
@@ -492,31 +498,35 @@
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
+        el.sendHint.textContent = 'Saved ' + file.name + ' — the animated GIF is all yours.';
     }
 
-    // The GIF itself is what gets shared. Browsers that can hand a real file to
-    // the OS share sheet (phones especially) do that, so WhatsApp receives an
-    // image - never a link. Everything else downloads the file and opens a chat
-    // as a convenience, with the note pre-filled.
-    async function sendBouquet() {
+    function canShareFiles(file) {
+        return !!(navigator.canShare && navigator.canShare({ files: [file] }));
+    }
+
+    // Hand the actual GIF to the OS share sheet so it can go to any app on the
+    // device (messaging, mail, notes, AirDrop...). The file is always the
+    // payload - never a link. Where the sheet is unavailable we fall back to a
+    // plain download instead of opening any third-party service.
+    async function shareGif() {
         const file = gifFile();
         if (!file) return;
 
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            try {
-                await navigator.share({ files: [file], text: state.shareText || '' });
-                el.sendHint.textContent = 'Shared — pick WhatsApp and your bouquet goes in as an image.';
-                return;
-            } catch (err) {
-                if (err && err.name === 'AbortError') return;
-                // fall through: the share sheet refused, so save + open a chat
-            }
+        if (!canShareFiles(file)) {
+            downloadGif();
+            el.sendHint.textContent = 'This browser cannot open a share sheet, so the GIF was downloaded instead — attach it wherever you like.';
+            return;
         }
 
-        saveGif(file);
-        el.sendHint.textContent = 'Bouquet GIF saved as ' + file.name +
-            '. Attach it in WhatsApp with 📎 → Photos.';
-        window.open('https://wa.me/?text=' + encodeURIComponent(state.shareText || ''), '_blank', 'noopener');
+        try {
+            await navigator.share({ files: [file], text: state.shareText || '' });
+            el.sendHint.textContent = 'Shared — the animated GIF went out as an image file.';
+        } catch (err) {
+            if (err && err.name === 'AbortError') return;
+            downloadGif();
+            el.sendHint.textContent = 'The share sheet could not open, so the GIF was downloaded instead.';
+        }
     }
 
     async function copyLink() {
@@ -581,7 +591,8 @@
             invalidateExport();
         });
         el.createBtn.addEventListener('click', createGif);
-        el.sendGifBtn.addEventListener('click', sendBouquet);
+        el.downloadGifBtn.addEventListener('click', downloadGif);
+        el.shareGifBtn.addEventListener('click', shareGif);
         el.copyLink.addEventListener('click', copyLink);
         document.addEventListener('visibilitychange', () => { if (!document.hidden) drawPreview(); });
     }
@@ -617,7 +628,7 @@
     window.OwBouquetPage = {
         FLOWERS, MIN_BLOOMS, MAX_BLOOMS, MAX_PER_FLOWER, state,
         addBloom, removeBloom, clearBlooms,
-        totalBlooms, selectedFlowerIds, drawCardTo
+        totalBlooms, selectedFlowerIds, drawCardTo, downloadGif, shareGif
     };
 
     init();
