@@ -162,6 +162,32 @@ test('the arrangement buttons are compact, not stretched', () => {
     assert.ok(!/flex:\s*1 1 170px/.test(html), 'no full-width stretching rule remains');
 });
 
+test('the home page entry point is a proper feature card', () => {
+    const home = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const dom = new JSDOM(home);
+    const link = dom.window.document.getElementById('ebouquetBtn');
+    const gameBtnIndex = home.indexOf('id="gameActionBtn"');
+    const linkIndex = home.indexOf('id="ebouquetBtn"');
+    dom.window.close();
+
+    assert.equal(link.tagName, 'A', 'still a real link');
+    assert.equal(link.getAttribute('href'), 'bouquet.html');
+    assert.ok(link.className.includes('ebouquet-link'), 'uses its own component class');
+    assert.ok(gameBtnIndex > -1 && linkIndex > gameBtnIndex, 'sits under the Owl Jump game');
+
+    // structured content rather than an emoji on a default button
+    assert.ok(link.querySelector('.eb-icon svg'), 'has a bouquet glyph');
+    assert.ok(link.querySelector('.eb-title'), 'has a title');
+    assert.ok(link.querySelector('.eb-sub'), 'has a supporting line');
+    assert.ok(link.querySelector('.eb-go svg'), 'has a chevron affordance');
+    assert.equal(link.querySelector('.eb-title').textContent.trim(), 'E-Bouquet');
+    assert.ok(!/\u{1F490}/u.test(link.textContent), 'no emoji in the label');
+
+    // the old generic button styling is gone
+    assert.ok(!/id="ebouquetBtn" class="btn-block"/.test(home), 'not a plain full-width button');
+    assert.ok(home.includes('.ebouquet-link {'), 'component styles are defined');
+});
+
 test('a single flower can be picked up to ten times', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
