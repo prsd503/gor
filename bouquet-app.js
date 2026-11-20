@@ -89,8 +89,8 @@
         shareGifBtn: document.getElementById('shareGifBtn'),
         sendHint: document.getElementById('sendHint'),
         //gifLink: document.getElementById('gifLink'),
-        copyLink: document.getElementById('copyLinkBtn'),
-        linkHint: document.getElementById('linkHint')
+        //copyLink: document.getElementById('copyLinkBtn'),
+        //linkHint: document.getElementById('linkHint')
     };
 
     const ctx = el.canvas.getContext('2d');
@@ -462,7 +462,7 @@
             ? 'bouquet.html?' + params.toString()
             : new URL('bouquet.html?' + params.toString(), window.location.href).href;
         //el.gifLink.value = url;
-        el.linkHint.textContent = 'Optional. The link re-creates the bouquet on their device so they can make their own.';
+        //el.linkHint.textContent = 'Optional. The link re-creates the bouquet on their device so they can make their own.';
     }
 
     function updateSendHint() {
