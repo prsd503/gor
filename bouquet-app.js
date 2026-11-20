@@ -88,7 +88,7 @@
         downloadGifBtn: document.getElementById('downloadGifBtn'),
         shareGifBtn: document.getElementById('shareGifBtn'),
         sendHint: document.getElementById('sendHint'),
-        gifLink: document.getElementById('gifLink'),
+        //gifLink: document.getElementById('gifLink'),
         copyLink: document.getElementById('copyLinkBtn'),
         linkHint: document.getElementById('linkHint')
     };
@@ -461,7 +461,7 @@
         const url = window.location.origin === 'null'
             ? 'bouquet.html?' + params.toString()
             : new URL('bouquet.html?' + params.toString(), window.location.href).href;
-        el.gifLink.value = url;
+        //el.gifLink.value = url;
         el.linkHint.textContent = 'Optional. The link re-creates the bouquet on their device so they can make their own.';
     }
 
