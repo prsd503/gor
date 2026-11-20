@@ -331,6 +331,43 @@ test('premium themes and flowers are locked until a code is accepted', async (t)
     assert.equal(page.needsCode(), false);
 });
 
+test('the note can only be typed on the free theme or after a code is redeemed', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const msg = doc.getElementById('messageInput');
+    const from = doc.getElementById('fromInput');
+    const hint = doc.getElementById('messageLock');
+
+    // free theme: typing works, nothing is locked
+    assert.equal(page.state.theme, 'night');
+    assert.equal(msg.readOnly, false, 'the free theme lets you write');
+    assert.equal(from.readOnly, false);
+    assert.equal(hint.hidden, true, 'no lock notice on the free theme');
+
+    // premium theme locks both fields and explains why
+    page.chooseTheme('birthday');
+    assert.equal(msg.readOnly, true, 'premium theme blocks the message');
+    assert.equal(from.readOnly, true, 'premium theme blocks the signature too');
+    assert.equal(msg.getAttribute('aria-readonly'), 'true');
+    assert.equal(hint.hidden, false, 'a lock notice is shown');
+    assert.match(hint.textContent, /code/i);
+
+    // going back to the free theme unlocks again
+    page.chooseTheme('night');
+    assert.equal(msg.readOnly, false);
+    assert.equal(hint.hidden, true);
+
+    // redeeming a code unlocks typing on premium themes
+    page.chooseTheme('wedding');
+    assert.equal(msg.readOnly, true);
+    page.state.unlocked = true;
+    page.syncMessageLock();
+    assert.equal(msg.readOnly, false, 'a redeemed code lets you write');
+    assert.equal(from.readOnly, false);
+    assert.equal(hint.hidden, true);
+});
+
 test('the ten original flowers stay free and premium ones stay locked', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
