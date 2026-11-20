@@ -507,9 +507,9 @@
 
     let owl = {
         x: 40,
-        y: 104,
-        width: 28,
-        height: 28,
+        y: 88,
+        width: 44,
+        height: 44,
         dy: 0,
         jumpForce: -8.5,
         gravity: 0.5,
@@ -521,7 +521,7 @@
     let obstacleInterval = 100; // frames between obstacles
 
     function resetGame() {
-        owl.y = 104;
+        owl.y = 88;
         owl.dy = 0;
         owl.grounded = true;
         obstacles = [];
@@ -605,8 +605,8 @@
         owl.y += owl.dy;
 
         // Ground collision
-        if (owl.y > 104) {
-            owl.y = 104;
+        if (owl.y > 88) {
+            owl.y = 88;
             owl.dy = 0;
             owl.grounded = true;
         }
