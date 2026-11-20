@@ -97,6 +97,7 @@
         message: document.getElementById('messageInput'),
         from: document.getElementById('fromInput'),
         charCount: document.getElementById('charCount'),
+        messageLock: document.getElementById('messageLock'),
         createBtn: document.getElementById('createBtn'),
         progressWrap: document.getElementById('progressWrap'),
         progressBar: document.getElementById('progressBar'),
@@ -178,6 +179,29 @@
         return selectedPremiumFlowers().length > 0;
     }
 
+    // Writing the note is part of the paid experience: while a premium theme is
+    // selected and no code has been redeemed, both fields are read-only. The
+    // free theme never locks, and unlocking enables typing immediately.
+    function messageLocked() {
+        return !state.unlocked && themeById(state.theme).free !== true;
+    }
+
+    function syncMessageLock() {
+        const locked = messageLocked();
+        [el.message, el.from].forEach((field) => {
+            if (!field) return;
+            field.readOnly = locked;
+            field.setAttribute('aria-readonly', String(locked));
+        });
+        if (el.messageLock) {
+            el.messageLock.hidden = !locked;
+            el.messageLock.textContent = locked
+                ? 'Writing your note unlocks with a code — redeem one above to type your message.'
+                : '';
+        }
+        return locked;
+    }
+
     function setPremiumStatus(text, kind) {
         if (!el.premiumStatus) return;
         el.premiumStatus.textContent = text || '';
@@ -245,6 +269,7 @@
         const theme = themeById(id);
         state.theme = id;
         syncThemeGrid();
+        syncMessageLock();
         drawPreview();
         invalidateExport();
 
@@ -902,6 +927,7 @@
         setPremiumStatus('Unlocked! Premium themes and flowers are available for this bouquet.', 'ok');
         renderThemeGrid();
         syncFlowerGrid();
+        syncMessageLock();
         drawPreview();
         invalidateExport();
     }
@@ -953,6 +979,7 @@
         renderFlowerGrid();
         renderThemeGrid();
         bindEvents();
+        syncMessageLock();
 
         const prefilled = readLink();
         if (prefilled) {
@@ -961,6 +988,8 @@
             el.charCount.textContent = state.message.length + ' / ' + MAX_MESSAGE;
             syncFlowerGrid();
         }
+        // A shared link may carry premium flowers, which re-lock the note.
+        syncMessageLock();
 
         // default arrangement seed is stable per visit
         state.arrangementSeed = state.arrangementSeed || engine.hashString('owl-watcher-bouquet');
@@ -986,7 +1015,8 @@
         totalBlooms, selectedFlowerIds, drawCardTo, downloadGif, shareGif,
         nativePlatformName, blobToBase64,
         needsCode, chooseTheme, redeemCode, renderThemeGrid,
-        isPremiumFlower, selectedPremiumFlowers
+        isPremiumFlower, selectedPremiumFlowers,
+        messageLocked, syncMessageLock
     };
 
     init();

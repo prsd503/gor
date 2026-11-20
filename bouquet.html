@@ -249,6 +249,15 @@
         #messageInput { min-height: 92px; }
         #charCount { font-variant-numeric: tabular-nums; font-size: 0.78rem; color: var(--ow-muted); }
         #charCount.is-near { color: var(--ow-danger); }
+        /* Writing the note is unlocked by a code; until then the fields read only. */
+        #messageInput[readonly], #fromInput[readonly] { background: var(--ow-chip); cursor: not-allowed; }
+        .message-lock {
+            margin: 8px 0 0;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--ow-danger);
+        }
+        .message-lock[hidden] { display: none; }
 
         /* ---- share ---- */
         .share-grid { display: grid; gap: 10px; }
@@ -475,6 +484,7 @@
             <span class="small muted">Keep it short — it sits on the card under your bouquet.</span>
             <span id="charCount">0 / 220</span>
         </div>
+        <p class="message-lock" id="messageLock" role="status" aria-live="polite" hidden></p>
         <label for="fromInput">From (optional)</label>
         <input type="text" id="fromInput" maxlength="28" placeholder="Your name" autocomplete="name">
     </section>
