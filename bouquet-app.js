@@ -593,7 +593,7 @@
         el.createBtn.addEventListener('click', createGif);
         el.downloadGifBtn.addEventListener('click', downloadGif);
         el.shareGifBtn.addEventListener('click', shareGif);
-        el.copyLink.addEventListener('click', copyLink);
+        //el.copyLink.addEventListener('click', copyLink);
         document.addEventListener('visibilitychange', () => { if (!document.hidden) drawPreview(); });
     }
 
