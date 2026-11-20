@@ -98,30 +98,18 @@ test('the GIF footer credits Owl Watcher without a web address', () => {
     assert.ok(!/https?:|www\./i.test(allText), 'no URL anywhere on the card');
 });
 
-test('the download button saves the GIF file', async (t) => {
-    const { window, doc } = pageDom(t);
-    await settle();
-    const page = window.OwBouquetPage;
-    const click = (id) => doc.getElementById(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+test('share is the only transfer action on the bouquet page', () => {
+    // Downloading was removed: one GIF action keeps the card simple. The GIF is
+    // still saved when the share sheet is unavailable (see the fallback tests).
+    assert.ok(doc0(html, 'shareGifBtn'), 'share remains');
+    assert.ok(!doc0(html, 'downloadGifBtn'), 'the download button is gone');
+    const actions = html.slice(html.indexOf('<div class="share-actions">'), html.indexOf('</div>', html.indexOf('<div class="share-actions">')));
+    assert.equal((actions.match(/<button/g) || []).length, 1, 'exactly one action button');
+    assert.ok(/id="shareGifBtn"/.test(actions), 'the remaining action is share');
+    assert.ok(!/btn-outline/.test(actions), 'share is the primary action, not a secondary one');
 
-    ['rose', 'lily', 'daisy', 'tulip', 'peony', 'zinnia'].forEach((id) => {
-        doc.querySelector('.flower-btn[data-flower="' + id + '"]')
-            .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-    });
-    click('createBtn');
-    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
-    assert.ok(page.state.gifBlob, 'gif was built');
-
-    const downloaded = [];
-    window.HTMLAnchorElement.prototype.click = function () { downloaded.push(this.download); };
-    let opened = null;
-    window.open = (url) => { opened = url; return null; };
-
-    click('downloadGifBtn');
-    await settle();
-    assert.equal(downloaded.length, 1, 'exactly one file download');
-    assert.match(downloaded[0], /\.gif$/, 'a .gif lands on disk');
-    assert.equal(opened, null, 'no third-party site is opened');
+    const app = fs.readFileSync(path.join(root, 'bouquet-app.js'), 'utf8');
+    assert.ok(!/downloadGifBtn/.test(app), 'no stale reference to the removed button');
 });
 
 test('the share button hands the GIF file to the share sheet', async (t) => {
@@ -316,7 +304,7 @@ test('no WhatsApp integration remains in the bouquet page', () => {
     const app = fs.readFileSync(path.join(root, 'bouquet-app.js'), 'utf8');
     assert.ok(!/wa\.me/i.test(app) && !/wa\.me/i.test(html), 'no click-to-chat link');
     assert.ok(!/whatsapp/i.test(app) && !/whatsapp/i.test(html), 'no WhatsApp-specific wording or styling');
-    assert.ok(doc0(html, 'downloadGifBtn') && doc0(html, 'shareGifBtn'), 'download and share are the two actions');
+    assert.ok(doc0(html, 'shareGifBtn'), 'share is the transfer action');
     assert.ok(!doc0(html, 'sendGifBtn'), 'the old single send button is gone');
 });
 
