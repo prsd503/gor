@@ -26,14 +26,18 @@
         .pick-counter.is-good { color: var(--ow-success); }
 
         /* ---- flower picker ---- */
+        /* The minimum track is wide enough for the longest variety name
+           ("Ranunculus") at the label size below, so no name can ever poke out
+           of its tile. 78px was too tight: at 390px the tracks landed on 73px
+           and the long labels spilled over the rounded border. */
         .flower-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(98px, 1fr));
             gap: 10px;
         }
         /* Each cell is a tile with two actions: the picture adds a bloom, the
            small minus takes one away. */
-        .flower-tile { position: relative; }
+        .flower-tile { position: relative; min-width: 0; }
         .flower-btn {
             position: relative;
             display: flex;
@@ -55,10 +59,22 @@
             cursor: pointer;
             box-shadow: none;
             min-height: 0;
+            min-width: 0;
             transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s var(--ow-ease), box-shadow 0.2s ease;
         }
         .flower-btn img { width: 100%; max-width: 62px; aspect-ratio: 1; object-fit: contain; pointer-events: none; }
-        .flower-btn .flower-name { pointer-events: none; }
+        /* The name is a flex item, so it defaults to min-width:auto and refuses
+           to shrink below its longest word — the text then paints outside the
+           tile's border. Let it shrink within the tile's content box instead,
+           and break mid-word if a tile is ever narrower than the name. */
+        .flower-btn .flower-name {
+            pointer-events: none;
+            min-width: 0;
+            max-width: 100%;
+            text-align: center;
+            overflow-wrap: break-word;
+            line-height: 1.2;
+        }
         .flower-count {
             position: absolute;
             top: 6px;
@@ -174,7 +190,8 @@
         .arrange-grid button { flex: 0 0 auto; min-width: 44px; }
 
         @media (max-width: 420px) {
-            .flower-grid { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 8px; }
+            /* 92px still clears "Ranunculus" at the 0.64rem label size used here. */
+            .flower-grid { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
             .flower-btn { font-size: 0.64rem; padding: 8px 3px 6px; }
             .flower-btn img { max-width: 54px; }
         }

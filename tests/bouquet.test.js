@@ -199,6 +199,27 @@ test('the arrangement buttons are compact, not stretched', () => {
     assert.ok(!/flex:\s*1 1 170px/.test(html), 'no full-width stretching rule remains');
 });
 
+test('flower names stay inside their tile', () => {
+    // The label is a flex item, so it needs an explicit min-width:0 to shrink
+    // into the tile instead of painting its glyphs over the rounded border.
+    const nameRule = html.slice(html.indexOf('.flower-btn .flower-name'), html.indexOf('.flower-btn .flower-name') + 400);
+    assert.ok(nameRule.includes('min-width: 0'), 'the label may shrink below its longest word');
+    assert.ok(nameRule.includes('max-width: 100%'), 'the label is capped at the content box');
+    assert.ok(nameRule.includes('overflow-wrap: break-word'), 'a too-narrow tile breaks the word rather than spilling');
+});
+
+test('the flower grid tracks are wide enough for the longest name', () => {
+    // "RANUNCULUS" is the widest label; a 78px minimum track collapsed to ~73px
+    // on a 390px screen and the name overflowed the tile.
+    const grid = html.slice(html.indexOf('.flower-grid {'), html.indexOf('.flower-grid {') + 300);
+    const base = Number(/minmax\((\d+)px/.exec(grid)[1]);
+    assert.ok(base >= 98, 'base track fits "Ranunculus" at 0.72rem, got ' + base);
+
+    const narrow = html.slice(html.indexOf('@media (max-width: 420px)'));
+    const small = Number(/minmax\((\d+)px/.exec(narrow)[1]);
+    assert.ok(small >= 92, 'narrow track fits "Ranunculus" at 0.64rem, got ' + small);
+});
+
 test('the home page entry point is a proper feature card', () => {
     const home = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     const dom = new JSDOM(home);
