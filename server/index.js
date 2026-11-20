@@ -29,6 +29,7 @@ const { getAppCheck } = require('firebase-admin/app-check');
 
 const { buildVersionResponse } = require('./lib/version-policy');
 const { createAuthMiddleware } = require('./lib/auth');
+const { createGiftCodeService } = require('./lib/gift-codes');
 const { createOriginChecker, createAppCheckMiddleware } = require('./lib/security');
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -77,6 +78,9 @@ const { optionalAuth, requireAuth, requireAdmin } = createAuthMiddleware({
     verifyIdToken: token => getAuth().verifyIdToken(token, true),
     verifyJwt: token => jwt.verify(token, JWT_SECRET)
 });
+
+const giftCodes = createGiftCodeService({ db, FieldValue });
+
 
 // Identify the caller when credentials are supplied, without blocking public reads.
 app.use(optionalAuth);
@@ -135,6 +139,33 @@ app.post('/api/auth/token', authLimiter, async (req, res) => {
 });
 
 // --- PUBLIC READS ---
+/* ---- E-Bouquet premium codes -------------------------------------------------
+ * A 9 digit code unlocks the premium themes for one bouquet. Codes are created
+ * by Owl Watcher staff and redeemed exactly once; the transaction in
+ * lib/gift-codes.js is what makes "used once" true rather than hopeful.
+ */
+app.post('/api/gift-codes/redeem', requireAuth, async (req, res) => {
+    try {
+        const result = await giftCodes.redeem(req.body && req.body.code, req.user.uid);
+        if (!result.ok) return res.status(result.status).json({ error: result.error });
+        return res.json({ unlocked: true, code: result.code, price: result.price });
+    } catch (err) {
+        console.error('gift code redemption failed:', err);
+        return res.status(500).json({ error: 'Could not redeem that code right now.' });
+    }
+});
+
+// Staff only: mint a batch of codes to hand out after payment.
+app.post('/api/gift-codes', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        const created = await giftCodes.create(req.body && req.body.count, req.user.email || req.user.uid);
+        return res.json({ created, price: giftCodes.PRICE_INR, count: created.length });
+    } catch (err) {
+        console.error('gift code creation failed:', err);
+        return res.status(500).json({ error: 'Could not create codes right now.' });
+    }
+});
+
 app.get('/api/config', async (req, res) => {
     try {
         const doc = await db.collection('configs').doc('owlwatcher').get();

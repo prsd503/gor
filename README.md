@@ -31,7 +31,30 @@ Everything runs in the browser:
 | `bouquet-app.js` | picker, arrangement state, GIF export, sharing |
 | `bouquet-engine.js` | seeded bouquet/card renderer (canvas 2D) |
 | `gif-encoder.js` | dependency-free GIF89a writer (median-cut palette, LZW, delta frames) |
-| `assets/flowers/*.png` | the ten bloom cut-outs (320 px, transparent) |
+| `assets/flowers/*.png` | sixteen bloom cut-outs (320 px, transparent): ten free, six premium |
+
+### Premium themes and flowers
+
+Midnight Sky and the ten original blooms are free for everyone. Nine occasion
+themes (birthday, anniversary, champion, promotion, wedding, romance, new baby,
+farewell, Diwali) and six premium blooms (dahlia, hydrangea, magnolia, protea,
+hellebore, sweet pea) are premium.
+
+A premium selection is **previewable but not shareable**: the rendered card
+carries a `PREVIEW` watermark until a code is accepted.
+
+A **9 digit code costs ₹30 and works once** for one bouquet. Owl Watcher staff
+create codes to `giftCodes/{code}` in Firestore; redemption is a single
+transaction that re-reads the code and flips `used` to true, so two simultaneous
+attempts cannot both win.
+
+| Route | Who | Purpose |
+| --- | --- | --- |
+| `POST /api/gift-codes/redeem` | signed-in user | validates + burns a code |
+| `POST /api/gift-codes` | admin | mints a batch of codes |
+
+Buying a code is a WhatsApp chat with the team (`wa.me`). The bouquet itself is
+never routed through WhatsApp.
 
 The page offers two plain actions once the GIF is ready — **Download GIF** saves the file
 to the device, and **Share GIF** hands it to the OS share sheet (`navigator.share` with

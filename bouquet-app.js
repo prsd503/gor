@@ -40,8 +40,22 @@
         { id: 'ranunculus', name: 'Ranunculus', mood: 'you are radiant', month: 'March' },
         { id: 'zinnia', name: 'Zinnia', mood: 'lasting affection', month: 'September' },
         { id: 'orchid', name: 'Orchid', mood: 'rare beauty', month: 'February' },
-        { id: 'anemone', name: 'Anemone', mood: 'anticipation', month: 'October' }
+        { id: 'anemone', name: 'Anemone', mood: 'anticipation', month: 'October' },
+        // ---- premium varieties (a code unlocks these for one bouquet) ----
+        { id: 'dahlia', name: 'Dahlia', mood: 'inner strength', month: 'August', premium: true },
+        { id: 'hydrangea', name: 'Hydrangea', mood: 'heartfelt thanks', month: 'June', premium: true },
+        { id: 'magnolia', name: 'Magnolia', mood: 'dignity', month: 'May', premium: true },
+        { id: 'protea', name: 'Protea', mood: 'courage', month: 'September', premium: true },
+        { id: 'hellebore', name: 'Hellebore', mood: 'serenity', month: 'January', premium: true },
+        { id: 'sweetpea', name: 'Sweet Pea', mood: 'blissful pleasure', month: 'March', premium: true }
     ];
+
+    // Where the redeem call goes. Same host as the API the rest of the app uses.
+    const API_BASE_URL = 'https://api.owlwatcher.tech/api';
+    // Owl Watcher team's WhatsApp for buying a code.
+    const WA_NUMBER = '919000000000';
+    const CODE_HELP_URL = 'https://wa.me/' + WA_NUMBER +
+        '?text=' + encodeURIComponent('Hi Owl Watcher! I would like to buy an E-Bouquet premium code (Rs.30).');
 
     const GREENERY_STYLES = [
         { id: 'classic', label: 'classic' },
@@ -60,7 +74,11 @@
         owlImg: null,
         gifBlob: null,
         gifUrl: null,
-        busy: false
+        busy: false,
+        theme: 'night',        // selected theme id
+        unlocked: false,       // a code has been accepted this session
+        unlockedCode: null,
+        pendingTheme: null     // premium theme the visitor tried to pick
     };
 
     // ------------------------------------------------------------ elements --
@@ -86,6 +104,14 @@
         gifPreview: document.getElementById('gifPreview'),
         gifMeta: document.getElementById('gifMeta'),
         shareGifBtn: document.getElementById('shareGifBtn'),
+        themeGrid: document.getElementById('themeGrid'),
+        themeChip: document.getElementById('themeChip'),
+        premiumToggle: document.getElementById('premiumToggle'),
+        premiumDetails: document.getElementById('premiumDetails'),
+        buyCodeLink: document.getElementById('buyCodeLink'),
+        codeInput: document.getElementById('codeInput'),
+        redeemBtn: document.getElementById('redeemBtn'),
+        premiumStatus: document.getElementById('premiumStatus'),
         sendHint: document.getElementById('sendHint'),
         //gifLink: document.getElementById('gifLink'),
         //copyLink: document.getElementById('copyLinkBtn'),
@@ -125,12 +151,119 @@
     }
 
     // ------------------------------------------------------- flower picker --
+    // ------------------------------------------------------- theme + locks --
+    function flowerById(id) {
+        return FLOWERS.find((f) => f.id === id) || null;
+    }
+
+    function isPremiumFlower(id) {
+        const f = flowerById(id);
+        return !!(f && f.premium);
+    }
+
+    function selectedPremiumFlowers() {
+        return selectedFlowerIds().filter(isPremiumFlower);
+    }
+
+    function themeById(id) {
+        return engine.themeById(id);
+    }
+
+    // A bouquet needs a code when it uses a premium theme or any premium flower.
+    // The free night-sky theme and the ten original flowers never need one.
+    function needsCode() {
+        if (state.unlocked) return false;
+        if (themeById(state.theme).free !== true) return true;
+        return selectedPremiumFlowers().length > 0;
+    }
+
+    function setPremiumStatus(text, kind) {
+        if (!el.premiumStatus) return;
+        el.premiumStatus.textContent = text || '';
+        el.premiumStatus.className = 'small premium-status' +
+            (kind === 'ok' ? ' is-ok' : kind === 'err' ? ' is-err' : '');
+    }
+
+    function renderThemeGrid() {
+        if (!el.themeGrid) return;
+        el.themeGrid.innerHTML = '';
+        engine.THEMES.forEach((theme) => {
+            const tile = document.createElement('button');
+            tile.type = 'button';
+            tile.className = 'theme-tile';
+            tile.dataset.theme = theme.id;
+            tile.dataset.locked = String(!theme.free && !state.unlocked);
+            tile.setAttribute('role', 'button');
+            tile.innerHTML = '<canvas width="132" height="165" aria-hidden="true"></canvas>' +
+                '<span class="theme-name">' + theme.name + '</span>';
+            tile.setAttribute('aria-label', theme.name + (theme.free ? ', free' : ', premium'));
+            tile.setAttribute('aria-pressed', String(state.theme === theme.id));
+            tile.addEventListener('click', () => chooseTheme(theme.id));
+
+            // Draw a miniature using the same renderer as the real card, so the
+            // thumbnail is an honest representation of the theme.
+            const c = tile.querySelector('canvas');
+            const tctx = c.getContext('2d');
+            if (tctx) {
+                try {
+                    const sample = FLOWERS.slice(0, 6);
+                    const images = {};
+                    sample.forEach((f, i) => { if (state.images[f.id]) images[i] = state.images[f.id]; });
+                    engine.drawCard(tctx, {
+                        width: 132, height: 165,
+                        images,
+                        owlImg: state.owlImg,
+                        seed: 7, time: 0.6,
+                        flowers: sample.map((f) => f.id), flowerCount: sample.length,
+                        greenery: 'classic', message: '', from: '',
+                        theme: theme.id, reduceMotion: true
+                    });
+                } catch (err) {
+                    // A thumbnail failure must never break the page.
+                    console.error('E-Bouquet: theme preview failed.', err);
+                }
+            }
+
+            el.themeGrid.appendChild(tile);
+        });
+
+        const active = themeById(state.theme);
+        if (el.themeChip) el.themeChip.textContent = active.name;
+    }
+
+    function syncThemeGrid() {
+        if (!el.themeGrid) return;
+        el.themeGrid.querySelectorAll('.theme-tile').forEach((tile) => {
+            const theme = themeById(tile.dataset.theme);
+            tile.dataset.locked = String(!theme.free && !state.unlocked);
+            tile.setAttribute('aria-pressed', String(state.theme === theme.id));
+        });
+    }
+
+    function chooseTheme(id) {
+        const theme = themeById(id);
+        state.theme = id;
+        syncThemeGrid();
+        drawPreview();
+        invalidateExport();
+
+        if (!theme.free && !state.unlocked) {
+            // Preview is allowed; sharing is not. Say so plainly.
+            state.pendingTheme = id;
+            setPremiumStatus('Previewing "' + theme.name + '". Enter a code below to share this theme.', 'err');
+            if (el.codeInput) el.codeInput.focus();
+        } else {
+            setPremiumStatus('', null);
+        }
+    }
+
     function renderFlowerGrid() {
         el.grid.innerHTML = '';
         FLOWERS.forEach((flower) => {
             const tile = document.createElement('div');
             tile.className = 'flower-tile';
             tile.dataset.flower = flower.id;
+            if (flower.premium) tile.dataset.premium = 'true';
 
             const add = document.createElement('button');
             add.type = 'button';
@@ -177,9 +310,14 @@
             // flowers already in it can still be topped up.
             const capped = total >= MAX_BLOOMS;
             const blocked = capped && n === 0;
-            add.disabled = blocked;
-            add.classList.toggle('is-at-max', blocked);
-            add.setAttribute('aria-label', flower.name + ', ' + n + ' in the bouquet. Add another.');
+            // Premium flowers cannot be added until a code is accepted.
+            const locked = !!flower.premium && !state.unlocked;
+            tile.dataset.locked = String(locked);
+            add.disabled = blocked || locked;
+            add.classList.toggle('is-at-max', blocked && !locked);
+            add.setAttribute('aria-label', locked
+                ? flower.name + ', premium. Enter a code to unlock.'
+                : flower.name + ', ' + n + ' in the bouquet. Add another.');
             minus.hidden = n === 0;
             minus.setAttribute('aria-label', 'Remove one ' + flower.name);
         });
@@ -205,6 +343,14 @@
     }
 
     function addBloom(id) {
+        if (isPremiumFlower(id) && !state.unlocked) {
+            // Show the price panel instead of silently doing nothing.
+            setPremiumStatus('That flower is premium. Enter a code below to unlock it.', 'err');
+            if (el.premiumDetails) el.premiumDetails.hidden = false;
+            if (el.premiumToggle) el.premiumToggle.setAttribute('aria-expanded', 'true');
+            if (el.codeInput) el.codeInput.focus();
+            return;
+        }
         const current = state.counts[id] || 0;
         if (totalBlooms() >= MAX_BLOOMS) {
             el.counter.animate(
@@ -253,14 +399,18 @@
             from: state.from,
             time: time || 0,
             reduceMotion: false,
-            stars: previewStars()
+            stars: previewStars(),
+            theme: state.theme,
+            // Free preview of a locked look carries a watermark so a screenshot
+            // is never mistaken for the finished card.
+            watermark: needsCode()
         });
     }
 
     function drawPreview(time) {
         const ids = selectedFlowerIds();
         if (!ids.length) {
-            engine.paintSky(ctx, PREVIEW_W, PREVIEW_H);
+            engine.paintSky(ctx, PREVIEW_W, PREVIEW_H, themeById(state.theme));
             engine.paintStars(ctx, engine.buildStars(90, 5, PREVIEW_W, PREVIEW_H), 0, true);
             ctx.save();
             ctx.fillStyle = 'rgba(255, 240, 214, 0.78)';
@@ -599,6 +749,17 @@
         const file = gifFile();
         if (!file) return;
 
+        // A locked bouquet can be looked at (with a watermark) but not sent.
+        // The code has to be accepted first, and the server marks it used.
+        if (needsCode()) {
+            el.sendHint.textContent = 'This bouquet needs a premium code before it can be shared.';
+            setPremiumStatus('Enter your 9 digit code to unlock sharing.', 'err');
+            if (el.premiumDetails) el.premiumDetails.hidden = false;
+            if (el.premiumToggle) el.premiumToggle.setAttribute('aria-expanded', 'true');
+            if (el.codeInput) el.codeInput.focus();
+            return;
+        }
+
         if (nativePlatformName()) {
             try {
                 await nativeShareGif(file.name);
@@ -681,8 +842,79 @@
     }
 
     // --------------------------------------------------------------- init --
+    // ---------------------------------------------------- code redemption ---
+    // The code is validated by the backend, never here: it re-reads the code,
+    // confirms it is unused, and flips it to used inside a transaction. The
+    // page only reflects the answer.
+    async function redeemCode() {
+        if (!el.codeInput) return;
+        const raw = el.codeInput.value.replace(/[\s-]/g, '');
+        if (!/^\d{9}$/.test(raw)) {
+            setPremiumStatus('Enter the full 9 digit code.', 'err');
+            return;
+        }
+
+        if (el.redeemBtn) el.redeemBtn.disabled = true;
+        setPremiumStatus('Checking your code…', null);
+
+        let result = null;
+        try {
+            const res = await fetch(API_BASE_URL + '/gift-codes/redeem', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: raw })
+            });
+            const body = await res.json().catch(() => ({}));
+            if (res.ok && body && body.unlocked) {
+                result = { ok: true };
+            } else {
+                result = { ok: false, message: (body && body.error) || 'That code could not be redeemed.' };
+            }
+        } catch (err) {
+            console.error('E-Bouquet: code redemption failed.', err);
+            result = { ok: false, offline: true };
+        }
+
+        if (el.redeemBtn) el.redeemBtn.disabled = false;
+
+        if (!result.ok) {
+            setPremiumStatus(
+                result.offline
+                    ? 'Could not reach the server. Check your connection and try again.'
+                    : result.message,
+                'err'
+            );
+            return;
+        }
+
+        state.unlocked = true;
+        state.unlockedCode = raw;
+        el.codeInput.value = '';
+        setPremiumStatus('Unlocked! Premium themes and flowers are available for this bouquet.', 'ok');
+        renderThemeGrid();
+        syncFlowerGrid();
+        drawPreview();
+        invalidateExport();
+    }
+
+    function togglePremiumDetails() {
+        if (!el.premiumDetails || !el.premiumToggle) return;
+        const open = el.premiumDetails.hidden;
+        el.premiumDetails.hidden = !open;
+        el.premiumToggle.setAttribute('aria-expanded', String(open));
+    }
+
     function bindEvents() {
         if (el.clearBlooms) el.clearBlooms.addEventListener('click', clearBlooms);
+        if (el.premiumToggle) el.premiumToggle.addEventListener('click', togglePremiumDetails);
+        if (el.redeemBtn) el.redeemBtn.addEventListener('click', redeemCode);
+        if (el.codeInput) {
+            el.codeInput.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') { event.preventDefault(); redeemCode(); }
+            });
+        }
+        if (el.buyCodeLink) el.buyCodeLink.href = CODE_HELP_URL;
+        if (el.shareGifBtn) el.shareGifBtn.setAttribute('aria-describedby', 'premiumStatus');
         el.shuffle.addEventListener('click', shuffleArrangement);
         el.greenery.addEventListener('click', cycleGreenery);
         el.arrangeControls.addEventListener('click', (event) => {
@@ -710,6 +942,7 @@
 
     async function init() {
         renderFlowerGrid();
+        renderThemeGrid();
         bindEvents();
 
         const prefilled = readLink();
@@ -730,6 +963,8 @@
         } catch (err) {
             console.error('E-Bouquet: some artwork failed to load.', err);
         }
+        // Thumbnails are real renders, so redraw them now the artwork is here.
+        renderThemeGrid();
         drawPreview();
         refreshArrangeSelect();
         requestAnimationFrame(tick);
@@ -740,7 +975,9 @@
         FLOWERS, MIN_BLOOMS, MAX_BLOOMS, MAX_PER_FLOWER, state,
         addBloom, removeBloom, clearBlooms,
         totalBlooms, selectedFlowerIds, drawCardTo, downloadGif, shareGif,
-        nativePlatformName, blobToBase64
+        nativePlatformName, blobToBase64,
+        needsCode, chooseTheme, redeemCode, renderThemeGrid,
+        isPremiumFlower, selectedPremiumFlowers
     };
 
     init();

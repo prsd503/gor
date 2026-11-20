@@ -134,6 +134,94 @@
         .flower-btn.is-at-max { opacity: 0.45; }
         .picker-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
 
+        /* ---- theme picker ---- */
+        .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
+        .theme-tile {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            padding: 6px;
+            border: 1.5px solid var(--ow-border);
+            border-radius: var(--ow-radius);
+            background: var(--ow-surface-2);
+            color: var(--ow-text);
+            font-family: var(--ow-font);
+            font-size: 0.68rem;
+            font-weight: 700;
+            text-align: center;
+            cursor: pointer;
+            min-width: 0;
+            transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s var(--ow-ease);
+        }
+        .theme-tile canvas { width: 100%; height: auto; aspect-ratio: 44 / 55; border-radius: 8px; display: block; pointer-events: none; }
+        .theme-tile .theme-name { line-height: 1.2; overflow-wrap: break-word; }
+        /* A CSS badge instead of an emoji: emoji glyphs are not in the page's
+           loaded font set and render as tofu on some devices. */
+        .theme-tile[data-locked="true"]::after {
+            content: "PREMIUM";
+            position: absolute;
+            top: 6px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 1px 5px;
+            border-radius: 999px;
+            background: rgba(0, 0, 0, 0.55);
+            color: #ffe9c0;
+            font-size: 0.52rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+        }
+        .theme-tile[aria-pressed="true"] { border-color: var(--ow-primary); background: var(--ow-primary-soft); }
+        .theme-tile[data-locked="true"] { opacity: 0.82; }
+        @media (hover: hover) and (pointer: fine) {
+            .theme-tile:hover { border-color: var(--ow-border-strong); transform: translateY(-2px); }
+        }
+        .theme-tile:active { transform: scale(0.96); }
+        .theme-hint { margin: 10px 0 0; }
+
+        /* ---- premium flowers ---- */
+        .flower-tile[data-premium="true"] .flower-btn { border-style: dashed; }
+        .flower-tile[data-premium="true"] .flower-btn::after {
+            content: "PREMIUM";
+            position: absolute;
+            top: 6px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 1px 5px;
+            border-radius: 999px;
+            background: rgba(0, 0, 0, 0.5);
+            color: #ffe9c0;
+            font-size: 0.46rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            pointer-events: none;
+        }
+        .flower-tile[data-premium="true"][data-locked="true"] .flower-btn img { filter: saturate(0.55) brightness(0.9); }
+
+        /* ---- premium banner + code entry ---- */
+        .premium-card { border-color: var(--ow-gold); background: var(--ow-primary-soft); }
+        .premium-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+        .price-pill { font-variant-numeric: tabular-nums; font-weight: 800; }
+        .premium-details { margin-top: 12px; }
+        .premium-details[hidden] { display: none !important; }
+        .premium-details ul { margin: 8px 0 0; padding-left: 18px; }
+        .premium-details li { margin: 3px 0; }
+        .code-row { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
+        .code-row input {
+            flex: 1 1 120px;
+            min-width: 0;
+            margin: 0;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.18em;
+            font-weight: 700;
+            text-align: center;
+        }
+        .code-row button { flex: 0 0 auto; }
+        .premium-status { margin: 10px 0 0; }
+        .premium-status.is-ok { color: var(--ow-success); }
+        .premium-status.is-err { color: var(--ow-danger); }
+
         /* ---- live preview ---- */
         .preview-shell {
             position: relative;
@@ -253,11 +341,76 @@
         <p class="notice" id="pickNotice" hidden></p>
     </section>
 
+    <!-- Themes: free night sky plus premium occasion sets -->
+    <section class="card" id="themeSection" aria-labelledby="themeTitle">
+        <div class="card-header">
+            <h2 class="section-title" id="themeTitle">
+                <span class="step-badge" aria-hidden="true">2</span>
+                Choose a theme
+            </h2>
+            <span class="chip" id="themeChip">Midnight Sky</span>
+        </div>
+        <div class="theme-grid" id="themeGrid" role="group" aria-label="Bouquet themes"></div>
+        <p class="small muted theme-hint" id="themeHint">
+            Midnight Sky is free for everyone. Occasion themes are part of the premium set —
+            preview any of them, then unlock with a code to share.
+        </p>
+    </section>
+
+        <!-- Premium pricing + code redemption. Details stay collapsed until the
+             price pill is tapped, per the page's own "click to reveal" rule. -->
+        <div class="card premium-card" id="premiumCard">
+            <div class="premium-row">
+                <div>
+                    <strong>Premium themes &amp; flowers</strong>
+                    <p class="small muted" style="margin: 2px 0 0;">One code · one bouquet · ₹30</p>
+                </div>
+                <button type="button" class="btn-outline btn-sm" id="premiumToggle" aria-expanded="false" aria-controls="premiumDetails">
+                    <span class="price-pill">₹30</span> · See price &amp; rules
+                </button>
+            </div>
+
+            <div class="premium-details" id="premiumDetails" hidden>
+                <p class="small" style="margin: 0;"><strong>What a code unlocks</strong></p>
+                <ul class="small muted">
+                    <li>All premium occasion themes (birthday, anniversary, champion, promotion, wedding, romance, new baby, farewell, Diwali).</li>
+                    <li>All premium flowers: dahlia, hydrangea, magnolia, protea, hellebore and sweet pea.</li>
+                    <li>The watermark is removed, so the GIF can be shared and saved.</li>
+                </ul>
+                <p class="small" style="margin: 12px 0 0;"><strong>Price</strong></p>
+                <ul class="small muted">
+                    <li><b>₹30 per code</b>, valid for <b>one</b> bouquet.</li>
+                    <li>One code works once. It is marked used the moment it is accepted and cannot be reused.</li>
+                    <li>Midnight Sky and the ten original flowers stay free for everyone, with no code needed.</li>
+                </ul>
+                <p class="small" style="margin: 12px 0 0;"><strong>How to buy</strong></p>
+                <p class="small muted" style="margin: 6px 0 0;">
+                    Message the Owl Watcher team on WhatsApp, pay ₹30, and you will be sent a
+                    9 digit code. Enter it below to unlock.
+                </p>
+                <div class="row" style="margin-top: 10px;">
+                    <a class="btn-outline btn-sm" id="buyCodeLink" href="https://wa.me/919000000000" target="_blank" rel="noopener">
+                        Chat on WhatsApp to buy a code
+                    </a>
+                </div>
+            </div>
+
+            <div style="margin-top: 14px;">
+                <label for="codeInput">Already have a code?</label>
+                <div class="code-row">
+                    <input type="text" id="codeInput" inputmode="numeric" autocomplete="one-time-code"
+                           maxlength="11" placeholder="9 digit code" aria-describedby="premiumStatus">
+                    <button type="button" class="btn-sm" id="redeemBtn">Unlock</button>
+                </div>
+                <p class="small premium-status" id="premiumStatus" role="status" aria-live="polite"></p>
+            </div>
+        </div>
+
     <!-- Step 2: arrange -->
     <section class="card" aria-labelledby="arrangeTitle">
         <div class="card-header">
             <h2 class="section-title" id="arrangeTitle">
-                <span class="step-badge" aria-hidden="true">2</span>
+                <span class="step-badge" aria-hidden="true">3</span>
                 Arrange &amp; greenery
             </h2>
             <span class="chip" id="greeneryChip">Greenery: classic</span>
@@ -298,7 +451,7 @@
     <section class="card" aria-labelledby="messageTitle">
         <div class="card-header">
             <h2 class="section-title" id="messageTitle">
-                <span class="step-badge" aria-hidden="true">3</span>
+                <span class="step-badge" aria-hidden="true">4</span>
                 Write your note
             </h2>
         </div>
@@ -316,7 +469,7 @@
     <section class="card" aria-labelledby="shareTitle">
         <div class="card-header">
             <h2 class="section-title" id="shareTitle">
-                <span class="step-badge" aria-hidden="true">4</span>
+                <span class="step-badge" aria-hidden="true">5</span>
                 Create &amp; share
             </h2>
         </div>
