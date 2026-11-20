@@ -402,6 +402,14 @@
             reduceMotion: false,
             stars: previewStars(),
             theme: state.theme,
+            // A locked premium bloom is drawn in full colour but carries its own
+            // PREVIEW seal, so the mark sits on the flowers themselves too.
+            premiumFlowers: (function () {
+                const map = {};
+                ids.forEach((id, i) => { map[i] = isPremiumFlower(id); });
+                return map;
+            })(),
+            markPremium: !state.unlocked,
             // Free preview of a locked look carries a watermark so a screenshot
             // is never mistaken for the finished card.
             watermark: needsCode()

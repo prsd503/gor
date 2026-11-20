@@ -419,6 +419,80 @@ test('the unlock lasts for the page session only and is not persisted', async (t
     assert.equal(fresh.window.OwBouquetPage.needsCode(), false, 'free theme still needs nothing');
 });
 
+test('premium flowers stay in full colour in the picker', () => {
+    // The locked state is signalled by the PREMIUM badge, not by draining the
+    // colour: people should see the flowers they would be buying.
+    assert.ok(!/filter:\s*saturate\(/.test(html), 'no desaturation filter on premium blooms');
+    assert.ok(!/grayscale|greyscale/i.test(html), 'no greyscale rule either');
+});
+
+test('the page warns that the unlock dies on refresh', () => {
+    const warn = html.slice(html.indexOf('id="sessionWarn"'), html.indexOf('id="sessionWarn"') + 300);
+    assert.match(warn, /Finish and share before refreshing/i, 'tells the visitor to finish first');
+    assert.match(warn, /refresh/i, 'says a refresh loses the unlock');
+});
+
+test('a locked bouquet with premium blooms is stamped over the flowers', () => {
+    const engine = require('../bouquet-engine.js');
+    const calls = [];
+    const canvas = { width: 440, height: 550 };
+    const ctx = stubContext(canvas);
+    const spy = new Proxy(ctx, {
+        get(target, prop) {
+            if (prop === 'fillText') return (text) => { calls.push(String(text)); };
+            if (prop === 'measureText') return (text) => ({ width: String(text).length * 7 });
+            return target[prop];
+        },
+        set(t, k, v) { t[k] = v; return true; }
+    });
+
+    const images = {};
+    for (let i = 0; i < 4; i++) images[i] = { width: 320, height: 300 };
+    const draw = (markPremium) => {
+        calls.length = 0;
+        engine.drawCard(spy, {
+            width: 440, height: 550, images, seed: 7, time: 0, flowers: ['dahlia', 'rose', 'magnolia', 'daisy'],
+            flowerCount: 4, message: '', from: '', theme: 'night',
+            premiumFlowers: { 0: true, 1: false, 2: true, 3: false },
+            markPremium, watermark: markPremium
+        });
+        return calls.slice();
+    };
+
+    const locked = draw(true);
+    assert.ok(locked.includes('PREVIEW'), 'locked: the bouquet carries a PREVIEW ribbon');
+
+    const unlocked = draw(false);
+    assert.ok(!unlocked.includes('PREVIEW'), 'unlocked: no watermark anywhere');
+});
+
+test('a free-only bouquet is never watermarked', () => {
+    const engine = require('../bouquet-engine.js');
+    const calls = [];
+    const ctx = stubContext({ width: 440, height: 550 });
+    const spy = new Proxy(ctx, {
+        get(target, prop) {
+            if (prop === 'fillText') return (text) => { calls.push(String(text)); };
+            if (prop === 'measureText') return (text) => ({ width: String(text).length * 7 });
+            return target[prop];
+        },
+        set(t, k, v) { t[k] = v; return true; }
+    });
+    const images = {};
+    for (let i = 0; i < 4; i++) images[i] = { width: 320, height: 300 };
+
+    engine.drawCard(spy, {
+        width: 440, height: 550, images, seed: 7, time: 0,
+        flowers: ['rose', 'peony', 'daisy', 'tulip'], flowerCount: 4,
+        message: 'hi', from: 'me', theme: 'night',
+        premiumFlowers: { 0: false, 1: false, 2: false, 3: false },
+        markPremium: false, watermark: false
+    });
+    assert.ok(!calls.includes('PREVIEW'), 'free bouquet stays pristine');
+    // drawSpaced() renders the footer letter-by-letter, so join the stream
+    assert.ok(/MADE WITH OWL WATCHER/i.test(calls.join('')), 'brand footer still present');
+});
+
 test('the price and rules panel opens on click and hides again', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();

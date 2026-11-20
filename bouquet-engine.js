@@ -390,6 +390,8 @@
       const size = baseSize * lerp(1.06, 0.86, rr) * lerp(0.96, 1.04, rnd());
       const tilt = Math.atan2(px, -py) * 0.14 * rr;
 
+      const flowerIndex = i % Math.max(1, opts.flowerCount || count);
+      const premiumSet = opts.premiumFlowers;
       slots.push({
         index: i, x, y, size, rr, tilt,
         depth: rr,
@@ -397,7 +399,8 @@
         phase: rnd() * TAU,
         speed: lerp(0.55, 1.15, rnd()),
         bob: lerp(1.2, 3.4, rnd()),
-        flower: i % Math.max(1, opts.flowerCount || count)
+        flower: flowerIndex,
+        premium: !!(premiumSet && premiumSet[flowerIndex])
       });
     }
 
@@ -621,6 +624,7 @@
     const ar = img.width / img.height;
     const dw = s * Math.max(1, ar), dh = s * Math.max(1, 1 / ar);
     ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+
     ctx.restore();
   }
 
@@ -639,6 +643,50 @@
     for (const item of greens) {
       if (item.kind === 'leaf') drawFoliageItem(ctx, item, time, reduceMotion);
     }
+
+    // A locked premium bouquet is still shown in full colour - people should see
+    // exactly what they would be buying - but the flowers themselves carry a
+    // PREVIEW ribbon, so a crop of the bouquet cannot pass as an unlocked card.
+    const premiumSlots = layout.slots.filter((sl) => sl.premium);
+    if (opts.markPremium && premiumSlots.length) {
+      drawBouquetPreviewMark(ctx, layout, premiumSlots);
+    }
+  }
+
+  // One clear ribbon across the bloom cluster rather than a badge per flower:
+  // blooms overlap, so per-flower badges pile into unreadable fragments.
+  function drawBouquetPreviewMark(ctx, layout, premiumSlots) {
+    let sumX = 0, sumY = 0, maxSize = 0;
+    for (const sl of premiumSlots) {
+      sumX += sl.x;
+      sumY += sl.y;
+      maxSize = Math.max(maxSize, sl.size);
+    }
+    const cx = sumX / premiumSlots.length;
+    const cy = sumY / premiumSlots.length;
+
+    const label = 'PREVIEW';
+    const fs = Math.max(9, Math.min(28, maxSize * 0.26));
+    ctx.save();
+    ctx.font = `800 ${fs}px "Inter", "Helvetica Neue", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const tw = ctx.measureText(label).width;
+    const padX = fs * 0.9, padY = fs * 0.5;
+    const bw = Math.min(tw + padX * 2, layout.R * 2.05);
+    const bh = fs + padY * 2;
+
+    ctx.translate(cx, cy);
+    ctx.rotate(-0.11);
+    ctx.globalAlpha = 0.82;
+    ctx.fillStyle = 'rgba(16, 10, 6, 0.72)';
+    roundedRect(ctx, -bw / 2, -bh / 2, bw, bh, bh / 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#ffe9c0';
+    ctx.fillText(label, 0, fs * 0.04);
+    ctx.restore();
   }
 
 
@@ -740,12 +788,13 @@
     const layout = opts.layout || layoutBouquet({
       count: opts.flowers.length, seed: opts.seed || 7, width, height,
       flowerCount: opts.flowerCount || opts.flowers.length,
+      premiumFlowers: opts.premiumFlowers || null,
       nudges: opts.nudges || null,
       dome: { cx: width * 0.5, cy: by, rx: R, ry: RY, neck, bloom: R * 0.72 }
     });
 
     drawHeader(ctx, { width, crestCy, owlR, titleY, titleSize, subY, ruleY }, opts.owlImg, theme);
-    drawBouquet(ctx, { layout, images: opts.images, time, reduceMotion, seed: opts.seed, greenery: opts.greenery });
+    drawBouquet(ctx, { layout, images: opts.images, time, reduceMotion, seed: opts.seed, greenery: opts.greenery, markPremium: opts.markPremium });
     drawMessage(ctx, { width, box: msg, top: msgTop, message, from });
     drawFooter(ctx, { width, y: footerY });
     if (opts.watermark) drawWatermark(ctx, width, height);
@@ -919,6 +968,6 @@
     SKY, THEMES, themeById, paintSky, buildStars, paintStars, paintShootingStar,
     drawStar, drawLeaf, drawFern, drawEucalyptus, drawWrap,
     layoutBouquet, buildGreenery, drawFoliageItem, drawBouquet, drawBloom,
-    measureMessage, drawCard, drawHeader, drawMessage, drawFooter, drawWatermark, wrapLines, drawSpaced, SCRIPT, CAPS
+    measureMessage, drawCard, drawHeader, drawMessage, drawFooter, drawWatermark, drawBouquetPreviewMark, wrapLines, drawSpaced, SCRIPT, CAPS
   };
 });

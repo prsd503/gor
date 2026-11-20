@@ -48,6 +48,12 @@ create codes to `giftCodes/{code}` in Firestore; redemption is a single
 transaction that re-reads the code and flips `used` to true, so two simultaneous
 attempts cannot both win.
 
+Premium blooms stay in **full colour** in the picker while locked — the `PREMIUM`
+badge is the only lock signal, so people can see exactly what they would buy. Once
+a premium bloom is in the bouquet (or a premium theme is chosen), the rendered card
+carries a **PREVIEW ribbon across the bloom cluster** as well as the page watermark,
+so a crop of the bouquet cannot pass as an unlocked card.
+
 **The unlock lasts for the current page session only.** Redeeming opens every
 premium theme and flower immediately, so the bouquet can be built and shared on
 the spot. Nothing is written to `localStorage` or `sessionStorage` and nothing is
