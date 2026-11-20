@@ -1031,7 +1031,9 @@
     }
 
     // ---- header block
-    const owlR = width * 0.048;
+    // The owl crest is the brand mark on the card, so it is drawn a clear
+    // size rather than a small emblem — it stays the first thing you see.
+    const owlR = width * 0.064;
     const headerTop = height * 0.030;
     const crestCy = headerTop + owlR;
     const titleSize = Math.round(width * 0.096);
