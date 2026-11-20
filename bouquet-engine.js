@@ -37,6 +37,87 @@
   // --------------------------------------------------------------- color ---
   const SKY = { top: '#181033', mid: '#3b2154', low: '#63325a', floor: '#150f2a' };
 
+  // -------------------------------------------------------------- themes ---
+  // A theme is pure data: a sky palette, an optional halo/moon tint, the
+  // header/sub wording and the star density. "night" is the original free look
+  // and must never change. Premium themes are still rendered by exactly the
+  // same deterministic code path, so preview and export always agree.
+  const THEMES = [
+    {
+      id: 'night', name: 'Midnight Sky', tagline: 'the original', free: true,
+      sky: SKY, halo: 'rgba(255, 196, 132, 0.50)', haloMid: 'rgba(255, 172, 132, 0.20)',
+      glow: 'rgba(255, 178, 110, 0.55)', starWarm: true, stars: 170
+    },
+    {
+      id: 'birthday', name: 'Birthday', tagline: 'make a wish', free: false,
+      sky: { top: '#4a1d6b', mid: '#a63d7a', low: '#f2843f', floor: '#5a2140' },
+      halo: 'rgba(255, 214, 120, 0.55)', haloMid: 'rgba(255, 170, 90, 0.24)',
+      glow: 'rgba(255, 205, 120, 0.62)', starWarm: true, stars: 190,
+      title: 'Happy Birthday', badge: 'a little confetti for you'
+    },
+    {
+      id: 'anniversary', name: 'Anniversary', tagline: 'years of us', free: false,
+      sky: { top: '#3a0f2e', mid: '#8e2350', low: '#d4677a', floor: '#3d1128' },
+      halo: 'rgba(255, 190, 196, 0.52)', haloMid: 'rgba(255, 140, 160, 0.22)',
+      glow: 'rgba(255, 186, 196, 0.60)', starWarm: true, stars: 175,
+      title: 'Happy Anniversary', badge: 'for every year together'
+    },
+    {
+      id: 'champion', name: 'Champion', tagline: 'you won', free: false,
+      sky: { top: '#0c2b23', mid: '#14654c', low: '#c9a227', floor: '#0a231c' },
+      halo: 'rgba(255, 220, 120, 0.52)', haloMid: 'rgba(240, 200, 90, 0.22)',
+      glow: 'rgba(255, 224, 130, 0.60)', starWarm: true, stars: 200,
+      title: 'Champion', badge: 'first place, always'
+    },
+    {
+      id: 'promotion', name: 'Promotion', tagline: 'next level', free: false,
+      sky: { top: '#0b1a3a', mid: '#1d4a8a', low: '#c99a3b', floor: '#0a1730' },
+      halo: 'rgba(255, 226, 150, 0.48)', haloMid: 'rgba(220, 190, 110, 0.20)',
+      glow: 'rgba(255, 222, 140, 0.58)', starWarm: true, stars: 185,
+      title: 'Congratulations', badge: 'a well earned promotion'
+    },
+    {
+      id: 'wedding', name: 'Wedding', tagline: 'just married', free: false,
+      sky: { top: '#2c2438', mid: '#6b5566', low: '#e6cfc2', floor: '#332934' },
+      halo: 'rgba(255, 240, 230, 0.55)', haloMid: 'rgba(255, 220, 210, 0.24)',
+      glow: 'rgba(255, 236, 224, 0.62)', starWarm: false, stars: 150,
+      title: 'Just Married', badge: 'two hearts, one home'
+    },
+    {
+      id: 'romance', name: 'Romance', tagline: 'for my love', free: false,
+      sky: { top: '#2a0a1c', mid: '#7a1738', low: '#e0674f', floor: '#2b0b1a' },
+      halo: 'rgba(255, 168, 150, 0.52)', haloMid: 'rgba(255, 120, 110, 0.22)',
+      glow: 'rgba(255, 172, 150, 0.60)', starWarm: true, stars: 170,
+      title: 'For You', badge: 'with all my love'
+    },
+    {
+      id: 'newbaby', name: 'New Baby', tagline: 'hello little one', free: false,
+      sky: { top: '#223a4a', mid: '#5f93a6', low: '#f2d7c2', floor: '#21363f' },
+      halo: 'rgba(255, 236, 214, 0.52)', haloMid: 'rgba(255, 216, 200, 0.22)',
+      glow: 'rgba(255, 240, 220, 0.60)', starWarm: true, stars: 160,
+      title: 'Welcome Little One', badge: 'a new star is here'
+    },
+    {
+      id: 'farewell', name: 'Farewell', tagline: 'good luck', free: false,
+      sky: { top: '#141c33', mid: '#334a6b', low: '#8fa4b5', floor: '#121a2c' },
+      halo: 'rgba(214, 230, 240, 0.48)', haloMid: 'rgba(180, 204, 220, 0.20)',
+      glow: 'rgba(214, 234, 244, 0.55)', starWarm: false, stars: 165,
+      title: 'Good Luck', badge: 'until we meet again'
+    },
+    {
+      id: 'diwali', name: 'Diwali', tagline: 'festival of lights', free: false,
+      sky: { top: '#2b1040', mid: '#8f1f2e', low: '#f4a02a', floor: '#33102a' },
+      halo: 'rgba(255, 205, 110, 0.58)', haloMid: 'rgba(255, 160, 70, 0.26)',
+      glow: 'rgba(255, 210, 120, 0.64)', starWarm: true, stars: 210,
+      title: 'Happy Diwali', badge: 'light over darkness'
+    }
+  ];
+
+  function themeById(id) {
+    for (let i = 0; i < THEMES.length; i++) if (THEMES[i].id === id) return THEMES[i];
+    return THEMES[0];
+  }
+
   function roundedRect(ctx, x, y, w, h, r) {
     const rr = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
     ctx.beginPath();
@@ -51,17 +132,19 @@
   // ------------------------------------------------------------ artwork ----
   // Night sky: violet gradient, a warm hush of gold behind the bouquet, a soft
   // moon, and a sprinkle of stars that twinkle at different rates.
-  function paintSky(ctx, w, h) {
+  function paintSky(ctx, w, h, theme) {
+    const t = theme || THEMES[0];
+    const sky = t.sky || SKY;
     const g = ctx.createLinearGradient(0, 0, w * 0.4, h);
-    g.addColorStop(0, SKY.top);
-    g.addColorStop(0.52, SKY.mid);
-    g.addColorStop(1, SKY.low);
+    g.addColorStop(0, sky.top);
+    g.addColorStop(0.52, sky.mid);
+    g.addColorStop(1, sky.low);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 
     const halo = ctx.createRadialGradient(w * 0.5, h * 0.54, w * 0.02, w * 0.5, h * 0.54, h * 0.56);
-    halo.addColorStop(0, 'rgba(255, 196, 132, 0.50)');
-    halo.addColorStop(0.35, 'rgba(255, 172, 132, 0.20)');
+    halo.addColorStop(0, t.halo || 'rgba(255, 196, 132, 0.50)');
+    halo.addColorStop(0.35, t.haloMid || 'rgba(255, 172, 132, 0.20)');
     halo.addColorStop(1, 'rgba(255, 172, 132, 0)');
     ctx.fillStyle = halo;
     ctx.fillRect(0, 0, w, h);
@@ -618,9 +701,10 @@
 
   function drawCard(ctx, opts) {
     const { width, height, time = 0, reduceMotion = false, message, from } = opts;
-    const stars = opts.stars || buildStars(170, opts.seed || 7, width, height);
+    const theme = themeById(opts.theme);
+    const stars = opts.stars || buildStars(theme.stars || 170, opts.seed || 7, width, height);
 
-    paintSky(ctx, width, height);
+    paintSky(ctx, width, height, theme);
     paintStars(ctx, stars, time, reduceMotion);
     paintShootingStar(ctx, width, height, time, reduceMotion);
 
@@ -660,15 +744,17 @@
       dome: { cx: width * 0.5, cy: by, rx: R, ry: RY, neck, bloom: R * 0.72 }
     });
 
-    drawHeader(ctx, { width, crestCy, owlR, titleY, titleSize, subY, ruleY }, opts.owlImg);
+    drawHeader(ctx, { width, crestCy, owlR, titleY, titleSize, subY, ruleY }, opts.owlImg, theme);
     drawBouquet(ctx, { layout, images: opts.images, time, reduceMotion, seed: opts.seed, greenery: opts.greenery });
     drawMessage(ctx, { width, box: msg, top: msgTop, message, from });
     drawFooter(ctx, { width, y: footerY });
+    if (opts.watermark) drawWatermark(ctx, width, height);
     return layout;
   }
 
-  function drawHeader(ctx, g, owlImg) {
+  function drawHeader(ctx, g, owlImg, theme) {
     const { width, crestCy, owlR, titleY, titleSize, subY, ruleY } = g;
+    const t = theme || THEMES[0];
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
@@ -694,16 +780,27 @@
       ctx.stroke();
     }
 
+    // Theme titles vary in length ("Happy Anniversary" is far wider than
+    // "E-Bouquet"), so shrink the type until it clears the card margins.
+    const title = t.title || 'E-Bouquet';
+    const maxTitleW = width * 0.86;
+    let size = titleSize;
+    const titleFont = (px) => `italic 700 ${px}px "Caveat", "Segoe Script", "Bradley Hand", cursive`;
+    ctx.font = titleFont(size);
+    while (size > width * 0.045 && ctx.measureText(title).width > maxTitleW) {
+      size -= 1;
+      ctx.font = titleFont(size);
+    }
+
     ctx.fillStyle = '#fff5e6';
-    ctx.shadowColor = 'rgba(255, 178, 110, 0.55)';
+    ctx.shadowColor = t.glow || 'rgba(255, 178, 110, 0.55)';
     ctx.shadowBlur = width * 0.05;
-    ctx.font = `italic 700 ${titleSize}px "Caveat", "Segoe Script", "Bradley Hand", cursive`;
-    ctx.fillText('E-Bouquet', width / 2, titleY);
+    ctx.fillText(title, width / 2, titleY);
     ctx.shadowBlur = 0;
 
     ctx.fillStyle = 'rgba(255, 226, 188, 0.90)';
     ctx.font = CAPS(Math.round(width * 0.0255));
-    drawSpaced(ctx, 'BY OWL WATCHER', width / 2, subY, width * 0.0072);
+    drawSpaced(ctx, (t.badge || 'BY OWL WATCHER'), width / 2, subY, width * 0.0072);
 
     // little sprig ornaments either side of the rule
     ctx.strokeStyle = 'rgba(255, 220, 176, 0.34)';
@@ -777,11 +874,51 @@
     ctx.restore();
   }
 
+  // The free preview: a premium theme can be looked at, but the rendered frame
+  // carries a repeating diagonal watermark so a screenshot is obviously a
+  // preview and not the real card. A large corner badge spells out why. Both
+  // are drawn every frame, so they survive into an animated capture too.
+  function drawWatermark(ctx, width, height) {
+    ctx.save();
+    ctx.globalAlpha = 0.16;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = CAPS(Math.round(width * 0.052));
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const text = 'PREVIEW';
+    const stepX = width * 0.62;
+    const stepY = height * 0.20;
+    ctx.rotate(-Math.PI / 9);
+    for (let y = -height * 0.5; y < height * 1.5; y += stepY) {
+      for (let x = -width * 0.4; x < width * 1.6; x += stepX) {
+        ctx.fillText(text, x, y);
+      }
+    }
+    ctx.restore();
+
+    // A solid banner is harder to crop out than the diagonal tiling alone. It
+    // sits along the bottom edge so it covers the brand footer (which a preview
+    // should not carry anyway) and never hides the bouquet or the message.
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = 'rgba(20, 14, 10, 0.62)';
+    const bh = height * 0.048;
+    const by = height * 0.955;
+    ctx.fillRect(0, by - bh / 2, width, bh);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#ffe9c0';
+    ctx.font = CAPS(Math.round(width * 0.029));
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('PREVIEW \u00B7 UNLOCK TO SHARE', width / 2, by);
+    ctx.restore();
+  }
+
   return {
     TAU, clamp, lerp, makeRandom, hashString, roundedRect,
-    SKY, paintSky, buildStars, paintStars, paintShootingStar,
+    SKY, THEMES, themeById, paintSky, buildStars, paintStars, paintShootingStar,
     drawStar, drawLeaf, drawFern, drawEucalyptus, drawWrap,
     layoutBouquet, buildGreenery, drawFoliageItem, drawBouquet, drawBloom,
-    measureMessage, drawCard, drawHeader, drawMessage, drawFooter, wrapLines, drawSpaced, SCRIPT, CAPS
+    measureMessage, drawCard, drawHeader, drawMessage, drawFooter, drawWatermark, wrapLines, drawSpaced, SCRIPT, CAPS
   };
 });

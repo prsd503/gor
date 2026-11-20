@@ -300,12 +300,149 @@ test('native detection ignores the plain browser', async (t) => {
     assert.equal(page.nativePlatformName(), null, 'a non-native Capacitor context is still the browser');
 });
 
-test('no WhatsApp integration remains in the bouquet page', () => {
+test('WhatsApp is used only to buy a code, never to send the GIF', () => {
     const app = fs.readFileSync(path.join(root, 'bouquet-app.js'), 'utf8');
-    assert.ok(!/wa\.me/i.test(app) && !/wa\.me/i.test(html), 'no click-to-chat link');
-    assert.ok(!/whatsapp/i.test(app) && !/whatsapp/i.test(html), 'no WhatsApp-specific wording or styling');
+    // Buying premium credit is a chat with the Owl Watcher team. The bouquet
+    // itself must still never be routed through a third-party chat service.
+    assert.ok(doc0(html, 'buyCodeLink'), 'a WhatsApp purchase link exists');
+    assert.ok(/wa\.me/.test(app), 'the purchase URL is built in the app');
+    const sharing = app.slice(app.indexOf('async function shareGif'));
+    assert.ok(!/wa\.me/i.test(sharing), 'sharing never opens WhatsApp');
     assert.ok(doc0(html, 'shareGifBtn'), 'share is the transfer action');
     assert.ok(!doc0(html, 'sendGifBtn'), 'the old single send button is gone');
+});
+
+test('premium themes and flowers are locked until a code is accepted', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+
+    // the free set is untouched
+    assert.equal(page.state.theme, 'night', 'midnight sky is the default');
+    assert.equal(page.needsCode(), false, 'a plain free bouquet needs no code');
+
+    // picking a premium theme previews it but still needs a code
+    page.chooseTheme('birthday');
+    assert.equal(page.state.theme, 'birthday');
+    assert.equal(page.needsCode(), true, 'premium theme needs a code to share');
+
+    // back to the free theme: no code needed again
+    page.chooseTheme('night');
+    assert.equal(page.needsCode(), false);
+});
+
+test('the ten original flowers stay free and premium ones stay locked', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    const originals = ['rose', 'peony', 'sunflower', 'tulip', 'lily', 'daisy', 'ranunculus', 'zinnia', 'orchid', 'anemone'];
+    originals.forEach((id) => {
+        assert.equal(page.isPremiumFlower(id), false, id + ' is free');
+        const btn = doc.querySelector('.flower-btn[data-flower="' + id + '"]');
+        assert.equal(btn.disabled, false, id + ' can be added');
+    });
+
+    const premium = ['dahlia', 'hydrangea', 'magnolia', 'protea', 'hellebore', 'sweetpea'];
+    premium.forEach((id) => {
+        assert.equal(page.isPremiumFlower(id), true, id + ' is premium');
+        const btn = doc.querySelector('.flower-btn[data-flower="' + id + '"]');
+        click(btn);
+        assert.equal(page.state.counts[id], undefined, id + ' cannot be added while locked');
+    });
+
+    // a premium flower in the bouquet needs a code, while still locked
+    assert.equal(page.needsCode(), false, 'nothing premium chosen yet');
+
+    // and it becomes available once a code is accepted
+    page.state.unlocked = true;
+    page.state.counts.dahlia = 1;
+    assert.equal(page.needsCode(), false, 'unlocked: premium flower shares freely');
+
+    page.state.unlocked = false;
+    assert.equal(page.needsCode(), true, 'locked again: the premium flower needs a code');
+});
+
+test('sharing is blocked and explained while a code is still needed', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    ['rose', 'lily', 'daisy', 'tulip', 'peony', 'zinnia'].forEach((id) => {
+        click(doc.querySelector('.flower-btn[data-flower="' + id + '"]'));
+    });
+    // pick the locked theme first: switching themes after export correctly
+    // invalidates the GIF, so the order matters here
+    page.chooseTheme('champion');
+    click(doc.getElementById('createBtn'));
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+    assert.ok(page.state.gifBlob, 'gif was built');
+    const shared = [];
+    window.navigator.canShare = () => true;
+    window.navigator.share = async (p) => { shared.push(p); };
+    const downloaded = [];
+    window.HTMLAnchorElement.prototype.click = function () { downloaded.push(this.download); };
+
+    click(doc.getElementById('shareGifBtn'));
+    await settle();
+    assert.equal(shared.length, 0, 'nothing is shared while locked');
+    assert.equal(downloaded.length, 0, 'nothing is downloaded while locked');
+    assert.match(doc.getElementById('sendHint').textContent, /code/i, 'the visitor is told why');
+});
+
+test('the unlock lasts for the page session only and is not persisted', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+
+    // simulate a successful redemption without touching the network
+    page.state.unlocked = true;
+    page.state.unlockedCode = '123456789';
+    page.chooseTheme('birthday');
+    assert.equal(page.needsCode(), false, 'unlocked: premium theme can be shared');
+
+    // Nothing may be written to storage, or a refresh would stay unlocked and
+    // the one-use rule would be easy to dodge.
+    assert.equal(window.localStorage.length, 0, 'no localStorage entries written');
+    assert.equal(window.sessionStorage.length, 0, 'no sessionStorage entries written');
+
+    const app = fs.readFileSync(path.join(root, 'bouquet-app.js'), 'utf8');
+    assert.ok(!/localStorage\.setItem|sessionStorage\.setItem/.test(app),
+        'the app never persists an unlock');
+
+    // A fresh page (a reload) starts locked again.
+    const fresh = pageDom(t);
+    await settle();
+    assert.equal(fresh.window.OwBouquetPage.state.unlocked, false, 'a reload starts locked');
+    assert.equal(fresh.window.OwBouquetPage.needsCode(), false, 'free theme still needs nothing');
+});
+
+test('the price and rules panel opens on click and hides again', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const details = doc.getElementById('premiumDetails');
+    const toggle = doc.getElementById('premiumToggle');
+    const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    assert.equal(details.hidden, true, 'starts collapsed');
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+
+    click(toggle);
+    assert.equal(details.hidden, false, 'opens on click');
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+
+    click(toggle);
+    assert.equal(details.hidden, true, 'hides again');
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+
+    // the panel states the actual price and the one-use rule
+    const text = details.textContent;
+    assert.match(text, /30/, 'shows the price');
+    assert.match(text, /one/i, 'states the one bouquet rule');
+    assert.match(text, /refresh/i, 'warns that a refresh locks it again');
+    assert.match(text, /this page only/i, 'says the unlock is page-session only');
 });
 
 // tiny presence helper so the markup test stays readable

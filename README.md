@@ -31,7 +31,37 @@ Everything runs in the browser:
 | `bouquet-app.js` | picker, arrangement state, GIF export, sharing |
 | `bouquet-engine.js` | seeded bouquet/card renderer (canvas 2D) |
 | `gif-encoder.js` | dependency-free GIF89a writer (median-cut palette, LZW, delta frames) |
-| `assets/flowers/*.png` | the ten bloom cut-outs (320 px, transparent) |
+| `assets/flowers/*.png` | sixteen bloom cut-outs (320 px, transparent): ten free, six premium |
+
+### Premium themes and flowers
+
+Midnight Sky and the ten original blooms are free for everyone. Nine occasion
+themes (birthday, anniversary, champion, promotion, wedding, romance, new baby,
+farewell, Diwali) and six premium blooms (dahlia, hydrangea, magnolia, protea,
+hellebore, sweet pea) are premium.
+
+A premium selection is **previewable but not shareable**: the rendered card
+carries a `PREVIEW` watermark until a code is accepted.
+
+A **9 digit code costs ₹30 and works once** for one bouquet. Owl Watcher staff
+create codes to `giftCodes/{code}` in Firestore; redemption is a single
+transaction that re-reads the code and flips `used` to true, so two simultaneous
+attempts cannot both win.
+
+**The unlock lasts for the current page session only.** Redeeming opens every
+premium theme and flower immediately, so the bouquet can be built and shared on
+the spot. Nothing is written to `localStorage` or `sessionStorage` and nothing is
+tied to an account, so refreshing or reopening the page locks the premium set
+again — and the spent code cannot be reused. This is stated in the on-page rules.
+
+| Route | Who | Purpose |
+| --- | --- | --- |
+| `POST /api/gift-codes/redeem` | anyone | validates + burns a code (no sign-in: the code is the credential) |
+| `POST /api/gift-codes` | admin | mints a batch of codes |
+
+Buying a code is a WhatsApp chat with the team (`wa.me/919033406816`, the same
+number as the site's Contact links). The bouquet itself is never routed through
+WhatsApp.
 
 The page offers two plain actions once the GIF is ready — **Download GIF** saves the file
 to the device, and **Share GIF** hands it to the OS share sheet (`navigator.share` with
