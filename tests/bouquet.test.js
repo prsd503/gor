@@ -180,6 +180,138 @@ test('sharing without a share sheet downloads the GIF instead', async (t) => {
     assert.equal(opened, null, 'nothing is opened in a new tab');
 });
 
+// The Android/iOS app hosts this page in a WebView, which has no download
+// manager and no navigator.share. Both actions must go through Capacitor.
+function installCapacitor(window, opts) {
+    const platform = (opts && opts.platform) || 'android';
+    const writes = [];
+    const shares = [];
+    const filesystem = {
+        async writeFile(options) {
+            if (opts && opts.writeFails) throw new Error('write failed');
+            writes.push(options);
+            return { uri: 'file:///data/user/0/app/files/' + options.path };
+        }
+    };
+    const share = {
+        async share(payload) {
+            if (opts && opts.shareFails) throw new Error('share failed');
+            shares.push(payload);
+            return {};
+        }
+    };
+    window.Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => platform,
+        Plugins: opts && opts.noPlugins ? {} : { Filesystem: filesystem, Share: share }
+    };
+    return { writes, shares };
+}
+
+async function fillBouquet(doc) {
+    ['rose', 'lily', 'daisy', 'tulip', 'peony', 'zinnia'].forEach((id) => {
+        doc.querySelector('.flower-btn[data-flower="' + id + '"]')
+            .dispatchEvent(new (doc.defaultView.MouseEvent)('click', { bubbles: true }));
+    });
+    const click = (id) => doc.getElementById(id).dispatchEvent(new (doc.defaultView.MouseEvent)('click', { bubbles: true }));
+    click('createBtn');
+}
+
+test('in the app, download writes the GIF through the Filesystem plugin', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    await fillBouquet(doc);
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+    assert.ok(page.state.gifBlob, 'gif was built');
+
+    const cap = installCapacitor(window);
+    // a blob <a download> click does nothing in a WebView; prove we never rely on it
+    const downloaded = [];
+    window.HTMLAnchorElement.prototype.click = function () { downloaded.push(this.download); };
+
+    const ok = await page.downloadGif();
+    assert.equal(ok, true, 'reports success only after writing');
+    assert.equal(downloaded.length, 0, 'no blob anchor click in the app');
+    assert.equal(cap.writes.length, 1, 'file written once');
+    assert.match(cap.writes[0].path, /\.gif$/, 'the GIF is what gets written');
+    assert.equal(cap.writes[0].directory, 'DOCUMENTS', 'saved where the user can find it');
+    assert.ok(cap.writes[0].data.length > 0, 'base64 payload is present');
+    assert.ok(!/^data:/.test(cap.writes[0].data), 'no data: prefix, just base64');
+});
+
+test('in the app, share hands the file URI to the Share plugin', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    await fillBouquet(doc);
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+
+    const cap = installCapacitor(window);
+    const downloaded = [];
+    window.HTMLAnchorElement.prototype.click = function () { downloaded.push(this.download); };
+
+    await page.shareGif();
+    assert.equal(cap.writes.length, 1, 'the GIF is written before sharing');
+    assert.equal(cap.writes[0].directory, 'CACHE', 'cache needs no storage permission');
+    assert.equal(cap.shares.length, 1, 'share sheet invoked once');
+    assert.match(cap.shares[0].files[0], /^file:\/\/.*\.gif$/, 'a real file URI is shared');
+    assert.equal(downloaded.length, 0, 'never a silent blob download');
+    assert.match(doc.getElementById('sendHint').textContent, /Shared/);
+});
+
+test('in the app, a failed share says so instead of claiming a download', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    await fillBouquet(doc);
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+
+    // share fails, and the documents fallback fails too
+    installCapacitor(window, { shareFails: true, writeFails: true });
+    window.HTMLAnchorElement.prototype.click = function () {};
+
+    await page.shareGif();
+    const hint = doc.getElementById('sendHint').textContent;
+    assert.ok(!/downloaded instead/i.test(hint), 'must not claim a download that never happened');
+    assert.ok(/could not/i.test(hint), 'reports the failure, got: ' + hint);
+});
+
+test('in the app, a failed save reports failure rather than success', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    await fillBouquet(doc);
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+
+    installCapacitor(window, { writeFails: true });
+    const ok = await page.downloadGif();
+    assert.equal(ok, false, 'no false success');
+    assert.ok(/could not/i.test(doc.getElementById('sendHint').textContent), 'says it failed');
+});
+
+test('in the app, missing plugins are reported, not silently ignored', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    await fillBouquet(doc);
+    for (let i = 0; i < 80 && !page.state.gifBlob; i++) await settle();
+
+    installCapacitor(window, { noPlugins: true });
+    const ok = await page.downloadGif();
+    assert.equal(ok, false);
+    assert.ok(/could not/i.test(doc.getElementById('sendHint').textContent));
+});
+
+test('native detection ignores the plain browser', async (t) => {
+    const { window } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    assert.equal(page.nativePlatformName(), null, 'no Capacitor bridge means browser');
+    window.Capacitor = { isNativePlatform: () => false };
+    assert.equal(page.nativePlatformName(), null, 'a non-native Capacitor context is still the browser');
+});
+
 test('no WhatsApp integration remains in the bouquet page', () => {
     const app = fs.readFileSync(path.join(root, 'bouquet-app.js'), 'utf8');
     assert.ok(!/wa\.me/i.test(app) && !/wa\.me/i.test(html), 'no click-to-chat link');
