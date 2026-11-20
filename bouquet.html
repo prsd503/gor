@@ -197,7 +197,14 @@
             letter-spacing: 0.03em;
             pointer-events: none;
         }
-        .flower-tile[data-premium="true"][data-locked="true"] .flower-btn img { filter: saturate(0.55) brightness(0.9); }
+        /* Premium blooms are shown in full colour even while locked: the point is
+           to let people see the flowers they would be buying, not to dim them.
+           The PREMIUM badge carries the "locked" signal instead, so the generic
+           :disabled opacity from theme.css is cancelled here. */
+        .flower-tile[data-premium="true"][data-locked="true"] .flower-btn:disabled {
+            opacity: 1;
+            cursor: pointer;
+        }
 
         /* ---- premium banner + code entry ---- */
         .premium-card { border-color: var(--ow-gold); background: var(--ow-primary-soft); }
@@ -354,6 +361,10 @@
         <p class="small muted theme-hint" id="themeHint">
             Midnight Sky is free for everyone. Occasion themes are part of the premium set —
             preview any of them, then unlock with a code to share.
+        </p>
+        <p class="small notice notice-warn" id="sessionWarn" style="margin: 8px 0 0;">
+            Finish and share before refreshing — a code is used once and the unlock does not
+            survive a page refresh.
         </p>
     </section>
 

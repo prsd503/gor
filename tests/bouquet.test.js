@@ -419,6 +419,132 @@ test('the unlock lasts for the page session only and is not persisted', async (t
     assert.equal(fresh.window.OwBouquetPage.needsCode(), false, 'free theme still needs nothing');
 });
 
+test('premium flowers stay in full colour in the picker', () => {
+    // The locked state is signalled by the PREMIUM badge, not by draining the
+    // colour: people should see the flowers they would be buying.
+    assert.ok(!/filter:\s*saturate\(/.test(html), 'no desaturation filter on premium blooms');
+    assert.ok(!/grayscale|greyscale/i.test(html), 'no greyscale rule either');
+});
+
+test('the page warns that the unlock dies on refresh', () => {
+    const warn = html.slice(html.indexOf('id="sessionWarn"'), html.indexOf('id="sessionWarn"') + 300);
+    assert.match(warn, /Finish and share before refreshing/i, 'tells the visitor to finish first');
+    assert.match(warn, /refresh/i, 'says a refresh loses the unlock');
+});
+
+test('a locked bouquet with premium blooms is stamped over the flowers', () => {
+    const engine = require('../bouquet-engine.js');
+    const calls = [];
+    const canvas = { width: 440, height: 550 };
+    const ctx = stubContext(canvas);
+    const spy = new Proxy(ctx, {
+        get(target, prop) {
+            if (prop === 'fillText') return (text) => { calls.push(String(text)); };
+            if (prop === 'measureText') return (text) => ({ width: String(text).length * 7 });
+            return target[prop];
+        },
+        set(t, k, v) { t[k] = v; return true; }
+    });
+
+    const images = {};
+    for (let i = 0; i < 4; i++) images[i] = { width: 320, height: 300 };
+    const draw = (markPremium) => {
+        calls.length = 0;
+        engine.drawCard(spy, {
+            width: 440, height: 550, images, seed: 7, time: 0, flowers: ['dahlia', 'rose', 'magnolia', 'daisy'],
+            flowerCount: 4, message: '', from: '', theme: 'night',
+            premiumFlowers: { 0: true, 1: false, 2: true, 3: false },
+            markPremium, watermark: markPremium
+        });
+        return calls.slice();
+    };
+
+    const locked = draw(true);
+    assert.ok(locked.includes('PREVIEW'), 'locked: the bouquet carries a PREVIEW ribbon');
+
+    const unlocked = draw(false);
+    assert.ok(!unlocked.includes('PREVIEW'), 'unlocked: no watermark anywhere');
+});
+
+test('a free-only bouquet is never watermarked', () => {
+    const engine = require('../bouquet-engine.js');
+    const calls = [];
+    const ctx = stubContext({ width: 440, height: 550 });
+    const spy = new Proxy(ctx, {
+        get(target, prop) {
+            if (prop === 'fillText') return (text) => { calls.push(String(text)); };
+            if (prop === 'measureText') return (text) => ({ width: String(text).length * 7 });
+            return target[prop];
+        },
+        set(t, k, v) { t[k] = v; return true; }
+    });
+    const images = {};
+    for (let i = 0; i < 4; i++) images[i] = { width: 320, height: 300 };
+
+    engine.drawCard(spy, {
+        width: 440, height: 550, images, seed: 7, time: 0,
+        flowers: ['rose', 'peony', 'daisy', 'tulip'], flowerCount: 4,
+        message: 'hi', from: 'me', theme: 'night',
+        premiumFlowers: { 0: false, 1: false, 2: false, 3: false },
+        markPremium: false, watermark: false
+    });
+    assert.ok(!calls.includes('PREVIEW'), 'free bouquet stays pristine');
+    // drawSpaced() renders the footer letter-by-letter, so join the stream
+    assert.ok(/MADE WITH OWL WATCHER/i.test(calls.join('')), 'brand footer still present');
+});
+
+test('only the free night theme keeps the moon and stars', () => {
+    const themes = engine.THEMES;
+    const withMoon = themes.filter((t) => t.moon);
+    assert.deepEqual(withMoon.map((t) => t.id), ['night'], 'the moon is the night theme only');
+    const withStars = themes.filter((t) => t.stars > 0);
+    assert.deepEqual(withStars.map((t) => t.id), ['night'], 'stars are the night theme only');
+    themes.filter((t) => t.free === false).forEach((t) => {
+        assert.equal(t.moon, false, t.id + ' has no moon');
+        assert.equal(t.stars, 0, t.id + ' has no stars');
+    });
+});
+
+test('every premium theme has its own vibrant palette and backdrop', () => {
+    const premium = engine.THEMES.filter((t) => !t.free);
+    assert.ok(premium.length >= 8, 'there are several premium themes');
+
+    premium.forEach((t) => {
+        assert.ok(t.sky && t.sky.top && t.sky.mid && t.sky.low, t.id + ' has a full palette');
+        assert.ok(t.bg, t.id + ' declares a background painter');
+        assert.ok(typeof engine.BACKGROUNDS[t.bg] === 'function', t.id + ' background exists');
+    });
+
+    // the backdrops are genuinely varied, not one recoloured sky
+    const kinds = new Set(premium.map((t) => t.bg));
+    assert.ok(kinds.size >= 5, 'at least five distinct backdrop styles, got ' + kinds.size);
+
+    // and no two premium themes share the same three-stop gradient
+    const palettes = premium.map((t) => [t.sky.top, t.sky.mid, t.sky.low].join('|'));
+    assert.equal(new Set(palettes).size, palettes.length, 'each palette is unique');
+});
+
+test('a pre-drawn canvas can render every theme without throwing', () => {
+    engine.THEMES.forEach((t) => {
+        const ctx = stubContext({ width: 440, height: 550 });
+        const images = {};
+        for (let i = 0; i < 4; i++) images[i] = { width: 320, height: 300 };
+        assert.doesNotThrow(() => engine.drawCard(ctx, {
+            width: 440, height: 550, images, seed: 7, time: 1.5,
+            flowers: ['rose', 'dahlia', 'peony', 'daisy'], flowerCount: 4,
+            message: 'hi', from: 'me', theme: t.id
+        }), t.id + ' renders');
+    });
+});
+
+test('light themes use dark ink so the title stays readable', () => {
+    ['wedding', 'newbaby'].forEach((id) => {
+        const t = engine.THEMES.find((th) => th.id === id);
+        assert.ok(t.ink, id + ' declares a dark ink colour');
+        assert.match(t.ink, /^#[0-9a-f]{6}$/i, id + ' ink is a solid colour');
+    });
+});
+
 test('the price and rules panel opens on click and hides again', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
