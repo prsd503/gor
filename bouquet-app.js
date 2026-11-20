@@ -486,10 +486,24 @@
     }
 
     // Save the GIF to the device. Nothing is uploaded and no other app is
-    // involved: the file simply lands in the browser's download folder.
-    function downloadGif() {
+    // involved. Resolves true only once the file is really on the device, so
+    // the hint never reports a save that did not happen.
+    async function downloadGif() {
         const file = gifFile();
-        if (!file) return;
+        if (!file) return false;
+
+        if (nativePlatformName()) {
+            try {
+                await nativeSaveGif(file.name);
+                el.sendHint.textContent = 'Saved ' + file.name + ' — the animated GIF is all yours.';
+                return true;
+            } catch (err) {
+                console.error('E-Bouquet: native save failed.', err);
+                el.sendHint.textContent = 'Sorry, this app could not save the GIF to your device.';
+                return false;
+            }
+        }
+
         const url = URL.createObjectURL(state.gifBlob);
         const a = document.createElement('a');
         a.href = url;
@@ -499,23 +513,120 @@
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
         el.sendHint.textContent = 'Saved ' + file.name + ' — the animated GIF is all yours.';
+        return true;
     }
 
     function canShareFiles(file) {
         return !!(navigator.canShare && navigator.canShare({ files: [file] }));
     }
 
+    // ------------------------------------------------------ native hand-off --
+    // Inside the Android/iOS app this page runs in a WebView, which has no
+    // download manager and no navigator.share. A blob <a download> click lands
+    // on a URL nothing handles, so it fails silently. When the page is running
+    // natively both actions go through Capacitor's Filesystem and Share plugins
+    // instead. The browser path is untouched.
+    function nativePlatformName() {
+        const cap = window.Capacitor;
+        if (!cap) return null;
+        const flag = cap.isNativePlatform;
+        const native = typeof flag === 'function' ? flag.call(cap) : flag === true;
+        if (!native) return null;
+        const platform = typeof cap.getPlatform === 'function' ? cap.getPlatform() : cap.platform;
+        return platform === 'android' || platform === 'ios' ? platform : 'unknown';
+    }
+
+    function nativePlugin(name) {
+        const cap = window.Capacitor;
+        return (cap && cap.Plugins && cap.Plugins[name]) || null;
+    }
+
+    // Blob -> bare base64 (the Filesystem plugin wants no data: prefix).
+    function blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () => reject(reader.error || new Error('Could not read the GIF data.'));
+            reader.onload = () => {
+                const result = String(reader.result || '');
+                const comma = result.indexOf(',');
+                resolve(comma === -1 ? result : result.slice(comma + 1));
+            };
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    // Writes the GIF into the WebView app's own storage and hands back the file
+    // URI. The cache directory is used for sharing because it always exists and
+    // needs no storage permission; Documents is used for a saved copy.
+    async function nativeWriteGif(fileName, directory) {
+        const filesystem = nativePlugin('Filesystem');
+        if (!filesystem || typeof filesystem.writeFile !== 'function') {
+            throw new Error('The Filesystem plugin is not available in this build.');
+        }
+        const data = await blobToBase64(state.gifBlob);
+        const written = await filesystem.writeFile({
+            path: fileName,
+            data,
+            directory,
+            recursive: true
+        });
+        if (!written || !written.uri) throw new Error('The GIF file was not written.');
+        return written.uri;
+    }
+
+    async function nativeSaveGif(fileName) {
+        return nativeWriteGif(fileName, 'DOCUMENTS');
+    }
+
+    async function nativeShareGif(fileName) {
+        const share = nativePlugin('Share');
+        if (!share || typeof share.share !== 'function') {
+            throw new Error('The Share plugin is not available in this build.');
+        }
+        const uri = await nativeWriteGif(fileName, 'CACHE');
+        await share.share({
+            title: 'E-Bouquet by Owl Watcher',
+            text: state.shareText || '',
+            files: [uri],
+            dialogTitle: 'Share your E-Bouquet'
+        });
+    }
+
     // Hand the actual GIF to the OS share sheet so it can go to any app on the
     // device (messaging, mail, notes, AirDrop...). The file is always the
-    // payload - never a link. Where the sheet is unavailable we fall back to a
-    // plain download instead of opening any third-party service.
+    // payload - never a link. Where the sheet is unavailable we fall back to
+    // a plain download instead of opening any third-party service.
     async function shareGif() {
         const file = gifFile();
         if (!file) return;
 
+        if (nativePlatformName()) {
+            try {
+                await nativeShareGif(file.name);
+                el.sendHint.textContent = 'Shared — the animated GIF went out as an image file.';
+            } catch (err) {
+                if (err && err.name === 'AbortError') return;
+                console.error('E-Bouquet: native share failed.', err);
+                // Only claim a save once the file is really on the device.
+                let saved = false;
+                try {
+                    await nativeSaveGif(file.name);
+                    saved = true;
+                } catch (saveErr) {
+                    console.error('E-Bouquet: native save failed too.', saveErr);
+                }
+                el.sendHint.textContent = saved
+                    ? 'The share sheet could not open, so the GIF was saved to this device instead.'
+                    : 'Sorry, this app could not open the share sheet or save the GIF.';
+            }
+            return;
+        }
+
         if (!canShareFiles(file)) {
-            downloadGif();
-            el.sendHint.textContent = 'This browser cannot open a share sheet, so the GIF was downloaded instead — attach it wherever you like.';
+            const saved = await downloadGif();
+            el.sendHint.textContent = saved
+                ? 'This browser cannot open a share sheet, so the GIF was downloaded instead — attach it wherever you like.'
+                : 'Sorry, this browser could not share or download the GIF.';
             return;
         }
 
@@ -524,8 +635,10 @@
             el.sendHint.textContent = 'Shared — the animated GIF went out as an image file.';
         } catch (err) {
             if (err && err.name === 'AbortError') return;
-            downloadGif();
-            el.sendHint.textContent = 'The share sheet could not open, so the GIF was downloaded instead.';
+            const saved = await downloadGif();
+            el.sendHint.textContent = saved
+                ? 'The share sheet could not open, so the GIF was downloaded instead.'
+                : 'Sorry, the share sheet could not open and the download failed too.';
         }
     }
 
@@ -628,7 +741,8 @@
     window.OwBouquetPage = {
         FLOWERS, MIN_BLOOMS, MAX_BLOOMS, MAX_PER_FLOWER, state,
         addBloom, removeBloom, clearBlooms,
-        totalBlooms, selectedFlowerIds, drawCardTo, downloadGif, shareGif
+        totalBlooms, selectedFlowerIds, drawCardTo, downloadGif, shareGif,
+        nativePlatformName, blobToBase64
     };
 
     init();
