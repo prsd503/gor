@@ -1087,22 +1087,18 @@
     if (owlImg) {
       const cx = width / 2;
       ctx.save();
+      // Render the brand logo exactly as the app shows it: the full badge
+      // fitted into the circle, no zoom and no extra ring. The previous
+      // scale drew it at 2.7x the circle and cropped it, so the GIF crest
+      // did not match the app logo.
       ctx.beginPath();
       ctx.arc(cx, crestCy, owlR, 0, TAU);
       ctx.closePath();
       ctx.clip();
-      const scale = (owlR * 2.7) / owlImg.width;
+      const scale = (owlR * 2) / owlImg.width;
       ctx.drawImage(owlImg, cx - owlImg.width * scale / 2, crestCy - owlImg.height * scale / 2,
         owlImg.width * scale, owlImg.height * scale);
       ctx.restore();
-      const ring = ctx.createLinearGradient(cx - owlR, crestCy - owlR, cx + owlR, crestCy + owlR);
-      ring.addColorStop(0, 'rgba(255, 232, 190, 0.85)');
-      ring.addColorStop(1, 'rgba(255, 196, 128, 0.45)');
-      ctx.strokeStyle = ring;
-      ctx.lineWidth = Math.max(1.2, width * 0.0035);
-      ctx.beginPath();
-      ctx.arc(cx, crestCy, owlR, 0, TAU);
-      ctx.stroke();
     }
 
     // Theme titles vary in length ("Happy Anniversary" is far wider than
