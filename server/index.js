@@ -144,9 +144,13 @@ app.post('/api/auth/token', authLimiter, async (req, res) => {
  * by Owl Watcher staff and redeemed exactly once; the transaction in
  * lib/gift-codes.js is what makes "used once" true rather than hopeful.
  */
-app.post('/api/gift-codes/redeem', requireAuth, async (req, res) => {
+// No sign-in is required to redeem: the code itself is the credential. Nothing
+// is bound to an account, so the unlock lives only in the page session - the
+// visitor can use it immediately, and a refresh locks the premium set again.
+// Traffic is still covered by the /api/ rate limiter and App Check.
+app.post('/api/gift-codes/redeem', async (req, res) => {
     try {
-        const result = await giftCodes.redeem(req.body && req.body.code, req.user.uid);
+        const result = await giftCodes.redeem(req.body && req.body.code, 'guest');
         if (!result.ok) return res.status(result.status).json({ error: result.error });
         return res.json({ unlocked: true, code: result.code, price: result.price });
     } catch (err) {

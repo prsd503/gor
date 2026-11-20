@@ -48,13 +48,20 @@ create codes to `giftCodes/{code}` in Firestore; redemption is a single
 transaction that re-reads the code and flips `used` to true, so two simultaneous
 attempts cannot both win.
 
+**The unlock lasts for the current page session only.** Redeeming opens every
+premium theme and flower immediately, so the bouquet can be built and shared on
+the spot. Nothing is written to `localStorage` or `sessionStorage` and nothing is
+tied to an account, so refreshing or reopening the page locks the premium set
+again — and the spent code cannot be reused. This is stated in the on-page rules.
+
 | Route | Who | Purpose |
 | --- | --- | --- |
-| `POST /api/gift-codes/redeem` | signed-in user | validates + burns a code |
+| `POST /api/gift-codes/redeem` | anyone | validates + burns a code (no sign-in: the code is the credential) |
 | `POST /api/gift-codes` | admin | mints a batch of codes |
 
-Buying a code is a WhatsApp chat with the team (`wa.me`). The bouquet itself is
-never routed through WhatsApp.
+Buying a code is a WhatsApp chat with the team (`wa.me/919033406816`, the same
+number as the site's Contact links). The bouquet itself is never routed through
+WhatsApp.
 
 The page offers two plain actions once the GIF is ready — **Download GIF** saves the file
 to the device, and **Share GIF** hands it to the OS share sheet (`navigator.share` with

@@ -52,8 +52,9 @@
 
     // Where the redeem call goes. Same host as the API the rest of the app uses.
     const API_BASE_URL = 'https://api.owlwatcher.tech/api';
-    // Owl Watcher team's WhatsApp for buying a code.
-    const WA_NUMBER = '919000000000';
+    // Owl Watcher team's WhatsApp for buying a code. Kept in step with the
+    // number used by the Contact links across the site.
+    const WA_NUMBER = '919033406816';
     const CODE_HELP_URL = 'https://wa.me/' + WA_NUMBER +
         '?text=' + encodeURIComponent('Hi Owl Watcher! I would like to buy an E-Bouquet premium code (Rs.30).');
 

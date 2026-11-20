@@ -392,6 +392,33 @@ test('sharing is blocked and explained while a code is still needed', async (t) 
     assert.match(doc.getElementById('sendHint').textContent, /code/i, 'the visitor is told why');
 });
 
+test('the unlock lasts for the page session only and is not persisted', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+
+    // simulate a successful redemption without touching the network
+    page.state.unlocked = true;
+    page.state.unlockedCode = '123456789';
+    page.chooseTheme('birthday');
+    assert.equal(page.needsCode(), false, 'unlocked: premium theme can be shared');
+
+    // Nothing may be written to storage, or a refresh would stay unlocked and
+    // the one-use rule would be easy to dodge.
+    assert.equal(window.localStorage.length, 0, 'no localStorage entries written');
+    assert.equal(window.sessionStorage.length, 0, 'no sessionStorage entries written');
+
+    const app = fs.readFileSync(path.join(root, 'bouquet-app.js'), 'utf8');
+    assert.ok(!/localStorage\.setItem|sessionStorage\.setItem/.test(app),
+        'the app never persists an unlock');
+
+    // A fresh page (a reload) starts locked again.
+    const fresh = pageDom(t);
+    await settle();
+    assert.equal(fresh.window.OwBouquetPage.state.unlocked, false, 'a reload starts locked');
+    assert.equal(fresh.window.OwBouquetPage.needsCode(), false, 'free theme still needs nothing');
+});
+
 test('the price and rules panel opens on click and hides again', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
@@ -414,6 +441,8 @@ test('the price and rules panel opens on click and hides again', async (t) => {
     const text = details.textContent;
     assert.match(text, /30/, 'shows the price');
     assert.match(text, /one/i, 'states the one bouquet rule');
+    assert.match(text, /refresh/i, 'warns that a refresh locks it again');
+    assert.match(text, /this page only/i, 'says the unlock is page-session only');
 });
 
 // tiny presence helper so the markup test stays readable

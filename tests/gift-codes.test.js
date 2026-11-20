@@ -113,9 +113,15 @@ test('unknown and malformed codes are rejected clearly', async () => {
     assert.equal(malformed.ok, false);
     assert.equal(malformed.status, 400);
 
-    const anonymous = await svc.redeem(CODE, null);
-    assert.equal(anonymous.ok, false);
-    assert.equal(anonymous.status, 401);
+});
+
+test('redemption needs no account: the code is the credential', async () => {
+    const db = fakeDb({ [CODE]: { code: CODE, used: false } });
+    const result = await service(db).redeem(CODE);
+
+    assert.equal(result.ok, true, 'redeems with no user at all');
+    assert.equal(db.store.get(CODE).used, true);
+    assert.equal(db.store.get(CODE).usedBy, 'guest', 'recorded for audit only');
 });
 
 test('a disabled code cannot be redeemed', async () => {

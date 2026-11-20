@@ -37,16 +37,19 @@ function createGiftCodeService(options) {
         return db.collection(COLLECTION);
     }
 
-    /* Redeem a code for a user. Returns a result object instead of throwing so
-     * the route can map it to a status code without string matching. */
-    async function redeem(rawCode, userId) {
+    /* Redeem a code. Returns a result object instead of throwing so the route
+     * can map it to a status code without string matching.
+     *
+     * No account is involved: the code itself is the credential. The unlock is
+     * deliberately not persisted anywhere, so it lasts only for the page session
+     * that redeemed it. `redeemedBy` is recorded purely for support/audit.
+     */
+    async function redeem(rawCode, redeemedBy) {
         const code = normalizeCode(rawCode);
         if (!isValidCode(code)) {
             return { ok: false, status: 400, error: 'Enter the 9 digit code exactly as you received it.' };
         }
-        if (!userId) {
-            return { ok: false, status: 401, error: 'Sign in before redeeming a code.' };
-        }
+        const usedBy = redeemedBy || 'guest';
 
         const ref = collection().doc(code);
 
@@ -66,7 +69,7 @@ function createGiftCodeService(options) {
             const updates = {
                 used: true,
                 usedAt: now(),
-                usedBy: userId
+                usedBy: usedBy
             };
             if (FieldValue && FieldValue.serverTimestamp) {
                 updates.usedAtServer = FieldValue.serverTimestamp();
