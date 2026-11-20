@@ -85,7 +85,6 @@
         shareResult: document.getElementById('shareResult'),
         gifPreview: document.getElementById('gifPreview'),
         gifMeta: document.getElementById('gifMeta'),
-        downloadGifBtn: document.getElementById('downloadGifBtn'),
         shareGifBtn: document.getElementById('shareGifBtn'),
         sendHint: document.getElementById('sendHint'),
         //gifLink: document.getElementById('gifLink'),
@@ -476,7 +475,7 @@
             payload.from ? '— ' + payload.from : ''
         ].filter(Boolean).join('\n');
         state.shareText = text;
-        el.sendHint.textContent = 'Download the file, or share it straight into a chat.';
+        el.sendHint.textContent = 'Share it straight into a chat.';
     }
 
     function gifFile() {
@@ -704,7 +703,6 @@
             invalidateExport();
         });
         el.createBtn.addEventListener('click', createGif);
-        el.downloadGifBtn.addEventListener('click', downloadGif);
         el.shareGifBtn.addEventListener('click', shareGif);
         //el.copyLink.addEventListener('click', copyLink);
         document.addEventListener('visibilitychange', () => { if (!document.hidden) drawPreview(); });

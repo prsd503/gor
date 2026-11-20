@@ -335,11 +335,10 @@
             <img id="gifPreview" alt="Your animated E-Bouquet">
             <p class="small muted" id="gifMeta" style="margin: 0 0 12px;"></p>
             <div class="share-actions">
-                <button type="button" class="btn-block" id="downloadGifBtn">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/></svg>
-                    Download GIF
-                </button>
-                <button type="button" class="btn-block btn-outline" id="shareGifBtn">
+                <!-- Sharing is the only action now. The GIF is handed to the OS
+                     share sheet; if that is unavailable it is saved to the
+                     device instead, so nothing is lost. -->
+                <button type="button" class="btn-block" id="shareGifBtn">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M5 14v5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5"/></svg>
                     Share GIF
                 </button>
