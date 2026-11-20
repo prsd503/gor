@@ -44,71 +44,83 @@
   // same deterministic code path, so preview and export always agree.
   const THEMES = [
     {
+      // The original look, untouched: moon, stars, shooting star.
       id: 'night', name: 'Midnight Sky', tagline: 'the original', free: true,
       sky: SKY, halo: 'rgba(255, 196, 132, 0.50)', haloMid: 'rgba(255, 172, 132, 0.20)',
-      glow: 'rgba(255, 178, 110, 0.55)', starWarm: true, stars: 170
+      glow: 'rgba(255, 178, 110, 0.55)', starWarm: true, stars: 170, moon: true
     },
     {
       id: 'birthday', name: 'Birthday', tagline: 'make a wish', free: false,
-      sky: { top: '#4a1d6b', mid: '#a63d7a', low: '#f2843f', floor: '#5a2140' },
-      halo: 'rgba(255, 214, 120, 0.55)', haloMid: 'rgba(255, 170, 90, 0.24)',
-      glow: 'rgba(255, 205, 120, 0.62)', starWarm: true, stars: 190,
+      sky: { top: '#ff5f9e', mid: '#ff9a3c', low: '#ffd23f', floor: '#a8255f' },
+      halo: 'rgba(255, 245, 190, 0.55)', haloMid: 'rgba(255, 210, 120, 0.26)',
+      glow: 'rgba(255, 230, 150, 0.68)', stars: 0, moon: false,
+      bg: 'confetti', colors: ['#ffffff', '#ffd23f', '#4ecdc4', '#c77dff', '#ff6b9d'],
       title: 'Happy Birthday', badge: 'a little confetti for you'
     },
     {
       id: 'anniversary', name: 'Anniversary', tagline: 'years of us', free: false,
-      sky: { top: '#3a0f2e', mid: '#8e2350', low: '#d4677a', floor: '#3d1128' },
-      halo: 'rgba(255, 190, 196, 0.52)', haloMid: 'rgba(255, 140, 160, 0.22)',
-      glow: 'rgba(255, 186, 196, 0.60)', starWarm: true, stars: 175,
+      sky: { top: '#7b1046', mid: '#c9184a', low: '#ff758f', floor: '#4a0b2c' },
+      halo: 'rgba(255, 214, 224, 0.50)', haloMid: 'rgba(255, 160, 185, 0.24)',
+      glow: 'rgba(255, 200, 215, 0.62)', stars: 0, moon: false,
+      bg: 'hearts', colors: ['#ffd9e2', '#ff8fa8'],
       title: 'Happy Anniversary', badge: 'for every year together'
     },
     {
       id: 'champion', name: 'Champion', tagline: 'you won', free: false,
-      sky: { top: '#0c2b23', mid: '#14654c', low: '#c9a227', floor: '#0a231c' },
-      halo: 'rgba(255, 220, 120, 0.52)', haloMid: 'rgba(240, 200, 90, 0.22)',
-      glow: 'rgba(255, 224, 130, 0.60)', starWarm: true, stars: 200,
+      sky: { top: '#0b3d2e', mid: '#12805c', low: '#d4af37', floor: '#072a20' },
+      halo: 'rgba(255, 232, 150, 0.55)', haloMid: 'rgba(220, 196, 96, 0.24)',
+      glow: 'rgba(255, 232, 140, 0.66)', stars: 0, moon: false,
+      bg: 'rays',
       title: 'Champion', badge: 'first place, always'
     },
     {
       id: 'promotion', name: 'Promotion', tagline: 'next level', free: false,
-      sky: { top: '#0b1a3a', mid: '#1d4a8a', low: '#c99a3b', floor: '#0a1730' },
-      halo: 'rgba(255, 226, 150, 0.48)', haloMid: 'rgba(220, 190, 110, 0.20)',
-      glow: 'rgba(255, 222, 140, 0.58)', starWarm: true, stars: 185,
+      sky: { top: '#0a1b4a', mid: '#1e5fa8', low: '#f0b429', floor: '#081334' },
+      halo: 'rgba(255, 226, 150, 0.50)', haloMid: 'rgba(220, 190, 110, 0.22)',
+      glow: 'rgba(255, 222, 140, 0.62)', stars: 0, moon: false,
+      bg: 'confetti', colors: ['#ffe066', '#ffffff', '#74c0fc', '#ffd8a8'],
       title: 'Congratulations', badge: 'a well earned promotion'
     },
     {
       id: 'wedding', name: 'Wedding', tagline: 'just married', free: false,
-      sky: { top: '#2c2438', mid: '#6b5566', low: '#e6cfc2', floor: '#332934' },
-      halo: 'rgba(255, 240, 230, 0.55)', haloMid: 'rgba(255, 220, 210, 0.24)',
-      glow: 'rgba(255, 236, 224, 0.62)', starWarm: false, stars: 150,
+      sky: { top: '#f6e7de', mid: '#f3d3c6', low: '#e9b8a8', floor: '#d8a294' },
+      halo: 'rgba(255, 255, 255, 0.68)', haloMid: 'rgba(255, 245, 235, 0.40)',
+      glow: 'rgba(255, 255, 255, 0.80)', stars: 0, moon: false,
+      bg: 'petals', colors: ['#ffffff', '#ffc9d8', '#e8a48f'],
+      ink: '#6b2436', inkSub: 'rgba(107, 36, 54, 0.78)', inkRule: 'rgba(107, 36, 54, 0.34)',
       title: 'Just Married', badge: 'two hearts, one home'
     },
     {
       id: 'romance', name: 'Romance', tagline: 'for my love', free: false,
-      sky: { top: '#2a0a1c', mid: '#7a1738', low: '#e0674f', floor: '#2b0b1a' },
-      halo: 'rgba(255, 168, 150, 0.52)', haloMid: 'rgba(255, 120, 110, 0.22)',
-      glow: 'rgba(255, 172, 150, 0.60)', starWarm: true, stars: 170,
+      sky: { top: '#4a0d2c', mid: '#a11248', low: '#ff6b7a', floor: '#2c0719' },
+      halo: 'rgba(255, 180, 170, 0.52)', haloMid: 'rgba(255, 130, 120, 0.24)',
+      glow: 'rgba(255, 180, 165, 0.62)', stars: 0, moon: false,
+      bg: 'bokeh', colors: ['#ffc2c7', '#ff8f9c', '#ffe3d8'],
       title: 'For You', badge: 'with all my love'
     },
     {
       id: 'newbaby', name: 'New Baby', tagline: 'hello little one', free: false,
-      sky: { top: '#223a4a', mid: '#5f93a6', low: '#f2d7c2', floor: '#21363f' },
-      halo: 'rgba(255, 236, 214, 0.52)', haloMid: 'rgba(255, 216, 200, 0.22)',
-      glow: 'rgba(255, 240, 220, 0.60)', starWarm: true, stars: 160,
+      sky: { top: '#bfe9f0', mid: '#f7d9e3', low: '#ffe9c9', floor: '#a9d6e0' },
+      halo: 'rgba(255, 255, 255, 0.66)', haloMid: 'rgba(255, 246, 226, 0.38)',
+      glow: 'rgba(255, 255, 245, 0.78)', stars: 0, moon: false,
+      bg: 'bokeh', colors: ['#ffffff', '#8fdce8', '#ffb3cc', '#ffd98a'],
+      ink: '#1f4a5a', inkSub: 'rgba(31, 74, 90, 0.78)', inkRule: 'rgba(31, 74, 90, 0.32)',
       title: 'Welcome Little One', badge: 'a new star is here'
     },
     {
       id: 'farewell', name: 'Farewell', tagline: 'good luck', free: false,
-      sky: { top: '#141c33', mid: '#334a6b', low: '#8fa4b5', floor: '#121a2c' },
-      halo: 'rgba(214, 230, 240, 0.48)', haloMid: 'rgba(180, 204, 220, 0.20)',
-      glow: 'rgba(214, 234, 244, 0.55)', starWarm: false, stars: 165,
+      sky: { top: '#123049', mid: '#2e6f8e', low: '#8fc9d9', floor: '#0d2537' },
+      halo: 'rgba(214, 240, 250, 0.48)', haloMid: 'rgba(180, 220, 235, 0.22)',
+      glow: 'rgba(214, 240, 250, 0.58)', stars: 0, moon: false,
+      bg: 'rings', ripple: '#d6f0fa',
       title: 'Good Luck', badge: 'until we meet again'
     },
     {
       id: 'diwali', name: 'Diwali', tagline: 'festival of lights', free: false,
-      sky: { top: '#2b1040', mid: '#8f1f2e', low: '#f4a02a', floor: '#33102a' },
-      halo: 'rgba(255, 205, 110, 0.58)', haloMid: 'rgba(255, 160, 70, 0.26)',
-      glow: 'rgba(255, 210, 120, 0.64)', starWarm: true, stars: 210,
+      sky: { top: '#2b0a3d', mid: '#8e1240', low: '#f4a02a', floor: '#24062f' },
+      halo: 'rgba(255, 205, 110, 0.60)', haloMid: 'rgba(255, 160, 70, 0.28)',
+      glow: 'rgba(255, 215, 125, 0.70)', stars: 0, moon: false,
+      bg: 'diyas',
       title: 'Happy Diwali', badge: 'light over darkness'
     }
   ];
@@ -149,6 +161,9 @@
     ctx.fillStyle = halo;
     ctx.fillRect(0, 0, w, h);
 
+  }
+
+  function paintMoon(ctx, w, h) {
     const mx = w * 0.79, my = h * 0.115, mr = h * 0.042;
     const moon = ctx.createRadialGradient(mx, my, mr * 0.3, mx, my, mr * 3.2);
     moon.addColorStop(0, 'rgba(255, 248, 226, 0.98)');
@@ -167,6 +182,261 @@
     ctx.arc(mx - mr * 0.25, my - mr * 0.2, mr * 0.28, 0, TAU);
     ctx.arc(mx + mr * 0.3, my + mr * 0.25, mr * 0.2, 0, TAU);
     ctx.fill();
+  }
+
+  /* ---------------------------------------------------------- backgrounds ---
+   * Each premium occasion gets its own backdrop instead of the night sky. They
+   * are all drawn from a seeded PRNG and never depend on `time`, except where a
+   * slow twinkle is wanted, so the preview and the exported GIF agree.
+   */
+  function bgConfetti(ctx, w, h, t, time) {
+    const rnd = makeRandom(hashString('confetti-' + (t.id || 'x')));
+    const count = 70;
+    for (let i = 0; i < count; i++) {
+      const x = rnd() * w;
+      const y = rnd() * h;
+      const size = lerp(w * 0.006, w * 0.020, rnd());
+      const spin = rnd() * TAU + time * lerp(0.2, 0.9, rnd());
+      const hue = t.colors ? t.colors[i % t.colors.length] : '#ffd166';
+      ctx.save();
+      ctx.globalAlpha = lerp(0.35, 0.9, rnd());
+      ctx.translate(x, y);
+      ctx.rotate(spin);
+      ctx.fillStyle = hue;
+      if (rnd() > 0.45) ctx.fillRect(-size / 2, -size / 4, size, size / 2);
+      else { ctx.beginPath(); ctx.arc(0, 0, size * 0.42, 0, TAU); ctx.fill(); }
+      ctx.restore();
+    }
+    // rising balloons, drawn as translucent ovals
+    for (let i = 0; i < 5; i++) {
+      const bx = w * (0.10 + i * 0.19) + Math.sin(i * 2.1) * w * 0.03;
+      const by = h * (0.30 - ((time * 0.03 + i * 0.17) % 0.55)) + Math.sin(time * 0.6 + i) * h * 0.008;
+      const r = w * 0.052;
+      const hue = t.colors ? t.colors[i % t.colors.length] : '#ff9f68';
+      ctx.save();
+      ctx.globalAlpha = 0.30;
+      ctx.fillStyle = hue;
+      ctx.beginPath();
+      ctx.ellipse(bx, by, r * 0.86, r, 0, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = hue;
+      ctx.lineWidth = Math.max(1, w * 0.002);
+      ctx.beginPath();
+      ctx.moveTo(bx, by + r);
+      ctx.quadraticCurveTo(bx + r * 0.3, by + r * 1.9, bx - r * 0.1, by + r * 2.6);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function bgHearts(ctx, w, h, t, time) {
+    const rnd = makeRandom(hashString('hearts-' + (t.id || 'x')));
+    const heart = (cx, cy, s) => {
+      ctx.beginPath();
+      ctx.moveTo(cx, cy + s * 0.35);
+      ctx.bezierCurveTo(cx - s, cy - s * 0.45, cx - s * 0.45, cy - s * 1.05, cx, cy - s * 0.35);
+      ctx.bezierCurveTo(cx + s * 0.45, cy - s * 1.05, cx + s, cy - s * 0.45, cx, cy + s * 0.35);
+      ctx.closePath();
+    };
+    for (let i = 0; i < 30; i++) {
+      const x = rnd() * w;
+      const y = rnd() * h;
+      const s = lerp(w * 0.016, w * 0.058, rnd());
+      const pulse = 0.75 + 0.25 * Math.sin(time * 1.1 + rnd() * TAU);
+      ctx.save();
+      ctx.globalAlpha = lerp(0.22, 0.52, rnd()) * pulse;
+      ctx.fillStyle = rnd() > 0.5 ? '#ffd9e2' : '#ff8fa8';
+      heart(x, y, s);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function bgRays(ctx, w, h, t, time) {
+    // Rotating sunburst behind the blooms - gold light on a deep ground.
+    const cx = w * 0.5, cy = h * 0.46;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(time * 0.06);
+    const rays = 22;
+    for (let i = 0; i < rays; i++) {
+      ctx.save();
+      ctx.rotate((i / rays) * TAU);
+      const grad = ctx.createLinearGradient(0, 0, 0, -h * 0.9);
+      grad.addColorStop(0, 'rgba(255, 214, 120, 0.30)');
+      grad.addColorStop(1, 'rgba(255, 214, 120, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-w * 0.055, -h * 0.95);
+      ctx.lineTo(w * 0.055, -h * 0.95);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+    // laurel-ish arc of small leaves around the dome
+    const rnd = makeRandom(hashString('laurel-' + (t.id || 'x')));
+    for (let i = 0; i < 22; i++) {
+      const a = -Math.PI * 0.92 + (i / 21) * Math.PI * 0.84;
+      const r = Math.min(w, h) * 0.42;
+      const lx = cx + Math.cos(a) * r;
+      const ly = cy + Math.sin(a) * r * 0.82;
+      ctx.save();
+      ctx.translate(lx, ly);
+      ctx.rotate(a + Math.PI / 2);
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = i % 2 ? '#ffd98a' : '#b8d98a';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, w * 0.012, w * 0.028, 0, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+      rnd();
+    }
+  }
+
+  function bgBokeh(ctx, w, h, t, time) {
+    const rnd = makeRandom(hashString('bokeh-' + (t.id || 'x')));
+    for (let i = 0; i < 30; i++) {
+      const x = rnd() * w;
+      const y = rnd() * h;
+      const r = lerp(w * 0.016, w * 0.090, rnd());
+      const drift = Math.sin(time * 0.5 + rnd() * TAU) * w * 0.012;
+      const hue = t.colors ? t.colors[i % t.colors.length] : '#ffe6d0';
+      ctx.save();
+      ctx.globalAlpha = lerp(0.18, 0.44, rnd());
+      ctx.fillStyle = hue;
+      ctx.beginPath();
+      ctx.arc(x + drift, y, r, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function bgPetals(ctx, w, h, t, time) {
+    // Softly falling petals for the wedding / new baby sets.
+    const rnd = makeRandom(hashString('petals-' + (t.id || 'x')));
+    for (let i = 0; i < 34; i++) {
+      const base = rnd();
+      const x = base * w + Math.sin(time * 0.4 + base * TAU) * w * 0.05;
+      const y = ((rnd() + time * 0.018) % 1) * h;
+      const s = lerp(w * 0.008, w * 0.022, rnd());
+      const hue = t.colors ? t.colors[i % t.colors.length] : '#ffe1e8';
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(time * 0.4 + base * TAU);
+      ctx.globalAlpha = lerp(0.34, 0.70, rnd());
+      ctx.fillStyle = hue;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, s, s * 0.55, 0, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function bgDiyas(ctx, w, h, t, time) {
+    // Diwali: a garland of warm lights swagged across the top, plus small lamps
+    // in the bottom corners. A row along the bottom edge would sit behind the
+    // message panel, so the garland carries the motif instead.
+    const bulbs = 13;
+    const sag = h * 0.045;
+    const lineY = h * 0.045;
+    const px = (i) => (i / (bulbs - 1)) * w;
+    const py = (i) => {
+      const u = i / (bulbs - 1);
+      return lineY + Math.sin(u * Math.PI) * sag;
+    };
+
+    // the wire
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 226, 170, 0.30)';
+    ctx.lineWidth = Math.max(1, w * 0.0025);
+    ctx.beginPath();
+    ctx.moveTo(0, py(0));
+    for (let i = 1; i < bulbs; i++) ctx.lineTo(px(i), py(i));
+    ctx.stroke();
+    ctx.restore();
+
+    for (let i = 0; i < bulbs; i++) {
+      const x = px(i);
+      const y = py(i);
+      const flick = 0.78 + 0.22 * Math.sin(time * 2.6 + i * 1.7);
+      const hue = i % 3 === 0 ? 'rgba(255, 238, 176,' : i % 3 === 1 ? 'rgba(255, 196, 92,' : 'rgba(255, 168, 74,';
+      const r = w * 0.016;
+
+      const glow = ctx.createRadialGradient(x, y + r * 1.4, 1, x, y + r * 1.4, r * 4.2);
+      glow.addColorStop(0, hue + (0.55 * flick).toFixed(3) + ')');
+      glow.addColorStop(1, hue + '0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(x - r * 4.4, y - r * 2.6, r * 8.8, r * 8.8);
+
+      // shade
+      ctx.fillStyle = 'rgba(214, 140, 56, ' + (0.75 * flick).toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.moveTo(x - r, y);
+      ctx.quadraticCurveTo(x, y + r * 2.2, x + r, y);
+      ctx.closePath();
+      ctx.fill();
+
+      // filament
+      ctx.fillStyle = 'rgba(255, 246, 214, ' + flick.toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.arc(x, y + r * 0.95, r * 0.30, 0, TAU);
+      ctx.fill();
+    }
+
+    // corner lamps, clear of the message panel
+    for (const cx of [w * 0.075, w * 0.925]) {
+      const cy = h * 0.955;
+      const flick = 0.8 + 0.2 * Math.sin(time * 3.1 + cx);
+      const glow = ctx.createRadialGradient(cx, cy - h * 0.02, 1, cx, cy - h * 0.02, w * 0.075);
+      glow.addColorStop(0, 'rgba(255, 206, 110, ' + (0.70 * flick).toFixed(3) + ')');
+      glow.addColorStop(1, 'rgba(255, 170, 70, 0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(cx - w * 0.08, cy - h * 0.09, w * 0.16, h * 0.14);
+      ctx.fillStyle = '#c8752e';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, w * 0.022, w * 0.011, 0, 0, Math.PI);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255, 236, 170, ' + flick.toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy - h * 0.010, w * 0.005, w * 0.011, 0, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  function bgRings(ctx, w, h, t, time) {
+    // Fine concentric ripples, for the calm / farewell sets.
+    const cx = w * 0.5, cy = h * 0.42;
+    ctx.save();
+    for (let i = 0; i < 7; i++) {
+      const phase = ((time * 0.10 + i / 7) % 1);
+      ctx.globalAlpha = 0.30 * (1 - phase);
+      ctx.strokeStyle = t.ripple || '#dbe9f2';
+      ctx.lineWidth = Math.max(1.4, w * 0.005);
+      ctx.beginPath();
+      ctx.arc(cx, cy, w * 0.10 + phase * w * 0.55, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  const BACKGROUNDS = {
+    confetti: bgConfetti,
+    hearts: bgHearts,
+    rays: bgRays,
+    bokeh: bgBokeh,
+    petals: bgPetals,
+    diyas: bgDiyas,
+    rings: bgRings
+  };
+
+  function paintBackground(ctx, w, h, theme, time, reduceMotion) {
+    const t = theme || THEMES[0];
+    paintSky(ctx, w, h, t);
+    const fn = BACKGROUNDS[t.bg];
+    if (fn) fn(ctx, w, h, t, reduceMotion ? 0 : (time || 0));
   }
 
   function buildStars(count, seed, w, h) {
@@ -752,9 +1022,13 @@
     const theme = themeById(opts.theme);
     const stars = opts.stars || buildStars(theme.stars || 170, opts.seed || 7, width, height);
 
-    paintSky(ctx, width, height, theme);
-    paintStars(ctx, stars, time, reduceMotion);
-    paintShootingStar(ctx, width, height, time, reduceMotion);
+    paintBackground(ctx, width, height, theme, time, reduceMotion);
+    // Stars and the shooting star are the night theme's signature; a premium
+    // theme brings its own backdrop instead of borrowing them.
+    if (theme.stars !== 0) {
+      paintStars(ctx, stars, time, reduceMotion);
+      paintShootingStar(ctx, width, height, time, reduceMotion);
+    }
 
     // ---- header block
     const owlR = width * 0.048;
@@ -841,25 +1115,26 @@
       ctx.font = titleFont(size);
     }
 
-    ctx.fillStyle = '#fff5e6';
+    // Light themes need dark ink or the title disappears into the backdrop.
+    ctx.fillStyle = t.ink || '#fff5e6';
     ctx.shadowColor = t.glow || 'rgba(255, 178, 110, 0.55)';
-    ctx.shadowBlur = width * 0.05;
+    ctx.shadowBlur = t.ink ? width * 0.012 : width * 0.05;
     ctx.fillText(title, width / 2, titleY);
     ctx.shadowBlur = 0;
 
-    ctx.fillStyle = 'rgba(255, 226, 188, 0.90)';
+    ctx.fillStyle = t.inkSub || 'rgba(255, 226, 188, 0.90)';
     ctx.font = CAPS(Math.round(width * 0.0255));
     drawSpaced(ctx, (t.badge || 'BY OWL WATCHER'), width / 2, subY, width * 0.0072);
 
     // little sprig ornaments either side of the rule
-    ctx.strokeStyle = 'rgba(255, 220, 176, 0.34)';
+    ctx.strokeStyle = t.inkRule || 'rgba(255, 220, 176, 0.34)';
     ctx.lineWidth = Math.max(1, width * 0.0018);
     const half = width * 0.10;
     ctx.beginPath();
     ctx.moveTo(width / 2 - half, ruleY);
     ctx.lineTo(width / 2 + half, ruleY);
     ctx.stroke();
-    ctx.fillStyle = 'rgba(255, 220, 176, 0.5)';
+    ctx.fillStyle = t.inkRule || 'rgba(255, 220, 176, 0.5)';
     for (const dir of [-1, 1]) {
       ctx.beginPath();
       ctx.arc(width / 2 + dir * half, ruleY, width * 0.0035, 0, TAU);
@@ -965,7 +1240,7 @@
 
   return {
     TAU, clamp, lerp, makeRandom, hashString, roundedRect,
-    SKY, THEMES, themeById, paintSky, buildStars, paintStars, paintShootingStar,
+    SKY, THEMES, themeById, paintSky, paintBackground, BACKGROUNDS, buildStars, paintStars, paintShootingStar,
     drawStar, drawLeaf, drawFern, drawEucalyptus, drawWrap,
     layoutBouquet, buildGreenery, drawFoliageItem, drawBouquet, drawBloom,
     measureMessage, drawCard, drawHeader, drawMessage, drawFooter, drawWatermark, drawBouquetPreviewMark, wrapLines, drawSpaced, SCRIPT, CAPS
