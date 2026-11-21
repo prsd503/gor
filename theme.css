@@ -201,7 +201,7 @@ img { max-width: 100%; -webkit-user-drag: none; }
         bottom: 0;
         z-index: 60;
         display: grid;
-        grid-template-columns: repeat(5, 1fr);
+        grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
         gap: 0;
         height: calc(var(--ow-tabbar-h) + env(safe-area-inset-bottom, 0px));
         padding: 6px 4px env(safe-area-inset-bottom, 0px);
