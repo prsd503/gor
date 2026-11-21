@@ -269,6 +269,14 @@
         const theme = themeById(id);
         state.theme = id;
         syncThemeGrid();
+
+        // The note belongs to the free experience. Selecting a locked
+        // premium theme wipes whatever was typed on the free theme, so a
+        // visitor can never keep a note into a theme they can't yet share.
+        if (!theme.free && !state.unlocked) {
+            clearNote();
+        }
+
         syncMessageLock();
         drawPreview();
         invalidateExport();
@@ -281,6 +289,17 @@
         } else {
             setPremiumStatus('', null);
         }
+    }
+
+    // Reset the typed note and signature back to empty, reflecting it in
+    // the fields, the counter and the preview.
+    function clearNote() {
+        state.message = '';
+        state.from = '';
+        if (el.message) el.message.value = '';
+        if (el.from) el.from.value = '';
+        if (el.charCount) el.charCount.textContent = '0 / ' + MAX_MESSAGE;
+        if (el.charCount) el.charCount.classList.remove('is-near');
     }
 
     function renderFlowerGrid() {

@@ -368,6 +368,43 @@ test('the note can only be typed on the free theme or after a code is redeemed',
     assert.equal(hint.hidden, true);
 });
 
+test('a note typed on the free theme is wiped when a premium theme is picked', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const msg = doc.getElementById('messageInput');
+    const from = doc.getElementById('fromInput');
+
+    // type a note and signature on the free theme
+    assert.equal(page.state.theme, 'night');
+    msg.value = 'A free-theme note';
+    from.value = 'Someone';
+    page.state.message = msg.value;
+    page.state.from = from.value;
+    assert.equal(page.state.message.length > 0, true, 'note is present on the free theme');
+
+    // selecting a locked premium theme wipes both fields
+    page.chooseTheme('birthday');
+    assert.equal(page.state.message, '', 'the note is wiped');
+    assert.equal(page.state.from, '', 'the signature is wiped');
+    assert.equal(msg.value, '', 'the message field is cleared');
+    assert.equal(from.value, '', 'the signature field is cleared');
+    assert.equal(doc.getElementById('charCount').textContent, '0 / 220', 'the counter resets');
+
+    // going back to the free theme leaves it empty (nothing to restore)
+    page.chooseTheme('night');
+    assert.equal(page.state.message, '');
+
+    // an unlocked premium theme keeps a note that was typed after unlock
+    page.chooseTheme('birthday');
+    page.state.unlocked = true;
+    page.syncMessageLock();
+    msg.value = 'An unlocked note';
+    page.state.message = msg.value;
+    page.chooseTheme('wedding'); // still unlocked -> no wipe
+    assert.equal(page.state.message, 'An unlocked note', 'unlocked premium keeps the note');
+});
+
 test('the ten original flowers stay free and premium ones stay locked', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
