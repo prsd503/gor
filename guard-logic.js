@@ -1,7 +1,7 @@
 import { auth, authenticatedFetch } from "./app.js";
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
-const API_BASE = "https://api.owlwatcher.tech/api";
+const API_BASE = (window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api');
 const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 let assignedSociety = "";
 

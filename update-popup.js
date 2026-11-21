@@ -7,7 +7,7 @@
 
     var CONFIG_PATH = ['app_config', 'appVersion'];
     // Backend read uses the Admin SDK, so it works even when native App Check attestation fails.
-    var VERSION_API = 'https://api.owlwatcher.tech/api/app-version';
+    var VERSION_API = (globalThis.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api') + '/app-version';
     var CHECK_INTERVAL = 60000;
     var REQUEST_TIMEOUT = 10000;
     var DISMISSAL_KEY_PREFIX = 'owl-update-popup:dismissed:';
@@ -433,12 +433,19 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
                 headers: { 'Accept': 'application/json', 'ngrok-skip-browser-warning': 'true' },
                 cache: 'no-store'
             }).then(function (response) {
-                if (!response.ok) throw new Error('Version API returned ' + response.status);
+                if (!response.ok) {
+                    var failure = new Error('Version API returned ' + response.status);
+                    failure.quotaDrain = response.headers && response.headers.get('X-Owl-Drain') === '1';
+                    throw failure;
+                }
                 return response.json();
             }).then(function (data) {
                 if (!data || typeof data !== 'object') throw new Error('Invalid version API response.');
                 return data;
             }).catch(function (error) {
+                // The managed API already tried the trusted fallback. Never
+                // bypass its quota guard by reading Firestore directly.
+                if (win.OWL_API || error.quotaDrain) throw error;
                 if (win.console && typeof win.console.warn === 'function') {
                     win.console.warn('[update-popup] Version API unavailable, using Firestore:', error && error.message ? error.message : error);
                 }

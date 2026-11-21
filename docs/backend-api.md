@@ -1,3 +1,10 @@
+> **Deployment update:** Hostinger is no longer the default API target. See
+> [Firebase deployment and quota cutoff](deployment.md) and
+> [MacBook testing](macbook-testing.md). `/api/health` and `/api/quota` expose
+> diagnostics. A drained API returns 503 with `X-Owl-Drain: 1` and
+> `code: "quota-threshold-reached"` (or `quota-monitoring-unavailable`).
+> The normal API/Auth/App Check contracts below remain in place.
+
 # Owl Watcher backend API
 
 Backend code lives in `server/`. It is deployed to the API host (`api.owlwatcher.tech`), separately from the static frontend.
