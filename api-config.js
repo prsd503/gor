@@ -66,7 +66,7 @@
     // Never send credentials to an arbitrary endpoint supplied by a URL.
     var requestedOverride = overrideFromLocation();
     var trustedConfig = configured();
-    var pageOverride = [trustedConfig.primary].concat(trustedConfig.fallbacks).indexOf(requestedOverride) !== -1 ? requestedOverride : null;
+    var pageOverride = [trustedConfig.primary].concat(trustedConfig.fallbacks, trustedConfig.testBases).indexOf(requestedOverride) !== -1 ? requestedOverride : null;
 
     function configured() {
         var config = global.OWL_API_CONFIG || {};
@@ -77,21 +77,33 @@
             var base = validBase(candidate);
             if (base && fallbacks.indexOf(base) === -1) fallbacks.push(base);
         });
-        return { primary: primary, fallbacks: fallbacks };
+        // Test endpoints require explicit opt-in and are not normal candidates.
+        var testBases = [];
+        (Array.isArray(config.testBases) ? config.testBases : []).forEach(function (candidate) {
+            var base = validBase(candidate);
+            if (base && testBases.indexOf(base) === -1) testBases.push(base);
+        });
+        return { primary: primary, fallbacks: fallbacks, testBases: testBases };
     }
 
     function bases() {
         var config = configured();
-        var list = [];
-        if (pageOverride) list.push(pageOverride);
-        list.push(config.primary);
+        // An explicit page-load override is pinned: a preview failure must not
+        // replay operations against the real API, or vice versa.
+        if (pageOverride) return [pageOverride];
+        var list = [config.primary];
         config.fallbacks.forEach(function (base) { if (list.indexOf(base) === -1) list.push(base); });
         return list;
     }
 
     function knownBases() {
         var all = LEGACY_BASES.slice();
-        bases().forEach(function (base) { if (all.indexOf(base) === -1) all.push(base); });
+        var config = configured();
+        // Recognize ordinary API literals even when the active page is pinned
+        // to a test endpoint. Unselected testBases are not automatic candidates.
+        [config.primary].concat(config.fallbacks, bases()).forEach(function (base) {
+            if (all.indexOf(base) === -1) all.push(base);
+        });
         return all;
     }
 
@@ -124,6 +136,7 @@
     }
 
     function markDrained(base, response) {
+        if (pageOverride) return; // A one-page test never changes normal routing.
         var retry = response && response.headers && response.headers.get('Retry-After');
         var seconds = Number(retry);
         var until = seconds > 0 ? Date.now() + seconds * 1000 : Date.parse(retry);
@@ -141,6 +154,7 @@
     }
 
     function activeBase() {
+        if (pageOverride) return pageOverride;
         var list = bases();
         var stored = readJson(ACTIVE_KEY);
         if (stored && typeof stored === 'object' && list.indexOf(stored.base) !== -1 &&
@@ -154,6 +168,7 @@
     }
 
     function rememberActive(base) {
+        if (pageOverride) return;
         var stored = readJson(ACTIVE_KEY);
         // Don't extend stickiness on every success: periodically retry primary.
         if (!stored || stored.base !== base || Date.now() - Number(stored.at) >= DRAIN_COOLDOWN_MS) {
@@ -276,7 +291,8 @@
             bases: bases(),
             active: activeBase(),
             drained: drainedMap(),
-            pageOverride: pageOverride
+            pageOverride: pageOverride,
+            testBases: configured().testBases
         };
     }
 
