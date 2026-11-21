@@ -42,33 +42,53 @@
       -webkit-overflow-scrolling: touch;
     }
 
-    .fixed-header-canvas-view {
+    /* Studio workspace: the canvas pane is pinned (sticky) while the controls
+       scroll beside/below it, so the canvas never leaves view while you edit. */
+    .studio-workspace {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      width: 100%;
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 16px;
+      align-items: stretch;
+    }
+
+    .studio-canvas-pane {
       position: -webkit-sticky;
       position: sticky;
-      top: 0;
-      z-index: 1000;
-      background: var(--ow-bg); 
+      top: var(--studio-sticky-top, 60px);
+      align-self: flex-start;
+      z-index: 5;
+      display: flex;
+      justify-content: center;
+    }
+
+    .canvas-frame {
       display: flex;
       flex-direction: column;
       align-items: center;
-      box-shadow: 0 10px 24px -18px rgba(0,0,0,0.35);
-      width: 100%;
+      gap: 10px;
+      padding: 2px 0;
     }
 
-    .app-header {
-      width: 100%;
-      padding-bottom: 2px;
+    .canvas-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ow-muted);
     }
 
-    .app-header h1 { font-family: var(--ow-font); font-size: 1.8rem; color: var(--brand-brown); margin: 0; }
-    .app-header h2 { font-family: var(--ow-font); font-size: 0.95rem; color: var(--ow-muted); font-weight: normal; }
-
-    .canvas-section {
-      padding: 12px 0;
+    .studio-controls-pane {
       display: flex;
-      justify-content: center;
-      width: 100%;
+      flex-direction: column;
+      gap: 15px;
+      min-width: 0;
     }
+
+    .studio-controls-pane .card { margin-bottom: 0; }
 
     /* Canvas keeps a fixed 360x360 drawing surface; on narrow screens it is scaled down
        via CSS (see fitCanvasToScreen) so it never overflows or gets clipped. */
@@ -85,13 +105,18 @@
       box-shadow: var(--ow-shadow);
     }
 
-    .scrollable-controls-container {
-      flex: 1;
-      padding: 15px;
-      max-width: 640px;
-      width: 100%;
-      margin: 0 auto;
-      padding-bottom: 100px;
+    /* Desktop: canvas pinned on the left, controls scroll in their own pane on the right. */
+    @media (min-width: 880px) {
+      .studio-workspace { flex-direction: row; align-items: flex-start; }
+      .studio-canvas-pane { width: 440px; flex: none; }
+      .studio-controls-pane {
+        flex: 1 1 auto;
+        min-width: 0;
+        max-height: calc(100vh - var(--studio-sticky-top, 60px) - 32px);
+        overflow-y: auto;
+        padding-right: 4px;
+        scrollbar-width: thin;
+      }
     }
 
     .thumb-btn { transition: transform 0.12s ease, border-color 0.15s ease; }
@@ -267,30 +292,30 @@
 </head>
 <body>
 
-  <div class="fixed-header-canvas-view">
-    <div class="app-header">
-      <nav class="main-nav" aria-label="Main navigation">
-        <div class="nav-logo">
-            <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
-            <span>Owl Watcher</span>
-        </div>
-        <div class="nav-links" id="navLinks">
-            <a href="index.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>Home</span></a>
-            <a href="admin.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg><span>Admin</span></a>
-            <a href="guard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>Guard</span></a>
-            <a href="studio.html" class="nav-active" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg><span>Studio</span></a>
-            <a id="dynamicContactLink" target="_blank" rel="noopener" href="https://wa.me/919033406816"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-5A8 8 0 1 1 21 12z"/></svg><span>Contact</span></a>
-        </div>
-    </nav>
+  <nav class="main-nav" aria-label="Main navigation">
+    <div class="nav-logo">
+        <img src="owl.png" alt="Owl Watcher logo" width="42" height="42">
+        <span>Owl Watcher</span>
     </div>
-    <div class="canvas-section">
-      <div class="canvas-container-wrapper">
-        <canvas id="collageCanvas" width="360" height="360"></canvas>
+    <div class="nav-links" id="navLinks">
+        <a href="index.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>Home</span></a>
+        <a href="admin.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg><span>Admin</span></a>
+        <a href="guard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>Guard</span></a>
+        <a id="dynamicContactLink" target="_blank" rel="noopener" href="https://wa.me/919033406816"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-5A8 8 0 1 1 21 12z"/></svg><span>Contact</span></a>
+    </div>
+  </nav>
+
+  <div class="studio-workspace">
+    <div class="studio-canvas-pane">
+      <div class="canvas-frame">
+        <span class="canvas-label">Canvas</span>
+        <div class="canvas-container-wrapper">
+          <canvas id="collageCanvas" width="360" height="360"></canvas>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div class="scrollable-controls-container">
+    <div class="studio-controls-pane">
     <div class="card">
       <h3>📸 Media Import & Layout</h3>
       <div class="grid-buttons">
@@ -418,6 +443,7 @@
       </div>
 
       <div class="status-log" id="statusLog">Studio loaded. Ready to build collage compositions.</div>
+    </div>
     </div>
   </div>
 
@@ -615,8 +641,27 @@
       const bgColor = document.getElementById('textBgColor').value;
       const fStyle = document.getElementById('fontStyle').value;
 
-      let currentLeft = 180, currentTop = 315;
-      if (textGroupBanner) { currentLeft = textGroupBanner.left; currentTop = textGroupBanner.top; canvas.remove(textGroupBanner); }
+      // Update the text object in place so the canvas never blanks out while typing.
+      // Rebuilding the whole group on every keystroke used to flash the canvas blank.
+      const styleProps = {
+        fill: txtColor, fontFamily: fStyle, fontWeight: isBold ? 'bold' : 'normal',
+        fontStyle: isItalic ? 'italic' : 'normal', underline: isUnderline
+      };
+
+      if (textGroupBanner) {
+        const textObj = textGroupBanner.item(1);
+        const rectObj = textGroupBanner.item(0);
+        textObj.set(styleProps);
+        textObj.set('text', val);
+        textObj.initDimensions();
+        rectObj.set('fill', bgColor);
+        rectObj.set('width', textObj.width + 24);
+        rectObj.set('height', textObj.height + 12);
+        textGroupBanner.setCoords();
+        canvas.bringToFront(textGroupBanner);
+        canvas.renderAll();
+        return;
+      }
 
       const newText = new fabric.Textbox(val, {
         fontSize: 16, fill: txtColor, fontFamily: fStyle, fontWeight: isBold ? 'bold' : 'normal',
@@ -627,7 +672,7 @@
         width: newText.width + 24, height: newText.height + 12, fill: bgColor, rx: 6, ry: 6, originX: 'center', originY: 'center'
       });
 
-      textGroupBanner = new fabric.Group([newRect, newText], { left: currentLeft, top: currentTop, originX: 'center', originY: 'center', selectable: true });
+      textGroupBanner = new fabric.Group([newRect, newText], { left: 180, top: 315, originX: 'center', originY: 'center', selectable: true });
       canvas.add(textGroupBanner);
       canvas.bringToFront(textGroupBanner);
       canvas.renderAll();
@@ -694,10 +739,19 @@
     // so exports stay at full resolution and handles stay aligned with the finger
     function fitCanvasToScreen() {
       if (!canvas) return;
-      const size = Math.min(360, Math.floor(document.documentElement.clientWidth - 24));
+      // Account for the workspace's horizontal padding (16px each side) so the
+      // canvas never overflows the viewport on narrow screens.
+      const size = Math.min(360, Math.floor(document.documentElement.clientWidth - 32));
       document.querySelector('.canvas-container-wrapper').style.setProperty('--studio-canvas-size', size + 'px');
       canvas.setDimensions({ width: size + 'px', height: size + 'px' }, { cssOnly: true });
       canvas.calcOffset();
+
+      // Pin the canvas pane just below the sticky nav so it never slides under it.
+      const nav = document.querySelector('.main-nav');
+      if (nav) {
+        const offset = nav.offsetHeight + 10;
+        document.documentElement.style.setProperty('--studio-sticky-top', offset + 'px');
+      }
     }
 
     function resetPositionsToBase() {
