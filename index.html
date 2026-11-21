@@ -135,6 +135,101 @@
             .ebouquet-link .eb-sub { font-size: 0.72rem; }
         }
 
+        /* Studio entry point: same panel language as E-Bouquet, placed below it so
+           the two creative tools sit together at the foot of the game card. */
+        .studio-link {
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            width: 100%;
+            margin: 12px auto 0;
+            padding: 13px 15px;
+            border: 1px solid var(--ow-border);
+            border-radius: var(--ow-radius-lg);
+            background: linear-gradient(135deg, var(--ow-surface) 0%, var(--ow-primary-soft) 62%);
+            color: var(--ow-text);
+            text-decoration: none;
+            box-shadow: var(--ow-shadow-sm);
+            transition: transform 0.22s var(--ow-ease), box-shadow 0.22s ease, border-color 0.22s ease;
+        }
+        .studio-link::before {
+            content: "";
+            position: absolute;
+            top: -46px;
+            right: -30px;
+            width: 132px;
+            height: 132px;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--ow-primary) 0%, transparent 68%);
+            opacity: 0.13;
+            pointer-events: none;
+        }
+        .studio-link .st-icon {
+            position: relative;
+            display: grid;
+            place-items: center;
+            width: 42px;
+            height: 42px;
+            flex: none;
+            border-radius: 13px;
+            background: var(--ow-primary);
+            color: var(--ow-on-primary);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 3px 8px -2px rgba(27, 22, 19, 0.35);
+        }
+        .studio-link .st-icon svg { width: 23px; height: 23px; }
+        .studio-link .st-text { position: relative; flex: 1 1 auto; min-width: 0; text-align: left; }
+        .studio-link .st-title {
+            display: block;
+            font-family: var(--ow-font-brand);
+            font-size: 1.42rem;
+            font-weight: 700;
+            line-height: 1.05;
+            letter-spacing: 0;
+        }
+        .studio-link .st-sub {
+            display: block;
+            margin-top: 2px;
+            color: var(--ow-muted);
+            font-size: 0.765rem;
+            font-weight: 500;
+            line-height: 1.3;
+        }
+        .studio-link .st-go {
+            position: relative;
+            display: grid;
+            place-items: center;
+            width: 26px;
+            height: 26px;
+            flex: none;
+            border-radius: 50%;
+            background: var(--ow-surface);
+            color: var(--ow-primary-text);
+            box-shadow: inset 0 0 0 1px var(--ow-border-strong);
+            transition: transform 0.25s var(--ow-ease), background-color 0.2s ease, color 0.2s ease;
+        }
+        .studio-link .st-go svg { width: 15px; height: 15px; }
+        @media (hover: hover) and (pointer: fine) {
+            .studio-link:hover {
+                transform: translateY(-2px);
+                border-color: var(--ow-border-strong);
+                box-shadow: var(--ow-shadow-hover);
+            }
+            .studio-link:hover .st-go {
+                transform: translateX(3px);
+                background: var(--ow-primary);
+                color: var(--ow-on-primary);
+            }
+        }
+        .studio-link:active { transform: scale(0.985); }
+        @media (max-width: 360px) {
+            .studio-link { gap: 11px; padding: 12px; }
+            .studio-link .st-icon { width: 38px; height: 38px; border-radius: 12px; }
+            .studio-link .st-title { font-size: 1.28rem; }
+            .studio-link .st-sub { font-size: 0.72rem; }
+        }
+
         .result-item { padding: 14px 0; text-align: left; border-bottom: 1px solid var(--ow-border); }
         .result-item:last-child { border-bottom: 0; }
 
@@ -214,7 +309,6 @@
             <a href="index.html" class="nav-active" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>Home</span></a>
             <a href="admin.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg><span>Admin</span></a>
             <a href="guard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>Guard</span></a>
-            <a href="studio.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg><span>Studio</span></a>
             <a href="https://wa.me/919033406816"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-5A8 8 0 1 1 21 12z"/></svg><span>Contact</span></a>
         </div>
     </nav>
@@ -295,6 +389,22 @@
                         <span class="eb-sub">Pick blooms, add a note, send as GIF</span>
                     </span>
                     <span class="eb-go" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+                    </span>
+                </a>
+                <a href="studio.html" id="studioBtn" class="studio-link">
+                    <span class="st-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2.5"/>
+                            <circle cx="8.5" cy="9" r="1.6"/>
+                            <path d="M21 15l-4.5-4.5L7 19"/>
+                        </svg>
+                    </span>
+                    <span class="st-text">
+                        <span class="st-title">Studio</span>
+                        <span class="st-sub">Collage, filters and shareable creations</span>
+                    </span>
+                    <span class="st-go" aria-hidden="true">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
                     </span>
                 </a>
