@@ -34,7 +34,7 @@ function normalizeOrigin(origin) {
 
 function createOriginChecker(extraOrigins = [], options = {}) {
     const allowlist = new Set(
-        DEFAULT_ORIGINS.concat(extraOrigins).map(normalizeOrigin).filter(Boolean)
+        (options.exactOrigins || DEFAULT_ORIGINS.concat(extraOrigins)).map(normalizeOrigin).filter(Boolean)
     );
     const ngrokSuffix = '.ngrok-free.dev';
     const allowNgrok = options.allowNgrok !== false;

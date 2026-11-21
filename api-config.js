@@ -227,6 +227,14 @@
         function attempt() {
             var base = attempts[index];
             var timed = withTimeout(requestInit);
+            // ngrok's free-tier interstitial is HTML, not our API JSON. Set the
+            // documented bypass header only for our configured ngrok API base.
+            var host = new URL(base).hostname;
+            if (/(?:^|\.)(?:ngrok-free\.(?:dev|app)|ngrok\.(?:app|io|dev))$/.test(host) && typeof global.Headers === 'function') {
+                var headers = new global.Headers(requestInit.headers || (input && input.headers));
+                headers.set('ngrok-skip-browser-warning', 'true');
+                timed.init.headers = headers;
+            }
             var target = urlFor(base, path);
             if (input && typeof input.clone === 'function') target = new global.Request(target, input.clone());
             return nativeFetch(target, timed.init).then(async function (response) {

@@ -1,3 +1,9 @@
+> **Security update:** Sign-in is not admin authorization. Only verified custom
+> admin claims or exact server-side `ADMIN_UIDS` grant global admin authority;
+> old unversioned backend JWTs no longer confer admin privileges. The restricted
+> [GitHub Pages/MacBook preview](github-pages-macbook.md) deliberately blocks all
+> private routes and writes pending society-level authorization work.
+
 > **Deployment update:** Hostinger is no longer the default API target. See
 > [Firebase deployment and quota cutoff](deployment.md) and
 > [MacBook testing](macbook-testing.md). `/api/health` and `/api/quota` expose

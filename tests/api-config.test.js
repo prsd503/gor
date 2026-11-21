@@ -33,6 +33,7 @@ function harness({ config = {}, url = 'https://owlwatcher.tech/', fetchImpl } = 
         pretendToBeVisual: true
     });
     const { window } = dom;
+    window.Headers = Headers;
     window.fetch = (input, init) => {
         calls.push({ url: typeof input === 'string' ? input : input.url, init });
         return fetchImpl(input, init);
@@ -241,4 +242,21 @@ test('explicit pre-handler drain safely retries a JSON POST', async () => {
     assert.equal(res.status, 200);
     assert.equal(calls.length, 2);
     assert.ok(window.OWL_API.status().drained[FIREBASE] >= Date.now() + 3590000);
+});
+
+
+test('configured ngrok calls bypass HTML warning without losing auth or content headers', async () => {
+    const base='https://owl-test.ngrok-free.dev/api';
+    const {window,calls}=harness({config:{primary:base,local:''},fetchImpl:async()=>response(200)});
+    await window.fetch(base+'/ads/global',{headers:{Authorization:'Bearer private','Content-Type':'application/json'}});
+    const headers=calls[0].init.headers;
+    assert.equal(headers.get('ngrok-skip-browser-warning'),'true');
+    assert.equal(headers.get('Authorization'),'Bearer private');
+    assert.equal(headers.get('Content-Type'),'application/json');
+});
+
+test('non-API ngrok fetch is not rewritten and receives no injected headers', async () => {
+    const {window,calls}=harness({fetchImpl:async()=>response(200)});
+    await window.fetch('https://unrelated.ngrok-free.dev/somewhere');
+    assert.equal(calls[0].init,undefined);
 });

@@ -10,6 +10,8 @@
  */
 'use strict';
 
+const { firebaseRole } = require('./admin-policy');
+
 function bearerToken(req) {
     const header = req.header ? req.header('Authorization') : (req.headers || {}).authorization;
     if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
@@ -25,8 +27,8 @@ function looksLikeFirebaseIdToken(token, projectId) {
         if (parts.length !== 3) return false;
         const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
         if (!payload || typeof payload !== 'object') return false;
-        if (projectId && payload.aud !== projectId) return false;
-        return typeof payload.iss === 'string' && payload.iss.startsWith('https://securetoken.google.com/');
+        if (projectId) return payload.aud === projectId && payload.iss === `https://securetoken.google.com/${projectId}`;
+        return typeof payload.iss === 'string' && /^https:\/\/securetoken\.google\.com\/[^/]+$/.test(payload.iss);
     } catch (_) {
         return false;
     }
@@ -48,7 +50,7 @@ function createAuthMiddleware(options) {
                 type: 'firebase_user',
                 uid: decoded.uid,
                 email: decoded.email || null,
-                role: decoded.role || decoded.adminRole || 'admin',
+                role: firebaseRole(decoded, options.adminUids),
                 claims: decoded
             };
         }
@@ -57,7 +59,9 @@ function createAuthMiddleware(options) {
             type: 'backend_jwt',
             uid: decoded.uid || null,
             email: decoded.email || null,
-            role: decoded.role || 'admin',
+            // Earlier releases minted admin JWTs for every Firebase sign-in.
+            // Never grandfather those privileged tokens into the fixed policy.
+            role: decoded.role === 'admin' && decoded.authVersion !== 2 ? 'user' : (decoded.role || 'user'),
             claims: decoded
         };
     }

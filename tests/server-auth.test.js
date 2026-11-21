@@ -130,3 +130,48 @@ test('optionalAuth identifies admins but never blocks residents', async () => {
     assert.equal(reached, true, 'invalid tokens must not break public resident flows');
     assert.equal(invalid.user, undefined);
 });
+
+test('SECURITY: a valid sign-in without admin authorization is a user, not an admin', async () => {
+    const {resolveUser,requireAdmin}=middleware();
+    const user=await resolveUser(fakeFirebaseToken());
+    assert.equal(user.role,'user');
+    const response=res();
+    requireAdmin({user},response,()=>assert.fail('ordinary Firebase user became admin'));
+    assert.equal(response.statusCode,403);
+});
+
+test('SECURITY: signed backend token without an explicit role is not admin', async () => {
+    const {resolveUser}=middleware();
+    const user=await resolveUser(jwt.sign({uid:'ordinary'},SECRET));
+    assert.equal(user.role,'user');
+});
+
+test('admin grants require verified custom claims or an exact server UID allowlist', async () => {
+    const {parseAdminUids,firebaseRole}=require('../server/lib/admin-policy');
+    const allowed=parseAdminUids(' owner-uid, second-uid ,');
+    assert.equal(firebaseRole({uid:'owner-uid'},allowed),'admin');
+    assert.equal(firebaseRole({uid:'owner-uid-attacker'},allowed),'user');
+    assert.equal(firebaseRole({uid:'unknown',email:'owner@example.com',email_verified:true},allowed),'user');
+    assert.equal(firebaseRole({uid:'u',admin:true}),'admin');
+    assert.equal(firebaseRole({uid:'u',admin:'true'}),'user');
+    assert.equal(firebaseRole({uid:'u',role:'admin'}),'admin');
+    assert.equal(firebaseRole({uid:'u',role:'guard'}),'guard');
+    const auth=middleware({adminUids:allowed,verifyIdToken:async()=>({uid:'owner-uid'})});
+    assert.equal((await auth.resolveUser(fakeFirebaseToken())).role,'admin');
+    // Unverified payload claims cannot override the verifier's decoded result.
+    assert.equal((await middleware().resolveUser(fakeFirebaseToken({admin:true,role:'admin'}))).role,'user');
+});
+
+test('Firebase token routing requires the exact configured issuer', () => {
+    assert.equal(looksLikeFirebaseIdToken(fakeFirebaseToken({iss:'https://securetoken.google.com/other'}),PROJECT),false);
+    assert.equal(looksLikeFirebaseIdToken(fakeFirebaseToken({iss:`https://securetoken.google.com/${PROJECT}/extra`}),PROJECT),false);
+});
+
+
+test('SECURITY: old admin-on-sign-in backend JWTs lose admin authority', async () => {
+    const {resolveUser}=middleware();
+    const old=await resolveUser(jwt.sign({uid:'ordinary',role:'admin'},SECRET));
+    assert.equal(old.role,'user');
+    const current=await resolveUser(jwt.sign({uid:'owner',role:'admin',authVersion:2},SECRET));
+    assert.equal(current.role,'admin');
+});
