@@ -25,7 +25,7 @@ function response(status, { headers = {}, body = '' } = {}) {
     };
 }
 
-function harness({ config = {}, url = 'https://owlwatcher.tech/', fetchImpl } = {}) {
+function harness({ config = {}, url = 'https://owlwatcher.tech/', fetchImpl, initialStorage = {}, publishedConfig = false } = {}) {
     const calls = [];
     const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
         url,
@@ -38,7 +38,9 @@ function harness({ config = {}, url = 'https://owlwatcher.tech/', fetchImpl } = 
         calls.push({ url: typeof input === 'string' ? input : input.url, init });
         return fetchImpl(input, init);
     };
-    window.OWL_API_CONFIG = { primary: FIREBASE, local: MACBOOK, fallbacks: [], ...config };
+    for (const [key, value] of Object.entries(initialStorage)) window.localStorage.setItem(key, value);
+    if (publishedConfig) window.eval(fs.readFileSync(path.join(__dirname, '..', 'api-env.js'), 'utf8'));
+    else window.OWL_API_CONFIG = { primary: FIREBASE, local: MACBOOK, fallbacks: [], ...config };
     window.eval(source);
     return { window, calls, api: window.OWL_API };
 }
@@ -259,4 +261,96 @@ test('non-API ngrok fetch is not rewritten and receives no injected headers', as
     const {window,calls}=harness({fetchImpl:async()=>response(200)});
     await window.fetch('https://unrelated.ngrok-free.dev/somewhere');
     assert.equal(calls[0].init,undefined);
+});
+
+const PILOT = 'https://unloving-limit-ferry.ngrok-free.dev/api';
+const PILOT_PAGE = 'https://prsd503.github.io/gor/index.html?api=' + encodeURIComponent(PILOT);
+
+function routingStorage(window) {
+    return Object.fromEntries(['owl:api:active', 'owl:api:drained'].map(key => [key, window.localStorage.getItem(key)]));
+}
+
+test('published config leaves primary unchanged and registers MacBook as test-only', async () => {
+    const {window,api,calls}=harness({publishedConfig:true,fetchImpl:async()=>response(200)});
+    assert.equal(window.OWL_API_CONFIG.primary,FIREBASE);
+    assert.equal(window.OWL_API_CONFIG.local,'');
+    assert.deepEqual([...window.OWL_API_CONFIG.fallbacks],[]);
+    assert.deepEqual([...api.status().testBases],[PILOT]);
+    assert.deepEqual([...api.bases()],[FIREBASE]);
+    await window.fetch(FIREBASE+'/ads/global');
+    assert.equal(calls[0].url,FIREBASE+'/ads/global');
+});
+
+test('normal visitors never fail over to the test-only tunnel, even on drain', async () => {
+    const {window,calls}=harness({publishedConfig:true,fetchImpl:async()=>response(503,{headers:{'x-owl-drain':'1'}})});
+    assert.equal((await window.fetch(FIREBASE+'/ads/global')).status,503);
+    assert.deepEqual(calls.map(call=>call.url),[FIREBASE+'/ads/global']);
+});
+
+test('verified pilot link selects only the tunnel and injects ngrok bypass header', async () => {
+    const {window,api,calls}=harness({publishedConfig:true,url:PILOT_PAGE,fetchImpl:async()=>response(200)});
+    assert.equal(api.base(),PILOT);
+    assert.equal(window.OWL_API_BASE,PILOT);
+    assert.deepEqual([...api.bases()],[PILOT]);
+    await window.fetch(FIREBASE+'/ads/global');
+    assert.equal(calls[0].url,PILOT+'/ads/global');
+    assert.equal(calls[0].init.headers.get('ngrok-skip-browser-warning'),'true');
+});
+
+test('pilot override wins over remembered primary and drain state without modifying either', async () => {
+    const initialStorage={
+        'owl:api:active':JSON.stringify({base:FIREBASE,at:Date.now()}),
+        'owl:api:drained':JSON.stringify({[PILOT]:Date.now()+3600000})
+    };
+    const {window,api,calls}=harness({publishedConfig:true,url:PILOT_PAGE,initialStorage,fetchImpl:async()=>response(200)});
+    const before=routingStorage(window);
+    assert.equal(api.base(),PILOT);
+    await window.fetch(FIREBASE+'/ads/global');
+    assert.equal(calls[0].url,PILOT+'/ads/global');
+    assert.deepEqual(routingStorage(window),before);
+});
+
+test('successful pilot selection is not remembered for the next ordinary page load', async () => {
+    const pilot=harness({publishedConfig:true,url:PILOT_PAGE,fetchImpl:async()=>response(200)});
+    await pilot.window.fetch(FIREBASE+'/ads/global');
+    assert.equal(pilot.window.localStorage.getItem('owl:api:active'),null);
+    const normal=harness({publishedConfig:true,fetchImpl:async()=>response(200)});
+    assert.equal(normal.api.base(),FIREBASE);
+});
+
+test('a stale remembered pilot cannot select it on an ordinary page without api query', () => {
+    const {api}=harness({publishedConfig:true,initialStorage:{'owl:api:active':JSON.stringify({base:PILOT,at:Date.now()})},fetchImpl:async()=>response(200)});
+    assert.equal(api.base(),FIREBASE);
+});
+
+test('pilot drain responses never retry GETs or writes on the primary and do not persist routing', async () => {
+    for(const method of ['GET','POST']){
+        const {window,calls}=harness({publishedConfig:true,url:PILOT_PAGE,fetchImpl:async()=>response(503,{headers:{'x-owl-drain':'1'}})});
+        const before=routingStorage(window);
+        const result=await window.fetch(FIREBASE+'/ads/global',{method,...(method==='POST'?{body:'{}'}:{})});
+        assert.equal(result.status,503);
+        assert.deepEqual(calls.map(call=>call.url),[PILOT+'/ads/global']);
+        assert.deepEqual(routingStorage(window),before);
+    }
+});
+
+test('pilot network failure never silently reads from the primary or changes storage', async () => {
+    const {window,calls}=harness({publishedConfig:true,url:PILOT_PAGE,fetchImpl:async()=>{throw new Error('tunnel offline');}});
+    const before=routingStorage(window);
+    await assert.rejects(window.fetch(FIREBASE+'/ads/global'),/tunnel offline/);
+    assert.deepEqual(calls.map(call=>call.url),[PILOT+'/ads/global']);
+    assert.deepEqual(routingStorage(window),before);
+});
+
+test('restricted pilot 403 stays on the tunnel and is not retried elsewhere', async () => {
+    const {window,calls}=harness({publishedConfig:true,url:PILOT_PAGE,fetchImpl:async()=>response(403)});
+    assert.equal((await window.fetch(FIREBASE+'/vehicles')).status,403);
+    assert.deepEqual(calls.map(call=>call.url),[PILOT+'/vehicles']);
+});
+
+test('an unconfigured ngrok hostname in a pilot link is rejected', async () => {
+    const {window,api,calls}=harness({publishedConfig:true,url:'https://prsd503.github.io/gor/index.html?api=https://attacker.ngrok-free.dev/api',fetchImpl:async()=>response(200)});
+    assert.equal(api.status().pageOverride,null);
+    await window.fetch(FIREBASE+'/ads/global');
+    assert.equal(calls[0].url,FIREBASE+'/ads/global');
 });

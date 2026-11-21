@@ -128,52 +128,83 @@ send the warning-bypass header; it is not an authentication secret.
 
 ## 4. Configure the published frontend only after the hostname is verified
 
-In the updated repository (on a working branch):
+Publish the reviewed changes to **both `api-env.js` and `api-config.js`** through
+the normal PR process: the router must support `testBases` as well as the new
+configuration. A ZIP checkout has no Git metadata, so use a real Git clone or
+the reviewed GitHub PR workflow rather than uploading your entire local folder.
+Never upload credentials. No MacBook environment changes are needed for this
+frontend-only update; keep its existing restricted server and tunnel running.
 
-```sh
-# Preview the generated config without writing anything:
-npm run api:configure -- https://YOUR_ASSIGNED_HOST
+Wait for the existing GitHub Pages build/deployment to complete before testing.
+This repository does not change your Pages publishing source or assume that
+changes saved on an Arena branch are automatically live. Do not run the
+primary-switching helper for this pilot; follow the opt-in configuration below.
 
-# Only after checking the hostname belongs to you:
-npm run api:configure -- https://YOUR_ASSIGNED_HOST --write
+### Recommended first pilot: test-only endpoint, no automatic fallback
+
+For the verified MacBook tunnel, `api-env.js` now leaves `primary` unchanged,
+keeps `local` empty and `fallbacks` empty, and registers:
+
+```js
+testBases: ['https://unloving-limit-ferry.ngrok-free.dev/api']
 ```
 
-This changes **only `api-env.js`** to use `https://YOUR_ASSIGNED_HOST/api` as the
-primary API, with no fallback that might send blocked preview operations to some
-other backend. It does not touch credentials and it does **not** publish the site.
-Without the hostname we intentionally leave the existing endpoint unchanged.
+**`testBases` is an opt-in trust list, not a fallback list.** An ordinary page
+load never selects these endpoints, even if the primary fails or browser storage
+contains an old remembered test selection. Do not put this restricted tunnel in
+`local` or `fallbacks`: those settings enable automatic failover for visitors.
+The primary URL remains the previously configured Firebase URL; leaving it
+unchanged does not verify that the Firebase function is deployed or working.
 
-Review and commit that public file through the normal PR process. A ZIP checkout
-has no Git metadata: either publish the reviewed `api-env.js` through GitHub's
-file editor/PR workflow or use a real Git clone. Do not upload your whole local
-folder with credentials. Wait for the existing GitHub Pages build/deployment to
-complete before testing. This repository does not add/change your Pages publishing
-source or assume that a branch commit instantly goes live.
+After this change is merged and GitHub Pages finishes publishing, open:
 
-To avoid interrupting the current public site, you can first publish the tunnel
-as a trusted `local` base in `api-env.js` while leaving `primary` unchanged, then
-open the page with `?api=` set to that URL for a single-page pilot. Query overrides
-only work for preconfigured trusted bases; this is endpoint selection, not a
-security boundary. Inspect network requests to ensure that page is using the
-expected server. Only promote it to primary when the intended limited test is
-acceptable to website users. The helper above switches the primary, so use it
-only when intentionally ready for that preview cutover.
+https://prsd503.github.io/gor/index.html?api=https%3A%2F%2Funloving-limit-ferry.ngrok-free.dev%2Fapi
+
+That page load is pinned to the exact trusted tunnel base. Previously remembered
+primary/fallback state cannot override it. A failure, quota drain or restricted
+403 is surfaced there, never retried against the primary API. The selection and
+its success/failure do not write normal routing state to localStorage. It applies
+only to that page: following a link without `?api=` returns to ordinary routing.
+This is a test endpoint selector, **not** a replacement for backend access controls.
+
+Remove the `?api=...` query and reload to exit. If the hostname changes, remove or
+replace its `testBases` entry, review the new address and republish before using a
+new test link. Retire a tunnel entry promptly when it is no longer controlled by
+you; an ngrok address in frontend config is public and must not be treated as a secret.
+
+Do not run the `api:configure --write` helper for this opt-in pilot: that helper
+intentionally replaces the primary configuration. Promoting this restricted API
+to primary would break private/search/write features for visitors. No automatic
+primary cutover is part of this pilot.
 
 ## 5. Verify the actual GitHub Pages page
 
-Open https://prsd503.github.io/gor/api-env.js and confirm the new HTTPS base.
-Then hard-refresh the website, or use a private browser window so an older
-remembered fallback is not reused. A developer can inspect:
+Open https://prsd503.github.io/gor/api-env.js and confirm the tunnel appears in
+`testBases`, **not** in `primary`, `local` or `fallbacks`. Hard-refresh or use a
+private browser window if cached files do not show the new configuration. Open
+the full opt-in link above (not just the plain index URL). A developer can inspect:
 
 ```js
 OWL_API.status()
 ```
 
-In browser developer tools → Network, verify advertisement requests go to the
-ngrok hostname and return JSON. The private/disabled routes should return the
-explicit 403 preview message, not data. Do not switch off the gate to remove
-those errors. Keep Hostinger running until the intended replacement is fully
-verified; this preview is not a finished production migration.
+`OWL_API.status()` should show the ngrok URL in `active` and `pageOverride`, and
+only that URL in `bases`. You can perform a read-only browser-side health check:
+
+```js
+fetch(OWL_API.url('/health')).then(r => r.json()).then(console.log)
+```
+
+It should report `accessMode: 'tunnel-preview'`. In developer tools → Network,
+verify advertisement requests go to the ngrok hostname and return JSON. The
+private/disabled routes should return the explicit 403 preview message, not data.
+Do not sign in, submit forms or expect searches/registration to work in this pilot.
+Do not switch off the gate to remove errors. Keep Hostinger running until the
+intended replacement is fully verified; this is not a finished production migration.
+Also open the plain index URL in a different tab and verify normal API routing
+does not use ngrok. Browser tests here are separate from the user's earlier
+Terminal health/CORS checks; mocked automated tests do not prove a live tunnel
+or GitHub Pages deployment is available.
 
 ## Administration compatibility/security change
 
