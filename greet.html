@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!-- API endpoint + automatic failover (Firebase <-> MacBook). Must load before any page script. -->
+    <script src="api-env.js"></script>
+    <script src="api-config.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&family=Lexend:wght@300;400;500&display=swap" rel="stylesheet">
     <title>Owl Watcher | Portal</title>
@@ -243,11 +246,11 @@
         const navLogoText = document.getElementById('navLogoText');
 
         // Configured Ngrok Backend URL
-        const BACKEND_URL = "https://api.owlwatcher.tech";
+        const BACKEND_URL = (window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api');
 async function fetchGreetingData() {
     // 1. Try Backend API first via Ngrok using your existing /api/ads/local/Aangan route
     try {
-        const response = await fetch(`${BACKEND_URL}/api/ads/local/Aangan`, {
+        const response = await fetch(`${BACKEND_URL}/ads/local/Aangan`, {
             headers: { 'ngrok-skip-browser-warning': 'true' }
         });
         if (response.ok) {

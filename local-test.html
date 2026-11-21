@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Owl Watcher · Local API test</title>
+  <script src="api-env.js"></script>
+  <script src="api-config.js"></script>
+  <style>
+    body{font:16px system-ui;margin:40px auto;max-width:850px;padding:0 20px;background:#f7f7f2;color:#182b2a}section{background:white;padding:24px;border:1px solid #ddd;border-radius:12px;margin:20px 0}input,textarea,select,button{font:inherit;padding:10px;box-sizing:border-box;margin:6px 0}input,textarea{width:100%}button{cursor:pointer;background:#184d43;color:white;border:0;border-radius:6px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#152b27;color:#dcf5e4;padding:20px;border-radius:8px}label{display:block}small{color:#526661}
+  </style>
+</head>
+<body>
+  <h1>Local API test</h1>
+  <p>No Firebase SDK or account required. This console talks only to the server serving this page.</p>
+  <p><strong>Testing data is separate from Firestore.</strong> The regular admin/guard pages still use Firebase sign-in; use this console for a Firebase-free backend test.</p>
+  <section>
+    <h2>1. Check the server</h2>
+    <button id="health">Health</button> <button id="quota">Quota status</button>
+    <p id="mode"></p>
+  </section>
+  <section>
+    <h2>2. Local admin login</h2>
+    <small>Find the generated email and password in <code>.env.local</code>. This dev login is disabled in production.</small>
+    <form id="login">
+      <label>Email <input id="email" type="email" value="admin@local.test" autocomplete="username" required></label>
+      <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+      <button>Get test session</button> <button type="button" id="logout">Clear session</button>
+    </form>
+  </section>
+  <section>
+    <h2>3. Send an API request</h2>
+    <p>Try <code>GET /api/vehicles?societyName=Test</code> or create a configuration with <code>POST /api/config</code> after logging in.</p>
+    <form id="request">
+      <label>Method <select id="method"><option>GET</option><option>POST</option><option>PATCH</option><option>DELETE</option></select></label>
+      <label>Path <input id="path" value="/api/config" required></label>
+      <label>JSON body (not used for GET) <textarea id="body" rows="5">{"teamPhone":"911234567890"}</textarea></label>
+      <button>Send request</button>
+    </form>
+  </section>
+  <h2>Response</h2><pre id="result" aria-live="polite">Ready.</pre>
+  <script>
+    'use strict';
+    let token = '';
+    const output = document.getElementById('result');
+    async function send(path, init = {}) {
+      if (!path.startsWith('/api/') || path.includes('..') || path.includes('\\')) throw new Error('Use a local /api/ path.');
+      const headers = { 'Content-Type': 'application/json', ...(token ? {Authorization: 'Bearer ' + token} : {}) };
+      const response = await fetch(location.origin + path, { ...init, headers, redirect: 'error' });
+      const data = await response.json();
+      output.textContent = response.status + '\n' + JSON.stringify(data, null, 2);
+      return { response, data };
+    }
+    function report(error) { output.textContent = error.message; }
+    document.getElementById('health').onclick = () => send('/api/health').then(({data}) => {
+      document.getElementById('mode').textContent = 'Data: ' + data.dataBackend + ' · Auth: ' + data.authMode;
+    }).catch(report);
+    document.getElementById('quota').onclick = () => send('/api/quota').catch(report);
+    document.getElementById('login').onsubmit = async event => {
+      event.preventDefault();
+      try {
+        const {response, data} = await send('/api/auth/token', {method:'POST', body:JSON.stringify({email:document.getElementById('email').value, password:document.getElementById('password').value})});
+        if (response.ok) { token = data.token; output.textContent = 'Signed in. Session stays in this tab memory only.'; }
+      } catch (error) { report(error); }
+    };
+    document.getElementById('logout').onclick = () => { token = ''; output.textContent = 'Session cleared.'; };
+    document.getElementById('request').onsubmit = event => {
+      event.preventDefault();
+      const method = document.getElementById('method').value;
+      send(document.getElementById('path').value.trim(), {method, ...(method === 'GET' ? {} : {body:document.getElementById('body').value})}).catch(report);
+    };
+  </script>
+</body>
+</html>

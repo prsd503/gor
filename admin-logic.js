@@ -3,7 +3,7 @@ import { signInWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordRe
 import { Filesystem, Directory, Encoding } from 'https://cdn.jsdelivr.net/npm/@capacitor/filesystem@latest/+esm';
 import { Share } from 'https://cdn.jsdelivr.net/npm/@capacitor/share@latest/+esm';
 
-const API_BASE_URL = "https://api.owlwatcher.tech/api";
+const API_BASE_URL = (window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api');
 const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 
 let assignedSociety = "";
@@ -119,7 +119,7 @@ async function fetchSocietySpins() {
     resultDiv.innerHTML = "Fetching stats...";
 
     try {
-        const res = await fetch(`https://api.owlwatcher.tech/api/contest/spinstats?societyName=${encodeURIComponent(societyName)}`, {
+        const res = await fetch(`${window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api'}/contest/spinstats?societyName=${encodeURIComponent(societyName)}`, {
             headers: { 'ngrok-skip-browser-warning': 'true' }
         });
         

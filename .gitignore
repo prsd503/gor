@@ -3,3 +3,19 @@ node_modules/
 .env.*
 !.env.example
 coverage/
+
+# Local MacBook backend data + Firebase deploy state
+.local-data/
+.firebaserc
+server/.env
+server/.env.*
+!server/.env.example
+
+.firebase/
+.firebase-public/
+firebase-debug.log*
+*-debug.log
+# Keep Admin SDK credentials outside the repository.
+*serviceAccount*.json
+
+!server/.env.firebase.example

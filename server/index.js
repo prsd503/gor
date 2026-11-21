@@ -1,86 +1,279 @@
 /* Owl Watcher API server.
  *
- * Deploy this file plus server/lib/ to the backend host. It is intentionally separate
- * from the static web app so the frontend bundle stays deployable to GitHub Pages.
+ * The same Express app runs in three places:
+ *   1. Firebase Cloud Functions  - `server/firebase.js` (deploy target)
+ *   2. A MacBook                 - `npm run start:local` (free fallback + testing)
+ *   3. Any VPS                   - `npm start` (the old Hostinger setup)
+ *
+ * The Firebase copy is wrapped in a quota guard: once any free-tier meter
+ * (Firestore reads/writes/deletes, function invocations, egress) reaches
+ * QUOTA_THRESHOLD of its free allowance - 80% by default - it answers 503 with
+ * `code: "quota-threshold-reached"`. This is NOT a guaranteed billing cap. The
+ * website (api-config.js) then retries the request against the MacBook copy.
  *
  * Required environment:
- *   JWT_SECRET            - strong random secret (no hardcoded fallback)
+ *   JWT_SECRET            - random secret, 32+ characters (no fallback)
+ * Optional data/auth:
+ *   DATA_BACKEND          - firestore (default) | local   (local = JSON file, no Firebase)
+ *   LOCAL_DB_FILE         - path for DATA_BACKEND=local (default .local-data/db.json)
+ *   AUTH_MODE             - firebase (default) | local    (local = dev admin credentials)
+ *   LOCAL_ADMIN_EMAIL / LOCAL_ADMIN_PASSWORD (AUTH_MODE=local, password 12+ chars)
+ * Firebase:
  *   FIREBASE_PROJECT_ID   - e.g. finder-owl
  *   GOOGLE_APPLICATION_CREDENTIALS or SERVICE_ACCOUNT_JSON - Admin SDK credentials
- * Optional:
  *   APP_CHECK_MODE        - off | monitor (default) | enforce
- *   ALLOWED_ORIGINS       - comma-separated extra origins
- *   PORT                  - default 3000
+ * Quota guard:
+ *   QUOTA_ACTION          - stop (default) | monitor | off
+ *   QUOTA_SOURCE          - local (default) | monitoring  (monitoring = authoritative)
+ *   QUOTA_THRESHOLD       - 0.8 by default
+ *   QUOTA_FALLBACK_URLS   - comma-separated URLs advertised to clients in the 503
+ * Server / web:
+ *   PORT, HOST, ALLOWED_ORIGINS, TRUST_PROXY_HOPS
+ *   SERVE_STATIC=1        - also serve the static site (handy on the MacBook)
+ *   READ_CACHE_TTL_MS     - read cache TTL, default 20000 (0 disables)
+ *   ENV_FILE              - dotenv file to load, default .env
  */
 'use strict';
 
-require('dotenv').config();
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+
+require('dotenv').config({ path: process.env.ENV_FILE || '.env', quiet: true });
 
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const { rateLimit } = require('express-rate-limit');
-const cron = require('node-cron');
-
-const { initializeApp, cert, applicationDefault } = require('firebase-admin/app');
-const { getFirestore, FieldValue } = require('firebase-admin/firestore');
-const { getAuth } = require('firebase-admin/auth');
-const { getAppCheck } = require('firebase-admin/app-check');
 
 const { buildVersionResponse } = require('./lib/version-policy');
 const { createAuthMiddleware } = require('./lib/auth');
 const { createGiftCodeService } = require('./lib/gift-codes');
 const { createOriginChecker, createAppCheckMiddleware } = require('./lib/security');
+const { createQuotaGuard } = require('./lib/quota-guard');
+const { readLimits, normalizeAction, normalizeSource } = require('./lib/quota-policy');
+const { createMonitoringUsageFetcher } = require('./lib/gcp-monitoring');
+const { createDbLayer } = require('./lib/db-layer');
+const { createLocalStore, createFieldValue } = require('./lib/local-store');
+const { createMaintenance } = require('./lib/maintenance');
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET || JWT_SECRET.length < 32) {
+if (!JWT_SECRET || JWT_SECRET.length < 32 || JWT_SECRET.startsWith('REPLACE_WITH_')) {
     throw new Error('JWT_SECRET must be set to a random value of at least 32 characters.');
 }
-const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'finder-owl';
 
-const credential = process.env.SERVICE_ACCOUNT_JSON
-    ? cert(JSON.parse(process.env.SERVICE_ACCOUNT_JSON))
-    : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? cert(require(process.env.GOOGLE_APPLICATION_CREDENTIALS)) : applicationDefault());
+const PROJECT_ID = process.env.OWL_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'finder-owl';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_PRODUCTION = NODE_ENV === 'production';
+const IS_FUNCTIONS = Boolean(process.env.FUNCTION_TARGET || process.env.FUNCTIONS_TARGET);
 
-initializeApp({ credential, projectId: PROJECT_ID });
+function lower(value, fallback) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized || fallback;
+}
 
-const db = getFirestore();
+function flag(value) {
+    return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+const DATA_BACKEND = lower(process.env.DATA_BACKEND, 'firestore');
+const AUTH_MODE = lower(process.env.AUTH_MODE, 'firebase');
+const APP_CHECK_MODE = lower(process.env.APP_CHECK_MODE, AUTH_MODE === 'local' ? 'off' : 'monitor');
+const SERVE_STATIC = flag(process.env.SERVE_STATIC);
+const ENABLE_CRON = !IS_FUNCTIONS && String(process.env.ENABLE_CRON || '1') !== '0';
+
+if (!['firestore', 'local'].includes(DATA_BACKEND)) {
+    throw new Error(`DATA_BACKEND must be "firestore" or "local" (got "${DATA_BACKEND}").`);
+}
+if (!['firebase', 'local'].includes(AUTH_MODE)) {
+    throw new Error(`AUTH_MODE must be "firebase" or "local" (got "${AUTH_MODE}").`);
+}
+if (!['off', 'monitor', 'enforce'].includes(APP_CHECK_MODE)) {
+    throw new Error(`APP_CHECK_MODE must be "off", "monitor" or "enforce" (got "${APP_CHECK_MODE}").`);
+}
+if (DATA_BACKEND === 'local' && IS_PRODUCTION && !flag(process.env.ALLOW_LOCAL_BACKEND)) {
+    throw new Error('DATA_BACKEND=local is a single-machine store. Set ALLOW_LOCAL_BACKEND=1 to allow it with NODE_ENV=production.');
+}
+if (AUTH_MODE === 'local' && IS_PRODUCTION) {
+    throw new Error('AUTH_MODE=local accepts a dev username/password and is refused with NODE_ENV=production.');
+}
+if (AUTH_MODE === 'local' && APP_CHECK_MODE !== 'off') {
+    throw new Error('AUTH_MODE=local cannot be combined with App Check. Set APP_CHECK_MODE=off.');
+}
+
+const LOCAL_ADMIN_EMAIL = String(process.env.LOCAL_ADMIN_EMAIL || '').trim().toLowerCase();
+const LOCAL_ADMIN_PASSWORD = String(process.env.LOCAL_ADMIN_PASSWORD || '');
+if (AUTH_MODE === 'local') {
+    if (!LOCAL_ADMIN_EMAIL) throw new Error('AUTH_MODE=local requires LOCAL_ADMIN_EMAIL.');
+    if (LOCAL_ADMIN_PASSWORD.length < 12) throw new Error('AUTH_MODE=local requires LOCAL_ADMIN_PASSWORD of 12+ characters.');
+}
+
+if (process.env.QUOTA_SOURCE && !['auto', 'local', 'monitoring'].includes(process.env.QUOTA_SOURCE)) {
+    throw new Error('QUOTA_SOURCE must be auto, local or monitoring.');
+}
+
+const quotaSource = normalizeSource(!process.env.QUOTA_SOURCE || process.env.QUOTA_SOURCE === 'auto' ? (IS_FUNCTIONS ? 'monitoring' : 'local') : process.env.QUOTA_SOURCE);
+
+// ---------------------------------------------------------------------------
+// Firebase (skipped entirely for a fully local run)
+// ---------------------------------------------------------------------------
+
+let firebaseApp = null;
+let credential = null;
+let rawDb = null;
+let FieldValue = null;
+
+function initFirebase() {
+    const { initializeApp, cert, applicationDefault } = require('firebase-admin/app');
+    if (process.env.SERVICE_ACCOUNT_JSON) {
+        credential = cert(JSON.parse(process.env.SERVICE_ACCOUNT_JSON));
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        credential = cert(require(path.resolve(process.env.GOOGLE_APPLICATION_CREDENTIALS)));
+    } else if (DATA_BACKEND === 'firestore') {
+        credential = applicationDefault();
+    }
+    return initializeApp(credential ? { credential, projectId: PROJECT_ID } : { projectId: PROJECT_ID });
+}
+
+if (DATA_BACKEND === 'firestore' || AUTH_MODE === 'firebase') {
+    firebaseApp = initFirebase();
+}
+
+if (DATA_BACKEND === 'local') {
+    const localFile = process.env.LOCAL_DB_FILE || path.join(process.cwd(), '.local-data', 'db.json');
+    rawDb = createLocalStore({ file: localFile, logger: console });
+    FieldValue = createFieldValue();
+    console.log(`[data] Using the local JSON store at ${localFile} (no Firebase operations).`);
+} else {
+    const { getFirestore, FieldValue: FirestoreFieldValue } = require('firebase-admin/firestore');
+    rawDb = getFirestore();
+    FieldValue = FirestoreFieldValue;
+}
+
+const cacheTtl = process.env.READ_CACHE_TTL_MS !== undefined && process.env.READ_CACHE_TTL_MS !== ''
+    ? Number(process.env.READ_CACHE_TTL_MS)
+    : undefined;
+const dataLayer = createDbLayer(rawDb, { ttlMs: cacheTtl, counters: { reads: 0, writes: 0, deletes: 0 } });
+const db = dataLayer.db;
+
+// ---------------------------------------------------------------------------
+// Quota guard
+// ---------------------------------------------------------------------------
+
+let fetchUsage = null;
+if (quotaSource === 'monitoring') {
+    if (!credential) {
+        console.warn('[quota] QUOTA_SOURCE=monitoring needs Admin SDK credentials; stop mode will fail closed.');
+    } else {
+        fetchUsage = createMonitoringUsageFetcher({
+            projectId: PROJECT_ID,
+            getAccessToken: () => credential.getAccessToken(),
+            logger: console
+        });
+    }
+}
+
+// Guarding Firebase is the point. A MacBook running the local JSON store has no
+// Firebase allowance to protect, so its guard defaults to "off".
+const defaultQuotaAction = DATA_BACKEND === 'firestore' ? 'stop' : 'off';
+
+const quota = createQuotaGuard({
+    env: process.env,
+    limits: readLimits(process.env),
+    action: normalizeAction(process.env.QUOTA_ACTION || defaultQuotaAction),
+    source: quotaSource,
+    fetchUsage,
+    // Only Firestore operations count against the Firebase allowance.
+    counters: DATA_BACKEND === 'firestore' ? () => dataLayer.counters : null,
+    stateFile: process.env.QUOTA_STATE_FILE !== undefined
+        ? process.env.QUOTA_STATE_FILE
+        : (DATA_BACKEND === 'local' ? path.join(process.cwd(), '.local-data', 'quota.json') : ''),
+    logger: console
+});
+
+// ---------------------------------------------------------------------------
+// Express app
+// ---------------------------------------------------------------------------
+
 const app = express();
 
-// Set to the exact hop count in front of this app (1 behind ngrok/nginx).
+// Set to the exact hop count in front of this app (1 behind ngrok/nginx/tunnel).
 app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
 app.disable('x-powered-by');
 
+// Serve the static web app too when running on the MacBook, so Safari can use
+// relative URLs with no CORS and no mixed-content problems.
+if (SERVE_STATIC) {
+    const staticRoot = path.resolve(process.env.STATIC_ROOT || path.join(__dirname, '..'));
+    const { isPublicPath } = require('./lib/public-files');
+    app.use((req, res, next) => {
+        if (/^\/api(?:[/?]|$)/.test(req.path) || req.path === '/health') return next();
+        return isPublicPath(req.path) ? next() : res.status(404).end();
+    });
+    // Local pages always use this server, not a baked-in production hostname.
+    app.get('/api-env.js', (req, res) => res.type('js').set('Cache-Control', 'no-store').send(
+        "window.OWL_API_CONFIG = {primary: location.origin + '/api', fallbacks: []};"
+    ));
+    app.use(express.static(staticRoot, {
+        dotfiles: 'ignore',
+        extensions: ['html'],
+        index: 'index.html',
+        maxAge: 0
+    }));
+}
+
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+if (SERVE_STATIC) extraOrigins.push(`http://localhost:${process.env.PORT || 3000}`, `http://127.0.0.1:${process.env.PORT || 3000}`);
 const isAllowedOrigin = createOriginChecker(extraOrigins);
 
-app.use(cors({
+app.use((req, res, next) => cors({
     origin(origin, callback) {
-        if (isAllowedOrigin(origin)) return callback(null, true);
+        if (isAllowedOrigin(origin) || (SERVE_STATIC && origin === `${req.protocol}://${req.get('host')}`)) return callback(null, true);
         console.log('CORS blocked for origin:', origin);
         return callback(new Error('Blocked by CORS: Unauthorized Origin'));
     },
     allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'X-Firebase-AppCheck'],
+    exposedHeaders: ['X-Owl-Drain', 'X-Owl-Quota-Level', 'X-Owl-Quota-Used', 'X-Owl-Fallback-Url', 'Retry-After'],
     credentials: true
-}));
+})(req, res, next));
 
 app.use(express.json({ limit: '1mb', type: ['application/json', 'text/plain'] }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
+// Stop before doing any Firebase work once the free-tier safety limit is hit.
+// /health and /api/quota stay reachable so clients and you can see why.
+app.use(quota.middleware);
+
+// Diagnostics do not touch Firebase, and remain available during a drain.
+app.get('/health', (req, res) => res.set('Cache-Control', 'no-store').json(healthPayload()));
+app.get('/api/health', (req, res) => res.set('Cache-Control', 'no-store').json(healthPayload()));
+app.get('/api/quota', quota.handler);
+
 // App Check is verified cryptographically; Origin is never treated as authentication.
 app.use(createAppCheckMiddleware({
-    mode: process.env.APP_CHECK_MODE || 'monitor',
-    verifyToken: token => getAppCheck().verifyToken(token)
+    mode: APP_CHECK_MODE,
+    verifyToken: APP_CHECK_MODE === 'off'
+        ? undefined
+        : token => require('firebase-admin/app-check').getAppCheck().verifyToken(token)
 }));
 
 const { optionalAuth, requireAuth, requireAdmin } = createAuthMiddleware({
     projectId: PROJECT_ID,
-    verifyIdToken: token => getAuth().verifyIdToken(token, true),
+    verifyIdToken: AUTH_MODE === 'firebase'
+        ? token => require('firebase-admin/auth').getAuth().verifyIdToken(token, true)
+        : async () => { throw new Error('Firebase ID tokens are not accepted while AUTH_MODE=local.'); },
     verifyJwt: token => jwt.verify(token, JWT_SECRET)
 });
 
 const giftCodes = createGiftCodeService({ db, FieldValue });
-
+const maintenance = createMaintenance({ db, FieldValue, logger: console, timeZone: process.env.CRON_TIMEZONE, beforeRun: async () => {
+    await quota.refresh();
+    return !quota.isDraining();
+} });
 
 // Identify the caller when credentials are supplied, without blocking public reads.
 app.use(optionalAuth);
@@ -101,8 +294,24 @@ const authLimiter = rateLimit({
     message: { error: 'Too many attempts, please try again later.' }
 });
 
-// --- HEALTH ---
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+function healthPayload() {
+    const snap = quota.snapshot();
+    return {
+        status: 'ok',
+        target: IS_FUNCTIONS ? 'firebase-functions' : 'node',
+        dataBackend: DATA_BACKEND,
+        authMode: AUTH_MODE,
+        quota: {
+            level: snap.level,
+            draining: snap.draining,
+            ratio: snap.ratio,
+            threshold: snap.threshold,
+            source: snap.source,
+            action: snap.action
+        },
+        uptimeSeconds: Math.round(process.uptime())
+    };
+}
 
 // --- APP VERSION POLICY ---
 // Read with the Admin SDK, which bypasses Firestore rules AND App Check enforcement.
@@ -123,9 +332,26 @@ app.get('/api/app-version', async (req, res) => {
 // --- AUTH TOKEN EXCHANGE ---
 app.post('/api/auth/token', authLimiter, async (req, res) => {
     try {
-        const { idToken } = req.body || {};
+        const { idToken, email, password } = req.body || {};
+
+        if (AUTH_MODE === 'local') {
+            if (!email || !password) {
+                return res.status(400).json({ error: 'email and password are required while AUTH_MODE=local.' });
+            }
+            const emailMatches = String(email).trim().toLowerCase() === LOCAL_ADMIN_EMAIL;
+            if (!emailMatches || !safeCompare(password, LOCAL_ADMIN_PASSWORD)) {
+                return res.status(401).json({ error: 'Unauthorized: invalid local admin credentials.' });
+            }
+            const token = jwt.sign(
+                { uid: `local:${LOCAL_ADMIN_EMAIL}`, email: LOCAL_ADMIN_EMAIL, role: 'admin' },
+                JWT_SECRET,
+                { expiresIn: '1h' }
+            );
+            return res.json({ token, expiresin: 3600 });
+        }
+
         if (!idToken) return res.status(400).json({ error: 'Firebase ID token is required' });
-        const decoded = await getAuth().verifyIdToken(idToken, true);
+        const decoded = await require('firebase-admin/auth').getAuth().verifyIdToken(idToken, true);
         const token = jwt.sign(
             { uid: decoded.uid, email: decoded.email || null, role: 'admin' },
             JWT_SECRET,
@@ -311,7 +537,7 @@ app.get('/api/verify-device/:deviceId', async (req, res) => {
 
 app.get('/api/notices/:societyIdentifier', async (req, res) => {
     try {
-        await checkAndShiftNotices();
+        await maintenance.checkAndShiftNotices();
         const identifier = req.params.societyIdentifier;
         let noticeDoc = await db.collection('notices').doc(identifier).get();
         if (!noticeDoc.exists) {
@@ -417,6 +643,9 @@ app.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
     try {
         const { email, role } = req.body || {};
         if (!email) return res.status(400).json({ error: 'Email is required' });
+        if (!credential) {
+            return res.status(501).json({ error: 'Password reset needs Firebase Admin credentials and is disabled in local mode.' });
+        }
         const emailLower = String(email).trim().toLowerCase();
         const isGuard = role === 'guard';
 
@@ -736,52 +965,8 @@ app.patch('/api/ads/:adKey', requireAuth, requireAdmin, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- BACKGROUND ROUTINES ---
-async function cleanupOldBookings() {
-    try {
-        const threshold = new Date();
-        threshold.setDate(threshold.getDate() - 7);
-        const snapshot = await db.collection('bookings').where('end', '<', threshold.toISOString()).get();
-        if (snapshot.empty) return;
-        const batch = db.batch();
-        snapshot.docs.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
-        console.log(`Cleaned up ${snapshot.size} expired bookings.`);
-    } catch (err) { console.error('Error cleaning up old bookings:', err); }
-}
-
-async function checkAndShiftNotices() {
-    try {
-        const noticesSnapshot = await db.collection('notices').get();
-        if (noticesSnapshot.empty) return;
-        const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-        const batch = db.batch();
-        let updateCount = 0;
-        noticesSnapshot.forEach(doc => {
-            const data = doc.data();
-            if (data.date && data.date !== todayStr) {
-                batch.update(doc.ref, {
-                    todayMessage: data.tomorrowMessage || '', tomorrowMessage: '',
-                    date: todayStr, updatedAt: FieldValue.serverTimestamp()
-                });
-                updateCount += 1;
-            }
-        });
-        if (updateCount > 0) {
-            await batch.commit();
-            console.log(`Auto-shifted ${updateCount} notices for ${todayStr}.`);
-        }
-    } catch (err) { console.error('Error in checkAndShiftNotices:', err); }
-}
-
-cleanupOldBookings();
-checkAndShiftNotices();
-
-cron.schedule('0 0 * * *', async () => {
-    console.log('Running scheduled midnight notice update (IST)...');
-    await checkAndShiftNotices();
-    await cleanupOldBookings();
-}, { scheduled: true, timezone: 'Asia/Kolkata' });
+// --- FALLBACKS ---
+app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // Express 5 forwards rejected async handlers here automatically.
 app.use((err, req, res, next) => {
@@ -791,7 +976,78 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Owl Watcher API server running on port ${PORT}`));
+// ---------------------------------------------------------------------------
+// Startup
+// ---------------------------------------------------------------------------
+
+function safeCompare(left, right) {
+    const a = Buffer.from(String(left));
+    const b = Buffer.from(String(right));
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+}
+
+function lanAddresses(port) {
+    const addresses = [];
+    for (const interfaces of Object.values(os.networkInterfaces())) {
+        for (const iface of interfaces || []) {
+            if (iface.family === 'IPv4' && !iface.internal) addresses.push(`http://${iface.address}:${port}`);
+        }
+    }
+    return addresses;
+}
+
+function start(port = Number(process.env.PORT) || 3000, host = process.env.HOST || '0.0.0.0') {
+    const server = app.listen(port, host, () => {
+        const snap = quota.snapshot();
+        console.log(`Owl Watcher API listening on http://${host}:${port}`);
+        if (SERVE_STATIC) console.log(`  Static site:  http://localhost:${port}/`);
+        for (const address of lanAddresses(port)) console.log(`  On your LAN:  ${address}`);
+        console.log(`  Data: ${DATA_BACKEND} | Auth: ${AUTH_MODE} | App Check: ${APP_CHECK_MODE}`);
+        console.log(`  Quota guard: ${snap.action} at ${Math.round(snap.threshold * 100)}% (source: ${snap.source})`);
+        if (snap.fallbackUrls.length) console.log(`  Quota fallback: ${snap.fallbackUrls.join(', ')}`);
+    });
+
+    // Prime the authoritative usage numbers at boot; never block startup on them.
+    quota.refresh(true).catch(() => {});
+
+    if (ENABLE_CRON) {
+        maintenance.runAll().catch(() => {});
+        maintenance.schedule(process.env.CRON_SCHEDULE || '0 0 * * *');
+    }
+
+    let closing = false;
+    const shutdown = signal => {
+        if (closing) return;
+        closing = true;
+        console.log(`\n[${signal}] Shutting down...`);
+        quota.close();
+        server.close(() => {
+            try { if (typeof rawDb.flush === 'function') rawDb.flush(); } catch (_) {}
+            process.exit(0);
+        });
+        setTimeout(() => process.exit(0), 4000).unref();
+    };
+    process.once('SIGINT', () => shutdown('SIGINT'));
+    process.once('SIGTERM', () => shutdown('SIGTERM'));
+
+    return server;
+}
+
+if (require.main === module) {
+    start();
+}
 
 module.exports = app;
+module.exports.start = start;
+module.exports.quota = quota;
+module.exports.maintenance = maintenance;
+module.exports.dataLayer = dataLayer;
+module.exports.config = {
+    DATA_BACKEND,
+    AUTH_MODE,
+    APP_CHECK_MODE,
+    PROJECT_ID,
+    IS_FUNCTIONS,
+    SERVE_STATIC
+};

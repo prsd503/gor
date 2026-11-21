@@ -1,0 +1,41 @@
+{
+  "functions": [
+    {
+      "source": "server",
+      "codebase": "default",
+      "runtime": "nodejs22",
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" ci --omit=dev --no-audit --no-fund"
+      ],
+      "ignore": [
+        "node_modules",
+        ".env",
+        ".env.*",
+        "*.log",
+        ".local-data"
+      ]
+    }
+  ],
+  "hosting": {
+    "public": ".firebase-public",
+    "predeploy": [
+      "node scripts/prepare-hosting.js"
+    ],
+    "ignore": [
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "cleanUrls": true,
+    "headers": [
+      {
+        "source": "/api-env.js",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store"
+          }
+        ]
+      }
+    ]
+  }
+}

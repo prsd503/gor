@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!-- API endpoint + automatic failover (Firebase <-> MacBook). Must load before any page script. -->
+    <script src="api-env.js"></script>
+    <script src="api-config.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Owl Watcher - Facility Calendar</title>
     <link href="https://fonts.googleapis.com/css2?family=Caveat&display=swap" rel="stylesheet">
@@ -92,7 +95,7 @@
 
 <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js'></script>
 <script>
-    const API_BASE_URL = 'https://api.owlwatcher.tech/api';
+    const API_BASE_URL = (window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api');
     const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 
     let facilityMap = {};

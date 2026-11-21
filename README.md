@@ -1,5 +1,16 @@
-# gor
-gor
+# Owl Watcher
+
+## Backend: Firebase or your MacBook
+
+- **Local test (no Firebase required):** `npm ci && npm run start:local`, then open
+  <http://localhost:3000/local-test.html>. Credentials are generated in `.env.local`.
+- [MacBook setup and testing guide](docs/macbook-testing.md)
+- [Firebase deployment, 80% quota guard, optional failover and migration guide](docs/deployment.md)
+
+The guard pauses application work at 80% of a tracked usage budget. Firebase
+Cloud Functions requires Blaze; delayed metrics and rejected-request invocations
+mean this is **not a guaranteed zero-cost billing cap**. Local JSON test data is
+independent of Firestore, not an automatically synchronized replica.
 
 ## Optional mobile update popup
 

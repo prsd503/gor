@@ -408,7 +408,7 @@ test('website bootstrap does not import Firebase or insert a popup', t => {
 });
 
 test('every HTML page loads the bridge and optional prompt in head before app logic', () => {
-    const pages = fs.readdirSync(root).filter(name => name.endsWith('.html'));
+    const pages = fs.readdirSync(root).filter(name => name.endsWith('.html') && name !== 'local-test.html');
     assert.equal(pages.length, 12);
     for (const name of pages) {
         const html = fs.readFileSync(path.join(root, name), 'utf8');
@@ -461,7 +461,7 @@ test('fail-open warning includes Firebase error codes', async t => {
 test('policy loader prefers the backend API and skips Firestore entirely', async () => {
     let firestoreCalls = 0;
     const win = { fetch: async url => {
-        assert.equal(url, 'https://api.owlwatcher.tech/api/app-version');
+        assert.equal(url, 'https://us-central1-finder-owl.cloudfunctions.net/api/app-version');
         return { ok: true, json: async () => policy('android', '2.8.0') };
     }, console: { warn() {} } };
     const load = popupApi.createPolicyLoader(win, async () => { firestoreCalls += 1; return {}; });
@@ -482,4 +482,13 @@ test('policy loader falls back when fetch rejects or is unavailable', async () =
     assert.deepEqual(await popupApi.createPolicyLoader(rejecting, mockImports([{ exists: () => true, data: () => policy() }]))(), policy());
     const noFetch = { console: { warn() {} } };
     assert.deepEqual(await popupApi.createPolicyLoader(noFetch, mockImports([{ exists: () => true, data: () => policy() }]))(), policy());
+});
+
+
+test('managed failover never bypasses the API guard via direct Firestore', async () => {
+    let directReads = 0;
+    const win = { OWL_API: {}, fetch: async () => ({ok:false,status:503}) };
+    const load = popupApi.createPolicyLoader(win, async () => { directReads++; });
+    await assert.rejects(load(), /Version API returned 503/);
+    assert.equal(directReads, 0);
 });
