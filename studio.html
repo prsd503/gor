@@ -28,6 +28,7 @@
       --purple: #8E44AD;
       --brand-brown: var(--ow-primary);
       --danger-red: var(--ow-danger);
+      --studio-bottombar-h: calc(112px + env(safe-area-inset-bottom, 0px));
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--ow-font); }
@@ -81,6 +82,54 @@
       color: var(--ow-muted);
     }
 
+    /* Sticky editor toolbar: pinned to the bottom, centered, each tool
+       spreads evenly across the width so the menus fill the screen. */
+    .studio-bottom-bar {
+      position: sticky;
+      bottom: 0;
+      z-index: 20;
+      background: rgba(var(--ow-card-rgb, 255, 255, 255), 0.9);
+      -webkit-backdrop-filter: blur(10px);
+      backdrop-filter: blur(10px);
+      border-top: 1px solid rgba(0, 0, 0, 0.06);
+      padding: 8px 12px;
+      margin-top: 8px;
+      box-shadow: 0 -6px 18px rgba(31, 41, 55, 0.08);
+      isolation: isolate;
+    }
+
+    /* The share/export card is the pinned bottom menu: its buttons sit in a
+       centered row that spans the full width, equally spaced. */
+    .studio-bottom-bar .card {
+      margin: 0;
+      padding: 8px 12px;
+      box-shadow: none;
+      background: transparent;
+      border: none;
+    }
+
+    .studio-bottom-bar .grid-buttons {
+      width: 100%;
+      gap: 10px;
+      justify-content: space-between;
+    }
+
+    .studio-bottom-bar .btn {
+      flex: 1 1 0;
+      text-align: center;
+    }
+
+    /* Leave room for the pinned bottom bar so the last control isn't hidden. */
+    .studio-workspace {
+      padding-bottom: calc(var(--studio-bottombar-h) + 16px);
+    }
+
+    @media (max-width: 900px) {
+      .studio-bottom-bar {
+        border-radius: 16px 16px 0 0;
+      }
+    }
+
     .studio-controls-pane {
       display: flex;
       flex-direction: column;
@@ -107,8 +156,9 @@
 
     /* Desktop: canvas pinned on the left, controls scroll in their own pane on the right. */
     @media (min-width: 880px) {
-      .studio-workspace { flex-direction: row; align-items: flex-start; }
+      .studio-workspace { flex-direction: row; align-items: flex-start; flex-wrap: wrap; }
       .studio-canvas-pane { width: 440px; flex: none; }
+      .studio-bottom-bar { flex: 1 0 100%; }
       .studio-controls-pane {
         flex: 1 1 auto;
         min-width: 0;
@@ -308,7 +358,7 @@
   <div class="studio-workspace">
     <div class="studio-canvas-pane">
       <div class="canvas-frame">
-        <span class="canvas-label">Canvas</span>
+        <span class="canvas-label">Photo Studio</span>
         <div class="canvas-container-wrapper">
           <canvas id="collageCanvas" width="360" height="360"></canvas>
         </div>
@@ -433,17 +483,18 @@
         <audio id="localAudioPlayback" style="display:none;" loop></audio>
       </div>
     </div>
-
-    <div class="card" style="border-top: 4px solid var(--brand-brown);">
-      <h3>📤 Studio Share & Export</h3>
-      
-      <div class="grid-buttons">
-        <button type="button" class="btn" onclick="downloadCollageImage()">📤 Share Image</button>
-        <button type="button" class="btn btn-secondary" onclick="exportCanvasToVideoAnimation()">📤 Share Video </button>
-      </div>
-
+    <div class="card" style="padding:12px 16px;">
       <div class="status-log" id="statusLog">Studio loaded. Ready to build collage compositions.</div>
     </div>
+    </div>
+
+    <div class="studio-bottom-bar">
+      <div class="card">
+        <div class="grid-buttons">
+          <button type="button" class="btn" onclick="downloadCollageImage()">📤 Share Image</button>
+          <button type="button" class="btn btn-secondary" onclick="exportCanvasToVideoAnimation()">📤 Share Video </button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -542,6 +593,13 @@
       });
 
       kickoffAnimationRenderLoop();
+
+      // Keep the canvas painted while the page scrolls or the view is restored,
+      // so the selected image never disappears mid-scroll or mid-tool.
+      window.addEventListener('scroll', scheduleCanvasRepaint, { passive: true });
+      document.addEventListener('scroll', scheduleCanvasRepaint, { passive: true, capture: true });
+      window.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleCanvasRepaint(); });
+      window.addEventListener('pageshow', scheduleCanvasRepaint);
     });
 
     window.updateDurationLabel = function(val) { document.getElementById('durationDisplayLabel').innerText = val + 's'; }
@@ -763,6 +821,26 @@
       canvas.renderAll();
     }
 
+    // --- Canvas visibility guard ---------------------------------------------
+    // The canvas lives in a sticky (transformed) pane. Some browsers drop its
+    // paint layer while the page scrolls or while a tool runs, leaving a blank
+    // square until the next render. Repaint continuously (throttled) and on
+    // scroll / visibility changes so the selected image always stays visible.
+    let lastCanvasRepaint = 0;
+    const CANVAS_REPAINT_MS = 90;
+
+    function repaintCanvas() {
+      if (!canvas) return;
+      const now = performance.now();
+      if (now - lastCanvasRepaint < CANVAS_REPAINT_MS) return;
+      lastCanvasRepaint = now;
+      canvas.renderAll();
+    }
+
+    function scheduleCanvasRepaint() {
+      requestAnimationFrame(repaintCanvas);
+    }
+
     function kickoffAnimationRenderLoop() {
       let lastTick = performance.now();
       function processTick(now) {
@@ -794,56 +872,96 @@
             }
           });
           canvas.renderAll();
+        } else {
+          // No animation is running: still repaint on a throttle so the canvas
+          // layer never goes blank while scrolling or while a tool is in use.
+          repaintCanvas();
         }
         animationFrameId = requestAnimationFrame(processTick);
       }
       animationFrameId = requestAnimationFrame(processTick);
     }
 
-    // --- Share Image via Capacitor Share Sheet ---
+    // --- Share Image (same logic as the E-Bouquet share-GIF) ---
+    // Native Capacitor Share/Filesystem when running in a WebView, otherwise the
+    // browser's Web Share API with files, and finally a plain download fallback.
+    async function nativePlatformName() {
+      const cap = (typeof window !== 'undefined' && window.Capacitor) ? window.Capacitor : null;
+      if (!cap) return 'web';
+      try { return cap.getPlatform() || 'web'; } catch (e) { return 'web'; }
+    }
+
+    async function canShareFiles(file) {
+      return !!(window.navigator && typeof window.navigator.canShare === 'function' &&
+        window.navigator.canShare({ files: [file] }));
+    }
+
+    function downloadImage(dataURL, fileName) {
+      const link = document.createElement('a');
+      link.href = dataURL;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    function isAbortError(error) {
+      return !!error && (error.name === 'AbortError' || /aborted/i.test(error.message || ''));
+    }
+
     window.downloadCollageImage = async function() {
       canvas.discardActiveObject();
-      
-      const watermark = await addImageWatermark(); 
+
+      const watermark = await addImageWatermark();
       timelineCounter = 0;
       canvas.renderAll();
-      
+
       const dataURL = canvas.toDataURL({ format: 'jpeg', quality: 1.0, multiplier: 2 });
       const base64Data = dataURL.split(',')[1];
       const fileName = `OwlWatcher-${Date.now()}.jpg`;
+      const shareText = 'Check out my custom created image made with Owl Watcher Photo Studio!';
+      const statusLog = document.getElementById('statusLog');
 
       try {
-        const { Filesystem, Directory, Share } = await loadCapacitorPlugins();
-        const tempFile = await Filesystem.writeFile({
-          path: fileName,
-          data: base64Data,
-          directory: Directory.Cache
-        });
-
-        await Share.share({
-          title: 'Owl Watcher Creation',
-          text: 'Check out my custom created image made with Owl Watcher Studio!',
-          url: tempFile.uri,
-          dialogTitle: 'Share via'
-        });
-
-        document.getElementById('statusLog').innerText = `📤 Opening share menu...`;
-
+        const platform = await nativePlatformName();
+        if (platform !== 'web') {
+          // Native WebView: write the file, then open the native share sheet with a file payload.
+          const { Filesystem, Directory, Share } = await loadCapacitorPlugins();
+          const tempFile = await Filesystem.writeFile({
+            path: fileName,
+            data: base64Data,
+            directory: Directory.Cache
+          });
+          await Share.share({
+            title: 'Owl Watcher Creation',
+            text: shareText,
+            files: [tempFile.uri],
+            dialogTitle: 'Share via'
+          });
+          statusLog.innerText = `📤 Opening share menu...`;
+        } else {
+          const blob = await (await fetch(dataURL)).blob();
+          const file = new File([blob], fileName, { type: 'image/jpeg' });
+          if (await canShareFiles(file)) {
+            await navigator.share({ title: 'Owl Watcher Creation', text: shareText, files: [file] });
+            statusLog.innerText = `📤 Opening share menu...`;
+          } else {
+            downloadImage(dataURL, fileName);
+            statusLog.innerText = `💾 Downloaded image to your browser!`;
+          }
+        }
       } catch (error) {
-        console.warn('Capacitor share unavailable, falling back to browser download:', error);
-        
-        const link = document.createElement('a');
-        link.href = dataURL;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        document.getElementById('statusLog').innerText = `💾 Downloaded image to your browser!`;
+        if (isAbortError(error)) {
+          // The user dismissed the share sheet — no fallback, just restore the canvas.
+        } else {
+          console.warn('Share image unavailable, falling back to browser download:', error);
+          downloadImage(dataURL, fileName);
+          statusLog.innerText = `💾 Downloaded image to your browser!`;
+        }
+      } finally {
+        canvas.remove(watermark);
+        canvas.renderAll();
       }
-      
-      canvas.remove(watermark); 
-      canvas.renderAll();
     };
 
     // --- Share Video via Capacitor Share Sheet (Fixed with Base Reset & Timeline Counter Initialization) ---
