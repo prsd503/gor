@@ -5,6 +5,7 @@
 - **Local test (no Firebase required):** `npm ci && npm run start:local`, then open
   <http://localhost:3000/local-test.html>. Credentials are generated in `.env.local`.
 - [MacBook setup and testing guide](docs/macbook-testing.md)
+- [GitHub Pages → MacBook HTTPS preview and security checklist](docs/github-pages-macbook.md)
 - [Firebase deployment, 80% quota guard, optional failover and migration guide](docs/deployment.md)
 
 The guard pauses application work at 80% of a tracked usage budget. Firebase
@@ -92,3 +93,18 @@ files) so it can go to any app as a real animation. Nothing is uploaded: the GIF
 encoded locally and no third-party service is opened. Where a share sheet is
 unavailable, *Share GIF* falls back to a download. A compact
 `bouquet.html?b=rose,lily&m=…&f=…` link is still available for anyone who prefers it.
+
+
+### Public MacBook connection (restricted preview)
+
+`ENV_FILE=.env.macbook npm run start:tunnel-preview` exposes **only health,
+public ads and version-policy reads**. It blocks login, private records, searches
+and all writes, and does not serve repository files. Do not tunnel the unrestricted
+`start:firebase` or development login server as a substitute. Full public
+admin/resident/guard use still needs society-level authorization work; see the
+[connection guide](docs/github-pages-macbook.md).
+
+**Security compatibility change:** Firebase sign-in alone no longer grants admin.
+Use trusted custom admin claims or explicit global staff `ADMIN_UIDS`. Old backend
+JWTs without the new authorization-version marker lose admin privileges; authorized
+staff must obtain a new session. No production users or claims are changed automatically.

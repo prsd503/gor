@@ -1,5 +1,9 @@
 # Run and test on your MacBook
 
+For your public GitHub Pages site to reach the MacBook, use the
+[restricted HTTPS preview guide](github-pages-macbook.md). Do not expose the
+unrestricted local test or Firebase-backed development server directly.
+
 ## A. Completely Firebase-free backend test (recommended first)
 
 You need **Node.js 22** and npm. Install Node 22 LTS from a trusted installer or use your existing Node version manager. Check:

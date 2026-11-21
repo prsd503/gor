@@ -48,6 +48,8 @@ const { rateLimit } = require('express-rate-limit');
 
 const { buildVersionResponse } = require('./lib/version-policy');
 const { createAuthMiddleware } = require('./lib/auth');
+const { parseAdminUids, firebaseRole } = require('./lib/admin-policy');
+const { validatePreviewConfig, createPreviewGate } = require('./lib/tunnel-preview');
 const { createGiftCodeService } = require('./lib/gift-codes');
 const { createOriginChecker, createAppCheckMiddleware } = require('./lib/security');
 const { createQuotaGuard } = require('./lib/quota-guard');
@@ -84,6 +86,8 @@ const DATA_BACKEND = lower(process.env.DATA_BACKEND, 'firestore');
 const AUTH_MODE = lower(process.env.AUTH_MODE, 'firebase');
 const APP_CHECK_MODE = lower(process.env.APP_CHECK_MODE, AUTH_MODE === 'local' ? 'off' : 'monitor');
 const SERVE_STATIC = flag(process.env.SERVE_STATIC);
+const TUNNEL_PREVIEW = flag(process.env.TUNNEL_PREVIEW);
+const ADMIN_UIDS = parseAdminUids(process.env.ADMIN_UIDS);
 const ENABLE_CRON = !IS_FUNCTIONS && String(process.env.ENABLE_CRON || '1') !== '0';
 
 if (!['firestore', 'local'].includes(DATA_BACKEND)) {
@@ -117,6 +121,8 @@ if (process.env.QUOTA_SOURCE && !['auto', 'local', 'monitoring'].includes(proces
 }
 
 const quotaSource = normalizeSource(!process.env.QUOTA_SOURCE || process.env.QUOTA_SOURCE === 'auto' ? (IS_FUNCTIONS ? 'monitoring' : 'local') : process.env.QUOTA_SOURCE);
+
+if (TUNNEL_PREVIEW) validatePreviewConfig({ ...process.env, DATA_BACKEND, AUTH_MODE, SERVE_STATIC: SERVE_STATIC ? '1' : '0' });
 
 // ---------------------------------------------------------------------------
 // Firebase (skipped entirely for a fully local run)
@@ -228,7 +234,10 @@ if (SERVE_STATIC) {
 
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 if (SERVE_STATIC) extraOrigins.push(`http://localhost:${process.env.PORT || 3000}`, `http://127.0.0.1:${process.env.PORT || 3000}`);
-const isAllowedOrigin = createOriginChecker(extraOrigins);
+const isAllowedOrigin = createOriginChecker(extraOrigins, TUNNEL_PREVIEW ? {
+    allowNgrok: false,
+    exactOrigins: ['https://prsd503.github.io']
+} : {});
 
 app.use((req, res, next) => cors({
     origin(origin, callback) {
@@ -240,6 +249,16 @@ app.use((req, res, next) => cors({
     exposedHeaders: ['X-Owl-Drain', 'X-Owl-Quota-Level', 'X-Owl-Quota-Used', 'X-Owl-Fallback-Url', 'Retry-After'],
     credentials: true
 })(req, res, next));
+
+if (TUNNEL_PREVIEW) {
+    // Cap requests before monitoring/auth work. This is per process, not a
+    // distributed abuse/billing control. Unknown/private routes fail closed.
+    app.use(rateLimit({
+        windowMs: 60000, limit: 60, standardHeaders: true, legacyHeaders: false,
+        message: { error: 'Too many preview requests; try again shortly.' }
+    }));
+    app.use(createPreviewGate());
+}
 
 app.use(express.json({ limit: '1mb', type: ['application/json', 'text/plain'] }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
@@ -263,6 +282,7 @@ app.use(createAppCheckMiddleware({
 
 const { optionalAuth, requireAuth, requireAdmin } = createAuthMiddleware({
     projectId: PROJECT_ID,
+    adminUids: ADMIN_UIDS,
     verifyIdToken: AUTH_MODE === 'firebase'
         ? token => require('firebase-admin/auth').getAuth().verifyIdToken(token, true)
         : async () => { throw new Error('Firebase ID tokens are not accepted while AUTH_MODE=local.'); },
@@ -298,6 +318,7 @@ function healthPayload() {
     const snap = quota.snapshot();
     return {
         status: 'ok',
+        accessMode: TUNNEL_PREVIEW ? 'tunnel-preview' : 'standard',
         target: IS_FUNCTIONS ? 'firebase-functions' : 'node',
         dataBackend: DATA_BACKEND,
         authMode: AUTH_MODE,
@@ -343,7 +364,7 @@ app.post('/api/auth/token', authLimiter, async (req, res) => {
                 return res.status(401).json({ error: 'Unauthorized: invalid local admin credentials.' });
             }
             const token = jwt.sign(
-                { uid: `local:${LOCAL_ADMIN_EMAIL}`, email: LOCAL_ADMIN_EMAIL, role: 'admin' },
+                { uid: `local:${LOCAL_ADMIN_EMAIL}`, email: LOCAL_ADMIN_EMAIL, role: 'admin', authVersion: 2 },
                 JWT_SECRET,
                 { expiresIn: '1h' }
             );
@@ -353,7 +374,7 @@ app.post('/api/auth/token', authLimiter, async (req, res) => {
         if (!idToken) return res.status(400).json({ error: 'Firebase ID token is required' });
         const decoded = await require('firebase-admin/auth').getAuth().verifyIdToken(idToken, true);
         const token = jwt.sign(
-            { uid: decoded.uid, email: decoded.email || null, role: 'admin' },
+            { uid: decoded.uid, email: decoded.email || null, role: firebaseRole(decoded, ADMIN_UIDS), authVersion: 2 },
             JWT_SECRET,
             { expiresIn: '1h' }
         );
@@ -1003,6 +1024,7 @@ function start(port = Number(process.env.PORT) || 3000, host = process.env.HOST 
         console.log(`Owl Watcher API listening on http://${host}:${port}`);
         if (SERVE_STATIC) console.log(`  Static site:  http://localhost:${port}/`);
         for (const address of lanAddresses(port)) console.log(`  On your LAN:  ${address}`);
+        if (TUNNEL_PREVIEW) console.log('  TUNNEL PREVIEW: read-only public content; private routes, sign-in and writes BLOCKED.');
         console.log(`  Data: ${DATA_BACKEND} | Auth: ${AUTH_MODE} | App Check: ${APP_CHECK_MODE}`);
         console.log(`  Quota guard: ${snap.action} at ${Math.round(snap.threshold * 100)}% (source: ${snap.source})`);
         if (snap.fallbackUrls.length) console.log(`  Quota fallback: ${snap.fallbackUrls.join(', ')}`);
@@ -1049,5 +1071,6 @@ module.exports.config = {
     APP_CHECK_MODE,
     PROJECT_ID,
     IS_FUNCTIONS,
-    SERVE_STATIC
+    SERVE_STATIC,
+    TUNNEL_PREVIEW
 };
