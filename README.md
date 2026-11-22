@@ -56,9 +56,10 @@ A premium selection is **previewable but not shareable**: the rendered card
 carries a `PREVIEW` watermark until a code is accepted.
 
 A **9 digit code costs ₹30 and works once** for one bouquet. Owl Watcher staff
-create codes to `giftCodes/{code}` in Firestore; redemption is a single
-transaction that re-reads the code and flips `used` to true, so two simultaneous
-attempts cannot both win.
+create codes to `giftCodes/{code}` in Firestore. Unlocking validates availability
+without writing anything. Only pressing **Share GIF** calls redemption: a single
+transaction re-reads the code and flips `used` to true, so two simultaneous
+share attempts cannot both win, even if both pages previously unlocked.
 
 Every premium theme has its **own backdrop** rather than a recoloured night sky —
 confetti and balloons, drifting hearts, a rotating gold sunburst, falling petals,
@@ -72,17 +73,30 @@ a premium bloom is in the bouquet (or a premium theme is chosen), the rendered c
 carries a **PREVIEW ribbon across the bloom cluster** as well as the page watermark,
 so a crop of the bouquet cannot pass as an unlocked card.
 
-**Each unlock allows one Share GIF attempt on this page only.** Redeeming opens
-every premium theme and flower immediately. Pressing Share GIF relocks all premium
-features immediately, while that GIF finishes sharing (or the save fallback).
-Cancellation or failure also consumes the unlock; another premium share needs a
-new valid unused code and a newly created GIF. Free bouquets remain free. Nothing is written to `localStorage` or `sessionStorage` and nothing is
-tied to an account, so refreshing or reopening the page locks the premium set
-again — and the spent code cannot be reused. This is stated in the on-page rules.
+**Unlocking does not spend the code.** Premium opens for the current page only;
+nothing is stored in `localStorage` or `sessionStorage`, and no account is required.
+After a refresh or reopening, enter the same unused code to unlock again. Keep the
+code safe. No existing spent codes are reset by this change.
+
+**Share GIF spends the code before any transfer.** Premium relocks immediately,
+and the GIF is shared (or saved by the fallback) only after the server confirms
+atomic consumption. A code used elsewhere or disabled since validation cannot
+share. Cancellation or a transfer failure after confirmation still spends the
+code. Another premium share needs a new unused code and a newly created GIF.
+An unavailable server or ambiguous/lost response blocks the transfer; enter the
+code again to check whether it is still unused. Ordinary free sharing needs no
+server code request and remains reusable. Browsers that lose share-sheet user
+activation during server confirmation use the existing download fallback.
+
+Deploy the updated backend **before** publishing the updated page: it requires
+`/validate` and the explicit `consumed: true` response from `/redeem`. Reload old
+open pages to get the new flow; older cached clients still redeem at unlock.
+Merging the code does not deploy the Firebase backend.
 
 | Route | Who | Purpose |
 | --- | --- | --- |
-| `POST /api/gift-codes/redeem` | anyone | validates + burns a code (no sign-in: the code is the credential) |
+| `POST /api/gift-codes/validate` | anyone | read-only check for unlocking; never sets `used` |
+| `POST /api/gift-codes/redeem` | anyone | atomically spends the code on Share GIF; returns `consumed: true` |
 | `POST /api/gift-codes` | admin | mints a batch of codes |
 
 Buying a code is a WhatsApp chat with the team (`wa.me/919033406816`, the same

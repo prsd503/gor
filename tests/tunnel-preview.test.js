@@ -31,7 +31,7 @@ test('preview allows only exact public GET/HEAD paths', () => {
         assert.equal(previewAllowed('HEAD',url),true,url);
         for (const method of ['POST','PUT','PATCH','DELETE','TRACE']) assert.equal(previewAllowed(method,url),false);
     }
-    for (const url of ['/','/api/quota','/api/config','/api/admins','/api/guards','/api/vehicles','/api/bookings','/api/notices/Aangan','/api/auth/token','/api/gift-codes/redeem','/server/index.js','/.env.macbook','/api/%61ds/global','/api/ads/global/private','/api/ads/local/a%2Fb','/api/ads/local/a.b','/api/ads/local/../global']) {
+    for (const url of ['/','/api/quota','/api/config','/api/admins','/api/guards','/api/vehicles','/api/bookings','/api/notices/Aangan','/api/auth/token','/api/gift-codes/validate','/api/gift-codes/redeem','/server/index.js','/.env.macbook','/api/%61ds/global','/api/ads/global/private','/api/ads/local/a%2Fb','/api/ads/local/a.b','/api/ads/local/../global']) {
         assert.equal(previewAllowed('GET',url),false,url);
     }
 });

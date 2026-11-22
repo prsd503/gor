@@ -6,7 +6,8 @@
  *   { code: '123456789', used: false, createdAt, createdBy,
  *     usedAt: null, usedBy: null, price: 30, currency: 'INR' }
  *
- * Redeeming is a single Firestore transaction: the code is re-read, checked
+ * Validation is read-only and can be repeated after a refresh. Only Share GIF
+ * calls redeem, a single Firestore transaction: the code is re-read, checked
  * for `used`, and only then flipped to `used`. Two people redeeming the same
  * code at the same moment therefore cannot both win - the second transaction
  * sees `used: true` and is rejected.
@@ -37,14 +38,18 @@ function createGiftCodeService(options) {
         return db.collection(COLLECTION);
     }
 
-    /* Redeem a code. Returns a result object instead of throwing so the route
-     * can map it to a status code without string matching.
-     *
-     * No account is involved: the code itself is the credential. The unlock is
-     * deliberately not persisted anywhere, so it lasts only for the page session
-     * that redeemed it. `redeemedBy` is recorded purely for support/audit.
-     */
+    // Both operations bypass the read cache using a transaction. Validation
+    // checks current availability without writing; sharing rechecks and spends
+    // atomically, even if several pages previously validated the same code.
+    async function validate(rawCode) {
+        return checkCode(rawCode, false);
+    }
+
     async function redeem(rawCode, redeemedBy) {
+        return checkCode(rawCode, true, redeemedBy);
+    }
+
+    async function checkCode(rawCode, consume, redeemedBy) {
         const code = normalizeCode(rawCode);
         if (!isValidCode(code)) {
             return { ok: false, status: 400, error: 'Enter the 9 digit code exactly as you received it.' };
@@ -65,6 +70,8 @@ function createGiftCodeService(options) {
             if (data.disabled === true) {
                 return { ok: false, status: 409, error: 'That code is no longer active.' };
             }
+
+            if (!consume) return { ok: true, code, price: data.price || PRICE_INR };
 
             const updates = {
                 used: true,
@@ -110,7 +117,7 @@ function createGiftCodeService(options) {
         return made;
     }
 
-    return { redeem, create, isValidCode, normalizeCode, PRICE_INR };
+    return { validate, redeem, create, isValidCode, normalizeCode, PRICE_INR };
 }
 
 module.exports = { createGiftCodeService, isValidCode, normalizeCode, CODE_PATTERN, PRICE_INR, COLLECTION };

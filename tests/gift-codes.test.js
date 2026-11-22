@@ -157,3 +157,52 @@ test('creation is clamped to a sane batch size', async () => {
     const made = await service(db).create(10000, 'admin');
     assert.ok(made.length <= 500, 'never mints an unbounded batch');
 });
+
+test('validation is repeatable, read-only, and leaves every usage/audit field unchanged', async () => {
+    const original = { code: CODE, used: false, usedAt: null, usedBy: null, price: 30, createdBy: 'staff' };
+    const db = fakeDb({ [CODE]: { ...original } });
+    const svc = service(db);
+    for (let i = 0; i < 3; i++) {
+        const checked = await svc.validate(' 123-456-789 ');
+        assert.equal(checked.ok, true);
+        assert.equal(checked.code, CODE);
+        assert.deepEqual(db.store.get(CODE), original, 'unlock/refresh checks never spend the code');
+    }
+    assert.equal((await svc.redeem(CODE)).ok, true, 'Share GIF can spend the validated code');
+    assert.equal((await svc.validate(CODE)).status, 409, 'spent code no longer unlocks');
+});
+
+test('validation rejects malformed, missing, disabled, and spent codes without writes', async () => {
+    const db = fakeDb({
+        '111111111': { used: true, usedBy: 'first-winner' },
+        '222222222': { used: false, disabled: true }
+    });
+    const before = [...db.store.entries()].map(([id, data]) => [id, { ...data }]);
+    const svc = service(db);
+    for (const [code, status] of [['bad', 400], ['999999999', 404], ['111111111', 409], ['222222222', 409]]) {
+        const result = await svc.validate(code);
+        assert.equal(result.ok, false);
+        assert.equal(result.status, status);
+    }
+    assert.deepEqual([...db.store.entries()], before);
+});
+
+test('multiple pages can validate, but only one concurrent Share GIF transaction wins', async () => {
+    const db = fakeDb({ [CODE]: { used: false } });
+    const svc = service(db);
+    const validations = await Promise.all([svc.validate(CODE), svc.validate(CODE), svc.validate(CODE)]);
+    assert.ok(validations.every((r) => r.ok));
+    assert.equal(db.store.get(CODE).used, false);
+    const shares = await Promise.all([svc.redeem(CODE, 'a'), svc.redeem(CODE, 'b'), svc.redeem(CODE, 'c')]);
+    assert.equal(shares.filter((r) => r.ok).length, 1);
+    assert.equal(shares.filter((r) => r.status === 409).length, 2);
+});
+
+test('a code disabled after unlocking cannot be consumed by Share GIF', async () => {
+    const db = fakeDb({ [CODE]: { used: false } });
+    const svc = service(db);
+    assert.equal((await svc.validate(CODE)).ok, true);
+    db.store.get(CODE).disabled = true;
+    assert.equal((await svc.redeem(CODE)).status, 409);
+    assert.equal(db.store.get(CODE).used, false);
+});

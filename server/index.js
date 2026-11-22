@@ -391,15 +391,27 @@ app.post('/api/auth/token', authLimiter, async (req, res) => {
  * by Owl Watcher staff and redeemed exactly once; the transaction in
  * lib/gift-codes.js is what makes "used once" true rather than hopeful.
  */
-// No sign-in is required to redeem: the code itself is the credential. Nothing
-// is bound to an account, so the unlock lives only in the page session - the
-// visitor can use it immediately, and a refresh locks the premium set again.
-// Traffic is still covered by the /api/ rate limiter and App Check.
+// The code itself is the credential; both routes are covered by the /api/
+// rate limiter, App Check and quota guard. Unlocking is read-only. Only the
+// Share GIF action redeems, rechecking availability in an atomic transaction.
+app.post('/api/gift-codes/validate', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+        const result = await giftCodes.validate(req.body && req.body.code);
+        if (!result.ok) return res.status(result.status).json({ error: result.error });
+        return res.json({ unlocked: true, code: result.code, price: result.price });
+    } catch (err) {
+        console.error('gift code validation failed:', err);
+        return res.status(500).json({ error: 'Could not check that code right now.' });
+    }
+});
+
 app.post('/api/gift-codes/redeem', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
     try {
         const result = await giftCodes.redeem(req.body && req.body.code, 'guest');
         if (!result.ok) return res.status(result.status).json({ error: result.error });
-        return res.json({ unlocked: true, code: result.code, price: result.price });
+        return res.json({ unlocked: true, consumed: true, code: result.code, price: result.price });
     } catch (err) {
         console.error('gift code redemption failed:', err);
         return res.status(500).json({ error: 'Could not redeem that code right now.' });
