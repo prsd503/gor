@@ -73,13 +73,20 @@ Use Node.js 22 for project verification/deployment compatibility (the cloud
 runtime is explicitly Node 22, even if the CLI can log in on Node 24).
 
 ```sh
-npm ci
+npm ci --ignore-scripts
+npm --prefix server ci --ignore-scripts
+npm audit
+npm --prefix server audit --omit=dev
 npm test
 npm run check
 npx firebase-tools login
 npx firebase-tools projects:list
 npx firebase-tools functions:list --project finder-owl
 ```
+
+See [dependency refresh and install-script review](dependency-updates.md) for the
+lockfile changes and validation. Do not use `npm audit fix --force` or approve
+all dependency install scripts to silence warnings.
 
 Inspect any preexisting function before proceeding. Do not accept deletion of
 unrelated functions. No scheduled maintenance should exist for this initial

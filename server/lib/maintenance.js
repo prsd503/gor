@@ -1,9 +1,7 @@
-/* Background routines shared by the long-running server and the Firebase
- * scheduled function.
+/* Background routines for the long-running MacBook/server process.
  *
- * `node-cron` only works in a process that stays alive (the MacBook copy). On
- * Cloud Functions the `maintenance` scheduled function calls runAll() instead,
- * because instances are frozen between requests.
+ * node-cron v4 only runs in a process that stays alive. The initial read-only
+ * Firebase entry exports no scheduled function and never starts these jobs.
  */
 'use strict';
 
@@ -83,11 +81,14 @@ function createMaintenance(options = {}) {
         }
     }
 
-    // Long-running deployments only. Cloud Functions use the scheduled function.
+    // v4 schedule() starts automatically; the v3 `scheduled` option is gone.
+    // Return the promise so noOverlap covers the whole asynchronous DB job.
+    // This prevents overlap in this process, not across multiple servers.
     function schedule(expression = '0 0 * * *') {
-        return cron.schedule(expression, () => {
-            runAll().catch(() => {});
-        }, { scheduled: true, timezone: timeZone });
+        return cron.schedule(expression, () => runAll().catch(() => {}), {
+            timezone: timeZone,
+            noOverlap: true
+        });
     }
 
     return { cleanupOldBookings, checkAndShiftNotices, runAll, schedule, lastRun, timeZone };
