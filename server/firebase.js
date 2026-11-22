@@ -1,7 +1,7 @@
-/* Initial, read-only Firebase API entry point.
- * See docs/firebase-api-setup.md. No scheduled function is exported and no
- * process maintenance runs. Full application release needs a separate reviewed
- * society/resource authorization migration; there is no env flag to enable it.
+/* Full-feature Firebase HTTP API entry point.
+ * See docs/firebase-api-full-release.md. All private routes remain protected
+ * by verified Firebase identity and Firestore-backed membership/society checks.
+ * No scheduled function is exported; process maintenance remains disabled.
  */
 'use strict';
 

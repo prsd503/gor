@@ -1,4 +1,10 @@
-# Dependency refresh before the initial Firebase deployment
+# Dependency refresh and release status
+
+> This records the earlier dependency refresh and read-only pilot preparation.
+> The live Function remains read-only, while the current branch now stages a
+> full-feature API profile without deploying it. Follow
+> [the full-release guide](firebase-api-full-release.md) for current API
+> prerequisites; the setup steps below are historical.
 
 ## What changed
 
@@ -22,9 +28,10 @@ through `node-cron -> uuid`. Root audit results are not the backend audit.
   **5.3.0**, and node-cron **4.6.0**. Only the cron manifest range required a major
   version change. Keep and install from the reviewed lockfiles.
 
-The initial Firebase entry still exports only the read-only HTTP API. No
-Scheduler export, process cron, write permissions, frontend URL change, cloud
-deployment, DNS/IAM change or production-data mutation was introduced.
+The live Firebase Function still exports the previously deployed read-only API.
+This branch now has a full-profile HTTP entry, but no Scheduler export, process
+cron, write permissions, frontend URL change, cloud deployment, DNS/IAM change
+or production-data mutation has occurred.
 
 ## Repeatable local checks (Node 22)
 
@@ -65,12 +72,13 @@ changed by this dependency fix.
 
 ## Next deployment prerequisites
 
-Follow [the API-only setup guide](firebase-api-setup.md): create the dedicated
-`owl-api-readonly` runtime account with **Cloud Datastore Viewer** and
-**Monitoring Viewer**, enable Monitoring, prepare the private `server/.env`, and
-run the local deployment preflight. Do not create a JSON service-account key.
-No deploy until those checks pass and deployment is explicitly approved.
+Follow [the full-feature API release guide](firebase-api-full-release.md):
+prepare `server/.env` privately, provision a dedicated write-capable runtime
+identity with reviewed least-privilege permissions, verify membership data and
+run the local preflight. Do not create a JSON service-account key. The preflight
+cannot verify IAM bindings or production data compatibility.
 
-The [authorization review](firebase-api-security-review.md) remains a blocker
-for full login, private-data access, gift-code operations and writes. Passing
-tests and audit does not remove that restriction.
+The full-profile route code is now staged, but production login, gift-code
+operations and writes remain unavailable until the runtime identity is provisioned
+and the release blockers in the [authorization review](firebase-api-security-review.md)
+are addressed. Passing tests and audit does not itself authorize deployment.

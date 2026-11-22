@@ -15,7 +15,7 @@ function checkApiDeploy(root, shell = process.env) {
     const extra = fs.readdirSync(source).filter(name => /^\.env(?:\.|$)/.test(name) && name !== '.env' && !name.endsWith('.example'));
     if (extra.length) throw new Error('Remove or back up additional server/.env.* files outside server/ to avoid Firebase CLI environment overrides.');
     const env = dotenv.parse(fs.readFileSync(file));
-    for (const key of ['JWT_SECRET', 'NODE_ENV', 'OWL_FIREBASE_PROJECT_ID', 'DATA_BACKEND', 'AUTH_MODE', 'SERVE_STATIC', 'ENABLE_CRON', 'QUOTA_ACTION', 'QUOTA_SOURCE', 'QUOTA_THRESHOLD', 'ALLOWED_ORIGINS', 'API_RUNTIME_SERVICE_ACCOUNT']) {
+    for (const key of ['API_RELEASE_PROFILE', 'JWT_SECRET', 'NODE_ENV', 'OWL_FIREBASE_PROJECT_ID', 'DATA_BACKEND', 'AUTH_MODE', 'SERVE_STATIC', 'ENABLE_CRON', 'QUOTA_ACTION', 'QUOTA_SOURCE', 'QUOTA_THRESHOLD', 'ALLOWED_ORIGINS', 'API_RUNTIME_SERVICE_ACCOUNT']) {
         if (!env[key]) throw new Error(`Configure ${key} in server/.env.`);
     }
     if (env.JWT_SECRET.length < 32 || env.JWT_SECRET.startsWith('REPLACE_WITH_')) throw new Error('Replace JWT_SECRET with a private random secret of at least 32 characters.');
@@ -47,13 +47,13 @@ function checkApiDeploy(root, shell = process.env) {
         }
     }
     inspect(source);
-    return { project: env.OWL_FIREBASE_PROJECT_ID, profile: 'firebase-read-only' };
+    return { project: env.OWL_FIREBASE_PROJECT_ID, profile: 'firebase-full' };
 }
 
 if (require.main === module) {
     try {
         const result = checkApiDeploy(path.resolve(__dirname, '..'));
-        console.log(`Local API preflight passed: ${result.project}, ${result.profile}, API only, no maintenance. IAM, live Monitoring and route checks are still required.`);
+        console.log(`Local API preflight passed: ${result.project}, ${result.profile}, authenticated routes enabled, no scheduled maintenance. This does not verify runtime IAM, live Monitoring, Firestore data compatibility or Firebase authentication.`);
     } catch (error) {
         console.error('API preflight failed:', error.message);
         process.exitCode = 1;

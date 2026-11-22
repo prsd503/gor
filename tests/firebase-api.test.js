@@ -4,29 +4,38 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { prepareFirebaseApi, firebaseReadAllowed } = require('../server/lib/firebase-release');
+const { prepareFirebaseApi } = require('../server/lib/firebase-release');
 const { checkApiDeploy } = require('../scripts/check-api-deploy');
 
 const root = path.resolve(__dirname, '..');
 function env() {
     return {
+        API_RELEASE_PROFILE: 'full',
         OWL_FIREBASE_PROJECT_ID: 'finder-owl',
-        API_RUNTIME_SERVICE_ACCOUNT: 'owl-api-readonly@finder-owl.iam.gserviceaccount.com',
+        API_RUNTIME_SERVICE_ACCOUNT: 'owl-api-runtime@finder-owl.iam.gserviceaccount.com',
         ALLOWED_ORIGINS: 'https://prsd503.github.io,https://app.owlwatcher.tech,https://localhost,http://localhost,capacitor://localhost'
     };
 }
 
-test('Firebase entry preparation forces read-only/no cron and safe defaults', () => {
-    const configured = { ...env(), FIREBASE_READ_ONLY: '0', ENABLE_CRON: '1' };
+test('Firebase entry preparation enables the full authenticated API and keeps safe serverless defaults', () => {
+    const configured = { ...env(), FIREBASE_READ_ONLY: '0', ENABLE_CRON: '0' };
     const result = prepareFirebaseApi(configured);
-    assert.equal(configured.FIREBASE_READ_ONLY, '1');
-    assert.equal(configured.ENABLE_CRON, '0');
+    assert.equal(configured.API_RELEASE_PROFILE, 'full');
+    assert.equal(configured.FIREBASE_READ_ONLY, '0', 'the global read-only gate is not enabled');
+    assert.equal(configured.ENABLE_CRON, '0', 'maintenance needs a separate scheduled release');
     assert.equal(configured.QUOTA_SOURCE, 'monitoring');
     assert.equal(configured.QUOTA_ACTION, 'stop');
     assert.equal(configured.QUOTA_THRESHOLD, '0.8');
     assert.equal(configured.SERVE_STATIC, '0');
     assert.equal(configured.MAX_INSTANCES, '2');
     assert.equal(result.serviceAccount, env().API_RUNTIME_SERVICE_ACCOUNT);
+    assert.equal(result.profile, 'firebase-full');
+});
+
+test('full API release refuses the old read-only profile and read-only runtime account', () => {
+    assert.throws(() => prepareFirebaseApi({ ...env(), API_RELEASE_PROFILE: 'read-only' }), /API_RELEASE_PROFILE=full/);
+    assert.throws(() => prepareFirebaseApi({ ...env(), API_RUNTIME_SERVICE_ACCOUNT: 'owl-api-readonly@finder-owl.iam.gserviceaccount.com' }), /non-read-only service account/);
+    assert.throws(() => prepareFirebaseApi({ ...env(), FIREBASE_READ_ONLY: '1' }), /Remove FIREBASE_READ_ONLY/);
 });
 
 test('unsafe Firebase configuration fails before app/Firebase initialization', () => {
@@ -52,14 +61,15 @@ test('unsafe Firebase configuration fails before app/Firebase initialization', (
     assert.throws(() => prepareFirebaseApi({ ...env(), API_RUNTIME_SERVICE_ACCOUNT: '' }));
 });
 
-test('gate is an exact public read allowlist, not arbitrary GET or an Origin check', () => {
-    for (const url of ['/api/health', '/api/quota', '/api/app-version', '/api/ads/global', '/api/ads/local/Aangan', '/api/ads/greeting/hello_1']) {
-        for (const method of ['GET', 'HEAD']) assert.equal(firebaseReadAllowed(method, url + '?x=1'), true, url);
-        for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'TRACE', 'OPTIONS']) assert.equal(firebaseReadAllowed(method, url), false);
-    }
-    for (const url of ['/api/admins', '/api/vehicles', '/api/notices/Aangan', '/api/config', '/api/societies', '/api/gift-codes/validate', '/api/gift-codes/redeem', '/api/%61ds/global', '/api/ads/local/a%2fb', '/api/ads/local/a.b', '/api/ads/global/extra', '/api//health', '/API/health', '/api/quota/extra', '/server/index.js']) {
-        assert.equal(firebaseReadAllowed('GET', url), false, url);
-    }
+test('full website + API deployment selects only Hosting and the API Function, never Firestore Rules', () => {
+    const config = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json')));
+    assert.equal(config.hosting.public, '.firebase-public');
+    assert.equal(config.functions[0].source, 'server');
+    assert.equal(config.functions[0].runtime, 'nodejs22');
+    assert.equal(config.firestore, undefined);
+    const script = JSON.parse(fs.readFileSync(path.join(root, 'package.json'))).scripts['deploy:full'];
+    assert.equal(script, 'node scripts/check-api-deploy.js && npx firebase-tools deploy --config firebase.json --project finder-owl --only functions:api,hosting');
+    assert.doesNotMatch(script, /firestore:rules/);
 });
 
 test('API-only Hosting publishes only landing/404 pages, pins API region, and leaves website config intact', () => {
@@ -93,7 +103,7 @@ test('preflight reads production settings without mutating env, source or privat
     assert.throws(() => checkApiDeploy(dir, {}), /Create server\/\.env/);
     fs.writeFileSync(file, contents);
     const before = fs.readFileSync(file, 'utf8');
-    assert.deepEqual(checkApiDeploy(dir, {}), { project: 'finder-owl', profile: 'firebase-read-only' });
+    assert.deepEqual(checkApiDeploy(dir, {}), { project: 'finder-owl', profile: 'firebase-full' });
     assert.equal(fs.readFileSync(file, 'utf8'), before);
     assert.deepEqual(fs.readdirSync(path.join(dir, 'server')), ['.env']);
 });

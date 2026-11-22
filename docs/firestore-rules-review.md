@@ -44,10 +44,16 @@ against a representative Android and GitHub Pages build before production use.
 
 `firebase.rules.json` intentionally contains only the Firestore Rules config, so
 any later Rules release can be targeted independently. It is not a deployment
-command. **Do not deploy this candidate yet.** The full API authorization work,
-Firestore Emulator Rules tests, and end-to-end compatibility checks are still
-required first. A Rules change can break any untracked client or direct Firestore
-flow, and publication is a separate production action.
+command. **Do not deploy this candidate yet.** The full API profile is now
+staged in code, but production IAM/data compatibility, successful Firestore
+Emulator Rules tests, and end-to-end compatibility checks are still required.
+The Emulator test harness is now in
+`tests/firestore-rules-emulator.test.js` and runs through
+`npm run test:firestore-rules` against the isolated `demo-firestore-rules`
+project. The current sandbox could not download the official Emulator JAR from
+`storage.googleapis.com`, so no Emulator-backed result is available yet. A Rules
+change can break any untracked client or direct Firestore flow, and publication
+is a separate production action.
 
 ## Accepted resident/device behavior and limits
 
@@ -80,9 +86,12 @@ claim that it verifies a human resident or property ownership.
    privileged data; client Rules must not allow ordinary clients to modify it.
 2. Protect sensitive API projections; remove full collection reads and GET side
    effects. Server mutations need their own validation and transaction logic.
-3. Add and run Firebase Emulator Rules tests for anonymous, resident/guest,
-   guard, society admin, master admin, and cross-society attempts. Static tests
-   alone do not validate Rules semantics.
+3. Run the new Firebase Emulator Rules harness
+   (`npm run test:firestore-rules`). It covers anonymous and ordinary signed-in
+   access, forged admin/guard/society-admin claims, cross-society reads, listing,
+   and client writes. The current sandbox could not download the official
+   Emulator JAR, so these semantic checks remain unverified here; static tests
+   alone do not validate Rules behavior.
 4. Review direct Firestore fallback paths and App Check behavior on supported
    frontends. Keep the existing public update-policy/greeting/contact reads
    narrow.

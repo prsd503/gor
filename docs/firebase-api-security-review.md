@@ -6,12 +6,15 @@ This is a source-level review of the Rules text supplied in chat and the current
 branch. The deployed Ruleset and production Firestore records were **not** fetched.
 This is not a penetration test or a live Firebase audit. No production data, IAM,
 Rules, frontend hosting configuration, or deployments were changed. The live
-Firebase Function remains the previously approved read-only pilot: private routes
-and every write are rejected before reaching these handlers.
+Firebase Function remains the previously deployed read-only pilot: private routes
+and writes are blocked there.
 
-The branch now contains staged API authorization changes and a separate
-least-privilege candidate at `firestore.rules` (`firebase.rules.json` is a
-Firestore-only config). Do not deploy either as part of this review.
+At the user's request, this branch now stages a full-feature HTTP API profile
+that removes the global read-only gate while preserving route-level identity,
+membership, society-scope, validation and quota checks. This code has not been
+deployed; the full API release is not ready until the IAM, runtime config, and
+other blockers below are addressed. The separate candidate at `firestore.rules`
+remains un-deployed (`firebase.rules.json` is a Firestore-only config).
 
 ## Supplied Rules findings
 
@@ -95,10 +98,11 @@ not represented as high-assurance privacy or identity proof.
 2. Review/approve account-to-membership binding, verified-email state, master
    record protection, canonical society IDs, and legacy aliases. No production
    mapping or membership records were changed.
-3. The deployed API runtime remains **Datastore Viewer**. Vehicle/contest/admin
-   writes will not work on it. Do not grant write IAM or open write routes until
-   the server implementation, transaction behavior, IAM scope, and operational
-   budget are separately approved. The 80% guard is not a hard billing cap.
+3. The deployed API runtime remains **Datastore Viewer**. The full-profile code
+   on this branch can reach mutation handlers, but those writes will fail on the
+   current identity. Do not grant write IAM or deploy the full profile until the
+   server implementation, transaction behavior, IAM scope, and operational
+   budget are separately reviewed. The 80% guard is not a hard billing cap.
 4. The current vehicle registration and contest APIs use device IDs for
    compatibility. They improve race/bypass resistance but cannot authenticate a
    resident. Higher-assurance protection requires a separate identity proof that
@@ -110,5 +114,6 @@ not represented as high-assurance privacy or identity proof.
    Rules testing. The pilot, branch tests, and successful prior curl checks do
    not verify these full flows.
 
-Production stays read-only. No Rules deployment, IAM/data changes, frontend
-cutover, wider backend access, or full-app release is authorized by this review.
+Production remains on the prior read-only pilot. No Rules deployment, IAM/data
+change, frontend cutover, or full-profile API release has occurred. See
+`docs/firebase-api-full-release.md` for the staged profile and remaining gates.

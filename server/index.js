@@ -50,7 +50,6 @@ const { buildVersionResponse } = require('./lib/version-policy');
 const { createAuthMiddleware } = require('./lib/auth');
 const { createAuthorization, normalize: normalizeAuthValue } = require('./lib/authorization');
 const { validatePreviewConfig, createPreviewGate } = require('./lib/tunnel-preview');
-const { createFirebaseReadOnlyGate } = require('./lib/firebase-release');
 const { createGiftCodeService } = require('./lib/gift-codes');
 const { createOriginChecker, createAppCheckMiddleware } = require('./lib/security');
 const { createQuotaGuard } = require('./lib/quota-guard');
@@ -88,7 +87,6 @@ const AUTH_MODE = lower(process.env.AUTH_MODE, 'firebase');
 const APP_CHECK_MODE = lower(process.env.APP_CHECK_MODE, AUTH_MODE === 'local' ? 'off' : 'monitor');
 const SERVE_STATIC = flag(process.env.SERVE_STATIC);
 const TUNNEL_PREVIEW = flag(process.env.TUNNEL_PREVIEW);
-const FIREBASE_READ_ONLY = flag(process.env.FIREBASE_READ_ONLY);
 const ENABLE_CRON = !IS_FUNCTIONS && String(process.env.ENABLE_CRON || '1') !== '0';
 
 if (!['firestore', 'local'].includes(DATA_BACKEND)) {
@@ -238,7 +236,7 @@ if (SERVE_STATIC) extraOrigins.push(`http://localhost:${process.env.PORT || 3000
 const isAllowedOrigin = createOriginChecker(extraOrigins, TUNNEL_PREVIEW ? {
     allowNgrok: false,
     exactOrigins: ['https://prsd503.github.io']
-} : FIREBASE_READ_ONLY ? {
+} : IS_FUNCTIONS ? {
     allowNgrok: false, exactOrigins: extraOrigins
 } : {});
 
@@ -261,15 +259,6 @@ if (TUNNEL_PREVIEW) {
         message: { error: 'Too many preview requests; try again shortly.' }
     }));
     app.use(createPreviewGate());
-}
-
-if (FIREBASE_READ_ONLY) {
-    app.use(rateLimit({
-        windowMs: 60000, limit: 60, standardHeaders: true, legacyHeaders: false,
-        message: { error: 'Too many initial API requests; try again shortly.' }
-    }));
-    // Before parsers, Monitoring, App Check, auth, handlers or Firestore work.
-    app.use(createFirebaseReadOnlyGate());
 }
 
 app.use(express.json({ limit: '1mb', type: ['application/json', 'text/plain'] }));
@@ -335,7 +324,7 @@ function healthPayload() {
     const snap = quota.snapshot();
     return {
         status: 'ok',
-        accessMode: FIREBASE_READ_ONLY ? 'firebase-read-only' : (TUNNEL_PREVIEW ? 'tunnel-preview' : 'standard'),
+        accessMode: TUNNEL_PREVIEW ? 'tunnel-preview' : (IS_FUNCTIONS ? 'firebase-full' : 'standard'),
         target: IS_FUNCTIONS ? 'firebase-functions' : 'node',
         dataBackend: DATA_BACKEND,
         authMode: AUTH_MODE,
