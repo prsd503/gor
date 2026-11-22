@@ -28,7 +28,7 @@
     "express-rate-limit": "^7.5.1",
     "firebase-admin": "^14.2.0",
     "jsonwebtoken": "^9.0.3",
-    "node-cron": "^3.0.3"
+    "node-cron": "^4.6.0"
   },
   "devDependencies": {
     "jsdom": "^26.1.0"
