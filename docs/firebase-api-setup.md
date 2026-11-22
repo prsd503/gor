@@ -1,7 +1,13 @@
-# First Firebase API deployment: api.owlwatcher.tech
+# Archived read-only Firebase API pilot setup
 
-**Preparation only. These files do not deploy anything, change DNS/IAM, modify
-Firestore, or update the GitHub Pages/Android frontend.**
+> **Historical guide.** This describes the earlier read-only pilot and is not the
+> deployment path for the full-feature API profile now staged on this branch.
+> The live Function remains read-only; no production deployment or IAM change
+> has occurred. See [the current full-release guide](firebase-api-full-release.md)
+> before any future deployment.
+
+**The instructions below are retained for reference only. Do not use them to
+publish the full-feature API.**
 
 The user has connected `api.owlwatcher.tech` to the `finder-owl` Hosting site and
 shown Blaze billing enabled. Their CLI reported no deployed functions. Those are

@@ -26,7 +26,7 @@ test('Firestore membership authorization is verified, society-scoped, revocable,
         ENV_FILE: path.join(dir, 'no-env'), JWT_SECRET: secret, NODE_ENV: 'development',
         DATA_BACKEND: 'firestore', AUTH_MODE: 'firebase', FIREBASE_PROJECT_ID: 'finder-owl',
         APP_CHECK_MODE: 'off', QUOTA_ACTION: 'off', QUOTA_SOURCE: 'local', SERVE_STATIC: '0',
-        ENABLE_CRON: '0', QUOTA_STATE_FILE: '', TUNNEL_PREVIEW: '0', FIREBASE_READ_ONLY: '0'
+        ENABLE_CRON: '0', QUOTA_STATE_FILE: '', TUNNEL_PREVIEW: '0'
     });
     delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
     delete process.env.SERVICE_ACCOUNT_JSON;

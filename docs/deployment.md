@@ -1,9 +1,10 @@
-> **Initial Firebase rollout:** use [API-only setup](firebase-api-setup.md) and
-> [the authorization review](firebase-api-security-review.md). The cloud entry
-> now exports only a read-only `api` Function; private routes and all writes are
-> blocked. No maintenance schedule is exported. Full public release remains
-> blocked. Historical architecture details below are not permission to bypass
-> the new pilot gate or deploy an unrestricted server.
+> **Current release status:** the live Firebase Function is still the prior
+> read-only pilot. This branch now stages a full-feature API profile, but it has
+> not been deployed and its write IAM/configuration is not in place. See
+> [the full-release guide](firebase-api-full-release.md). The original
+> [read-only pilot guide](firebase-api-setup.md) is archived; do not follow it
+> for a full-feature release. Emulator validation and production prerequisites
+> remain outstanding.
 
 # Firebase backend and MacBook testing (replacing Hostinger)
 

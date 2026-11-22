@@ -12,7 +12,14 @@
         ".env",
         ".env.*",
         "*.log",
-        ".local-data"
+        ".local-data",
+        "**/*serviceAccount*.json",
+        "**/*service-account*.json",
+        "**/*.pem",
+        "**/*.key",
+        "**/application_default_credentials.json",
+        "**/.*",
+        "**/*service_account*.json"
       ]
     }
   ],
