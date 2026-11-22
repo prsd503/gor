@@ -1,0 +1,68 @@
+{
+  "functions": [
+    {
+      "source": "server",
+      "codebase": "default",
+      "runtime": "nodejs22",
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" ci --omit=dev --no-audit --no-fund"
+      ],
+      "ignore": [
+        "node_modules",
+        ".env",
+        ".env.*",
+        "*.log",
+        ".local-data",
+        "**/*serviceAccount*.json",
+        "**/*service-account*.json",
+        "**/*.pem",
+        "**/*.key",
+        "**/application_default_credentials.json",
+        "**/.*",
+        "**/*service_account*.json"
+      ]
+    }
+  ],
+  "hosting": {
+    "public": "firebase/api-public",
+    "ignore": [
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/api",
+        "function": {
+          "functionId": "api",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/**",
+        "function": {
+          "functionId": "api",
+          "region": "us-central1"
+        }
+      }
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "key": "Content-Security-Policy",
+            "value": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+          }
+        ]
+      }
+    ]
+  }
+}
