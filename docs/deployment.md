@@ -1,3 +1,10 @@
+> **Initial Firebase rollout:** use [API-only setup](firebase-api-setup.md) and
+> [the authorization review](firebase-api-security-review.md). The cloud entry
+> now exports only a read-only `api` Function; private routes and all writes are
+> blocked. No maintenance schedule is exported. Full public release remains
+> blocked. Historical architecture details below are not permission to bypass
+> the new pilot gate or deploy an unrestricted server.
+
 # Firebase backend and MacBook testing (replacing Hostinger)
 
 ## What is implemented
@@ -74,7 +81,7 @@ ALLOWED_ORIGINS=https://finder-owl.web.app,https://finder-owl.firebaseapp.com
 
 ### Monitoring access is required
 
-Enable `monitoring.googleapis.com` in the project's Google Cloud API Library. Grant **Monitoring Viewer (`roles/monitoring.viewer`)** to the actual runtime service account of **both functions** in IAM. Functions v2 normally uses the Compute Engine default service account, not necessarily `PROJECT@appspot.gserviceaccount.com`. Check the deployed function's Runtime settings instead of guessing the email.
+Enable `monitoring.googleapis.com` in the project's Google Cloud API Library. Grant **Monitoring Viewer (`roles/monitoring.viewer`)** to the actual runtime service account of the **API function** in IAM. Functions v2 normally uses the Compute Engine default service account, not necessarily `PROJECT@appspot.gserviceaccount.com`. Check the deployed function's Runtime settings instead of guessing the email.
 
 If using Google Cloud CLI, the command format is:
 
@@ -84,13 +91,13 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --role="roles/monitoring.viewer"
 ```
 
-The runtime also needs its normal Firestore access. The deployer needs normal Firebase/Cloud Run deployment and Scheduler permissions. The Firebase CLI will identify missing APIs/permissions during deployment.
+The initial runtime needs read-only Firestore access (`roles/datastore.viewer`), not write privileges. It also requires `API_RUNTIME_SERVICE_ACCOUNT` in `server/.env`; see the API-only guide. The deployer needs normal Firebase/Cloud Run deployment and Scheduler permissions. The Firebase CLI will identify missing APIs/permissions during deployment.
 
 ```sh
-npm run deploy:functions
+npm run deploy:api:functions
 ```
 
-This installs the locked backend dependencies and deploys `api` and `maintenance`. The nightly job replaces process-based cron; it is scheduled at midnight Asia/Kolkata. Cloud Scheduler and image storage are separate billable products with their own allowances. Consider an Artifact Registry image cleanup policy.
+The initial deployment exports only the gated, read-only `api`; no `maintenance` schedule is exported and no process cron starts. A dedicated runtime service account and exact allowed origins are required; follow the linked API-only guide before deployment. Image/build/storage costs remain outside the guard. Scheduled maintenance needs a separate approved rollout.
 
 **When Monitoring fails or permissions are missing, stop mode fails closed:** the API returns a drain response with `code: "quota-monitoring-unavailable"`, rather than trusting one new instance's zero counters. On cold start, the first protected request waits for the check. Checks are shared within an instance for `QUOTA_REFRESH_MS` (default 60 seconds), not across instances. Do not switch production to `QUOTA_SOURCE=local` to bypass a permissions problem.
 
@@ -106,13 +113,13 @@ The HTTP function accepts `/config` under its function URL as well as `/api/conf
 
 `/quota` diagnostics do not themselves fetch fresh Monitoring data; an application request or maintenance run refreshes it. Check `remoteCheckedAt`, `monitoringUnavailable`, `source`, `action`, and `metrics`, not just `/health` returning 200.
 
-## 3. Point the frontend away from Hostinger
+## 3. Future full-release frontend configuration (NOT the read-only pilot)
 
-Edit `api-env.js`:
+Only after the authorization release blockers are fixed and the full API is verified, edit `api-env.js`. Do **not** move current clients to the read-only pilot:
 
 ```js
 window.OWL_API_CONFIG = {
-    primary: 'https://us-central1-finder-owl.cloudfunctions.net/api',
+    primary: 'https://api.owlwatcher.tech/api',
     local: '',
     fallbacks: []
 };
@@ -120,7 +127,7 @@ window.OWL_API_CONFIG = {
 
 All application pages load it before API calls. Existing Auth and App Check behavior is retained. The version popup does not bypass the managed API's drain by making a direct Firestore read.
 
-Keep the existing static frontend host, or deploy it to Firebase Hosting as well:
+Keep GitHub Pages for the website. The following **legacy website-hosting** command publishes website files, not the dedicated API-only Hosting setup. Do not run it on the API Hosting site:
 
 ```sh
 npm run deploy:hosting

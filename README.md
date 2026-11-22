@@ -1,3 +1,9 @@
+> **Firebase API deployment preparation:** see [API-only setup](docs/firebase-api-setup.md)
+> and [authorization review](docs/firebase-api-security-review.md). The initial
+> cloud entry is read-only and exports no maintenance job. Do not move website
+> or Android clients to it as their primary API until the full-release blockers
+> are resolved. No deployment is performed by these repository changes.
+
 # Owl Watcher
 
 ## Backend: Firebase or your MacBook
