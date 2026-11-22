@@ -317,14 +317,13 @@
                 const societyData = await res.json();
                 validatedSocietyName = societyData.name || societyVal;
 
-                // Device Verification with proper auth headers and parameter name
+                // Ask the API for only this device's registration in the selected society.
                 const headers = await getAuthHeaders();
-                const vRes = await fetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(validatedSocietyName)}`, { headers });
-                const allVehicles = await vRes.json();
+                const lookup = new URLSearchParams({ societyName: validatedSocietyName });
+                const vRes = await fetch(`${API_BASE_URL}/verify-device/${encodeURIComponent(deviceId)}?${lookup.toString()}`, { headers });
+                const deviceRecord = vRes.ok ? await vRes.json() : null;
 
-                const deviceRecord = Array.isArray(allVehicles) ? allVehicles.find(v => v.deviceId === deviceId) : null;
-
-                if (!deviceRecord) {
+                if (!deviceRecord || deviceRecord.registered !== true) {
                     errEl.innerText = "Use Registered Device to Play this Contest. (This device is not linked to any flat in this society)";
                     errEl.style.display = 'block';
                     return;
@@ -375,7 +374,12 @@
             const response = await fetch(`${API_BASE_URL}/contest/spin`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...NG_HEADERS },
-                body: JSON.stringify({ societyName: validatedSocietyName })
+                body: JSON.stringify({
+                    societyName: validatedSocietyName,
+                    deviceId,
+                    flatNumber: linkedFlatNumber,
+                    contestId: adImgUrl || 'default'
+                })
             });
 
             const data = await response.json();
@@ -428,7 +432,8 @@
                     societyName: validatedSocietyName,
                     flatNumber: flatVal,
                     winnerFlatnumber: flatVal,
-                    deviceId: deviceId
+                    deviceId: deviceId,
+                    contestId: adImgUrl || 'default'
                 })
             });
 

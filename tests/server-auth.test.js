@@ -23,7 +23,7 @@ function res() {
 function middleware(overrides = {}) {
     return createAuthMiddleware({
         projectId: PROJECT,
-        verifyIdToken: async () => ({ uid: 'uid-1', email: 'a@b.com' }),
+        verifyIdToken: async () => ({ uid: 'uid-1', email: 'a@b.com', email_verified: true }),
         verifyJwt: token => jwt.verify(token, SECRET),
         logger: { warn() {} },
         ...overrides
@@ -101,19 +101,20 @@ test('a revoked Firebase account is rejected', async () => {
     assert.equal(response.statusCode, 401);
 });
 
-test('requireAdmin blocks non-admin roles and anonymous callers', () => {
-    const { requireAdmin } = middleware();
-    const anon = res();
-    requireAdmin({}, anon, () => { throw new Error('must not pass'); });
-    assert.equal(anon.statusCode, 401);
+test('SECURITY: auth middleware never grants a role from token claims', async () => {
+    const { resolveUser } = middleware();
+    const idToken = await resolveUser(fakeFirebaseToken({ admin: true, role: 'admin', adminRole: 'guard' }));
+    assert.equal(idToken.role, 'user');
+    assert.equal(idToken.emailVerified, true);
 
-    const guard = res();
-    requireAdmin({ user: { role: 'guard' } }, guard, () => { throw new Error('must not pass'); });
-    assert.equal(guard.statusCode, 403);
-
-    let reached = false;
-    requireAdmin({ user: { role: 'admin' } }, res(), () => { reached = true; });
-    assert.equal(reached, true);
+    for (const claims of [
+        { uid: 'u', role: 'admin', authVersion: 2 },
+        { uid: 'u', admin: true },
+        { uid: 'u', adminRole: 'guard' }
+    ]) {
+        const user = await resolveUser(jwt.sign(claims, SECRET));
+        assert.equal(user.role, 'user');
+    }
 });
 
 test('optionalAuth identifies admins but never blocks residents', async () => {
@@ -131,13 +132,12 @@ test('optionalAuth identifies admins but never blocks residents', async () => {
     assert.equal(invalid.user, undefined);
 });
 
-test('SECURITY: a valid sign-in without admin authorization is a user, not an admin', async () => {
-    const {resolveUser,requireAdmin}=middleware();
-    const user=await resolveUser(fakeFirebaseToken());
-    assert.equal(user.role,'user');
-    const response=res();
-    requireAdmin({user},response,()=>assert.fail('ordinary Firebase user became admin'));
-    assert.equal(response.statusCode,403);
+test('SECURITY: a valid sign-in without Firestore membership carries no staff role', async () => {
+    const { resolveUser } = middleware();
+    const user = await resolveUser(fakeFirebaseToken());
+    assert.equal(user.role, 'user');
+    assert.equal(user.emailVerified, true);
+    assert.equal(user.claims.email, 'a@b.com');
 });
 
 test('SECURITY: signed backend token without an explicit role is not admin', async () => {
@@ -146,20 +146,16 @@ test('SECURITY: signed backend token without an explicit role is not admin', asy
     assert.equal(user.role,'user');
 });
 
-test('admin grants require verified custom claims or an exact server UID allowlist', async () => {
-    const {parseAdminUids,firebaseRole}=require('../server/lib/admin-policy');
-    const allowed=parseAdminUids(' owner-uid, second-uid ,');
-    assert.equal(firebaseRole({uid:'owner-uid'},allowed),'admin');
-    assert.equal(firebaseRole({uid:'owner-uid-attacker'},allowed),'user');
-    assert.equal(firebaseRole({uid:'unknown',email:'owner@example.com',email_verified:true},allowed),'user');
-    assert.equal(firebaseRole({uid:'u',admin:true}),'admin');
-    assert.equal(firebaseRole({uid:'u',admin:'true'}),'user');
-    assert.equal(firebaseRole({uid:'u',role:'admin'}),'admin');
-    assert.equal(firebaseRole({uid:'u',role:'guard'}),'guard');
-    const auth=middleware({adminUids:allowed,verifyIdToken:async()=>({uid:'owner-uid'})});
-    assert.equal((await auth.resolveUser(fakeFirebaseToken())).role,'admin');
-    // Unverified payload claims cannot override the verifier's decoded result.
-    assert.equal((await middleware().resolveUser(fakeFirebaseToken({admin:true,role:'admin'}))).role,'user');
+test('SECURITY: legacy claim/UID role helper cannot grant app authorization', () => {
+    const { parseAdminUids, firebaseRole } = require('../server/lib/admin-policy');
+    const legacyAllowlist = parseAdminUids('owner-uid, second-uid');
+    assert.equal(legacyAllowlist.has('owner-uid'), true);
+    for (const decoded of [
+        { uid: 'owner-uid', admin: true },
+        { uid: 'u', role: 'admin' },
+        { uid: 'u', role: 'guard' },
+        { uid: 'u', adminRole: 'admin' }
+    ]) assert.equal(firebaseRole(decoded, legacyAllowlist), 'user');
 });
 
 test('Firebase token routing requires the exact configured issuer', () => {
@@ -168,10 +164,11 @@ test('Firebase token routing requires the exact configured issuer', () => {
 });
 
 
-test('SECURITY: old admin-on-sign-in backend JWTs lose admin authority', async () => {
-    const {resolveUser}=middleware();
-    const old=await resolveUser(jwt.sign({uid:'ordinary',role:'admin'},SECRET));
-    assert.equal(old.role,'user');
-    const current=await resolveUser(jwt.sign({uid:'owner',role:'admin',authVersion:2},SECRET));
-    assert.equal(current.role,'admin');
+test('SECURITY: old and versioned backend JWT role claims are ignored', async () => {
+    const { resolveUser } = middleware();
+    for (const claims of [
+        { uid: 'ordinary', role: 'admin' },
+        { uid: 'owner', role: 'admin', authVersion: 2 },
+        { uid: 'guard', role: 'guard', authVersion: 2 }
+    ]) assert.equal((await resolveUser(jwt.sign(claims, SECRET))).role, 'user');
 });

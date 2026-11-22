@@ -260,6 +260,7 @@ function createLocalStore(options = {}) {
 
     function query(name, descriptor) {
         return {
+            __localQuery: { name, descriptor },
             where(field, operator, value) {
                 return query(name, {
                     ...descriptor,
@@ -355,7 +356,12 @@ function createLocalStore(options = {}) {
     function runTransaction(updateFunction) {
         return mutate(async () => {
             const transaction = {
-                get(ref) { return Promise.resolve(docSnapshot(ref.parent.id, ref.id)); },
+                get(ref) {
+                    if (ref && ref.__localQuery) {
+                        return Promise.resolve(runQuery(ref.__localQuery.name, ref.__localQuery.descriptor));
+                    }
+                    return Promise.resolve(docSnapshot(ref.parent.id, ref.id));
+                },
                 set(ref, value, setOptions) {
                     setData(ref.parent.id, ref.id, value, setOptions && setOptions.merge);
                     return transaction;

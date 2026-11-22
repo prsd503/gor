@@ -95,39 +95,14 @@ document.getElementById('loginBtn')?.addEventListener('click', async () => {
 document.getElementById('forgotPasswordBtn')?.addEventListener('click', async () => {
     const emailInput = document.getElementById('email');
     const email = emailInput ? emailInput.value.trim().toLowerCase() : "";
-
-    if (!email) {
-        window.showModal("Pls enter email id");
-        return;
-    }
+    if (!email) return window.showModal("Pls enter email id");
 
     try {
-        // 1. Verify with backend if this email is registered as a guard
-        const res = await authenticatedFetch(`${API_BASE}/guards?email=${encodeURIComponent(email)}`);
-        const guards = await res.json();
-
-        // 2. Check if any guard record was found (handles list or object)
-        let exists = res.ok && guards;
-        if (Array.isArray(guards)) {
-            exists = exists && guards.length > 0;
-        } else if (guards && typeof guards === 'object') {
-            exists = exists && (guards.society || guards.email || guards.id);
-        } else {
-            exists = false;
-        }
-
-        if (!exists) {
-            window.showModal("No guard registered with entered emailid");
-            return;
-        }
-
-        // 3. Trigger reset email
         await sendPasswordResetEmail(auth, email);
-        window.showModal("Password reset link sent to your email!");
-    } catch (error) {
-        console.error("Error sending password reset email:", error);
-        window.showModal("No guard registered with entered emailid");
+    } catch (_) {
+        // Avoid revealing whether the address is registered as a guard.
     }
+    window.showModal("If an account is registered for that email, a password reset link will be sent.");
 });
 
 document.getElementById('activateBtn')?.addEventListener('click', async () => {

@@ -1,58 +1,114 @@
-# Firebase API preparation: authorization review
+# Firebase API and Firestore Rules security review
 
-Repository review only, not a penetration test or an audit of live Firestore
-rules, IAM, clients, credentials or deployed resources. No production records
-were read or modified. Findings refer to routes in `server/index.js` at this
-branch. The pilot gate mitigates exposure on **the Firebase entry point only**;
-it does not repair the underlying handlers or change MacBook/VPS behavior.
+## Scope and deployment state
 
-## Release decision
+This is a source-level review of the Rules text supplied in chat and the current
+branch. The deployed Ruleset and production Firestore records were **not** fetched.
+This is not a penetration test or a live Firebase audit. No production data, IAM,
+Rules, frontend hosting configuration, or deployments were changed. The live
+Firebase Function remains the previously approved read-only pilot: private routes
+and every write are rejected before reaching these handlers.
 
-**BLOCKED for a full public application rollout.** The initial Function admits
-only reviewed public GET/HEAD paths plus health/quota diagnostics. It rejects
-all private reads, authentication, gift-code operations and writes before any
-handler/auth/Monitoring work. A dedicated Firestore Viewer runtime identity is
-also required. Do not relax the gate, grant runtime writes, expose an unrestricted
-MacBook tunnel, or move existing frontends to this pilot to make login work.
+The branch now contains staged API authorization changes and a separate
+least-privilege candidate at `firestore.rules` (`firebase.rules.json` is a
+Firestore-only config). Do not deploy either as part of this review.
 
-## Findings and required follow-up
+## Supplied Rules findings
 
-| Route family | Observed behavior without the pilot gate | Required work before full release |
-| --- | --- | --- |
-| GET `/api/admins`, `/api/admins/:email`, `/api/admins/verify-society` | No route-level authentication; administrator records looked up or scanned from caller-supplied identifiers. | Authenticate intended roles; derive society scope server-side; return an explicit minimal response schema, not entire documents. |
-| GET `/api/guards`, `/api/vehicles`, `/api/verify-device/:deviceId` | No route-level authentication; optional query filters and device IDs are not credentials; responses include document data. | Bind identity to society/device server-side; enforce scope even when filters are absent or forged; redact personal fields. |
-| GET `/api/notices/:societyIdentifier` | No route-level authentication; also calls `maintenance.checkAndShiftNotices()`, which can write across notice documents. | Remove GET side effects; scope access; review notice rotation as a separate scheduled operation. |
-| GET `/api/facilities/:societyIdentifier`, `/api/bookings`, `/api/societies` and subroutes | No route-level authentication; caller chooses society; full documents or contact details can be returned. | Define which fields are truly public; authenticate private reads; enforce membership/resource ownership, including active-guard contact access. |
-| POST `/api/vehicles` | New resident records can be created without sign-in; edits require admin, but fields/device/society originate in the request. | Decide a legitimate registration credential/flow; rate/abuse controls; prevent cross-society data submission, duplicate spam and unauthorized edits. |
-| POST `/api/contest/spin`, `/api/contest/winner`; GET contest results/stats | Public mutations accept society/flat values; transaction protects increment races, not eligibility or genuine winner claims. | Server-verified eligibility/winner proof and abuse/idempotency controls; decide privacy of results. |
-| POST `/api/auth/forgot-password` | Public account lookup reveals role membership and triggers reset email workflow. | Review enumeration, generic responses, rate limits, and supported provider flow; test against abuse without sending real emails. |
-| POST `/api/auth/token` | Verified Firebase identity plus trusted custom claims/ADMIN_UIDS; ordinary sign-in no longer automatically grants global admin. | Preserve the fixed global-admin policy; define society admin/guard membership and revocation; do not trust client role fields. |
-| POST/PATCH/DELETE admin routes (config, notices, guards, vehicles, facilities, bookings, society limits/flats, ads) | Generally require verified **global** admin, not society ownership. | Decide whether global authority is intended; introduce scoped authorization where necessary; verify target document society from storage before mutation. |
-| PATCH `/api/societies/:societyId/active-guard` | Requires sign-in, but not admin/guard membership or target-society authority. | Bind active-guard change to authorized identities/assignments in the requested society; deny cross-tenant targets. |
-| POST `/api/gift-codes/validate`, `/api/gift-codes/redeem` | Code is a bearer credential, no account; validation read-only, consumption transactional. | Retain this contract, add focused brute-force/abuse controls and observability; verify write-scoped runtime permissions before a separately reviewed release. Do not copy codes into an independent fallback database. |
-| POST `/api/gift-codes` | Requires global admin to mint codes. | Audit staff authority and issuance limits, keep creation private; do not release minting merely to test redemption. |
-| GET `/api/config` | Returns complete config document without auth. | Explicit public projection or protected endpoint; audit fields before exposing. |
-| Public ads and app version | Already allowed in the restricted MacBook pilot. | Confirm owners intend returned ad fields to be public; keep exact safe identifiers and fail-closed quota behavior. Do not generalize to arbitrary GET routes. |
+The supplied Rules text is not safe for production direct client access:
 
-App Check monitor mode is not authentication; CORS is a browser-origin policy,
-not a credential. Non-browser requests can omit/spoof Origin. The initial gate
-still applies to them. Admin SDK access bypasses client Firestore rules, so rules
-alone do not repair these handlers. Conversely, this API gate cannot secure
-clients that talk to Firestore directly: review deployed rules separately.
+- `/vehicles` and `/notices` allow public reads and client creates/updates.
+- `/admins`, `/guards`, `/societies`, `/ads`, `/facilities`, `/bookings`, and
+  `/configs` allow public reads, exposing membership and resident/contact data.
+- Email/UID record-existence helpers are not a server-side membership check and
+  do not enforce society scope; the Rules expose the membership collections used
+  by those helpers.
+- `ads` create/update rules can be satisfied by ordinary signed-in clients and
+  permit approval-related fields to be changed.
+- Client-side device/flat checks can be bypassed by direct writes. App Check and
+  CORS are not authorization.
 
-## Required acceptance tests for any future full release
+The Admin SDK used by the API bypasses Firestore Rules. Rules cannot fix an API
+handler that fails to authenticate/authorize its caller.
 
-- Anonymous/ordinary/guard/society-admin/global-admin roles; revoked membership.
-- Identity A cannot query, enumerate, update or delete society B's resources,
-  with or without forged query/body/path society identifiers or document IDs.
-- Missing filters do not broaden access; response fields exclude private data.
-- GET/HEAD do not write; no background job mutates data without explicit approval.
-- Refresh can revalidate an unused bouquet code; simultaneous consumes have one
-  winner; disabling after validation blocks transfer; no offline bypass.
-- Malformed/expired/wrong-project tokens and old unversioned admin JWTs fail.
-- CORS + native origins + App Check on actual Android build and GitHub Pages.
-- Monitoring failure/80% drain cannot be bypassed using fallback/direct Firestore.
-- No source/credentials/local data in deployed static files or function bundle.
+## Staged Rules candidate
 
-The new automated pilot tests verify that the gate rejects legacy routes before
-accessing Firebase/auth/Monitoring, not that these underlying findings are fixed.
+`firestore.rules` denies all client access except exact document `get`s for the
+current app-version fallback (`app_config/appVersion`), greeting compatibility
+fallback (`ads/Aangan`), and studio contact fallback (`settings/contact`). It
+allows no client writes or collection listing. These are document-level grants;
+Firestore Rules cannot redact fields from a document read, so an owner must
+confirm those three documents contain only public data or remove the exception
+and serve a safe API projection instead.
+
+`firebase.rules.json` isolates Rules configuration from the deployed API/Hosting
+configuration. It is not a deployment command. Static source tests pass, but no
+Firestore Emulator Rules test was run: Java is not installed in this workspace.
+The candidate needs emulator tests and representative Android/GitHub Pages checks
+before any independently approved Rules deployment. No live Ruleset comparison
+has been completed.
+
+## Staged server authorization and behavior
+
+- Authentication verifies Firebase ID tokens (including revocation) or a signed
+  backend identity token. Role claims, old role-bearing JWTs, and `ADMIN_UIDS`
+  do not authorize application access.
+- Staff membership comes from `admins`/`guards`, matched to a verified email; if
+  the record carries a UID, that UID must match. An `isMaster` record grants
+  global scope only while it is not disabled and not inactive. Regular
+  admins/guards are scoped to one canonical `/societies/{id}` document. Society
+  `name`, `legacyNames`, and `aliases` are the only accepted human/legacy
+  references; ambiguous/unmapped values fail closed.
+- Staff reads and mutations are scoped by the resolved membership, not by a
+  caller-controlled path/query/body. Global settings, ad approval, and gift-code
+  issuance require master membership. Public API reads return explicit
+  projections; vehicle/contest resident lookups query by plate, flat, or device
+  rather than loading every society vehicle. GET notices no longer mutate data,
+  and gift-code behavior remains public and transactional: validation does not
+  consume; redemption rechecks and consumes once.
+- Resident vehicle creation checks canonical society, flat membership, device ↔
+  flat locks, duplicate plates, vehicle types/mobile format, and per-flat limits
+  in a Firestore transaction. Contest attempts/winner claims are also recorded
+  and checked transactionally against the registered device/flat. A device ID
+  observed on multiple flats fails closed in lookup, contest eligibility, and
+  winner claims. Existing visible flows remain guest-facing; only request
+  metadata needed by the server was added to the contest call. GitHub
+  Pages/Android were not switched to a new backend.
+
+These automated checks use an isolated local Firestore-compatible store, not a
+production Firestore emulator. The user-selected device-ID-only residency flow
+is preserved, but device IDs are client-controlled, spoofable/resettable
+identifiers, **not proof of human residency or ownership**. A public flat lookup
+returns full resident/vehicle fields only when that exact ID is already linked
+to the flat; another device receives a lock marker, and unbound legacy records
+return slot counts without plates or contact details. A person who can spoof or
+obtain the registered ID can still impersonate that device and read its fields.
+This residual risk must be explicitly reviewed before a public full-API release,
+not represented as high-assurance privacy or identity proof.
+
+## Release blockers / follow-up
+
+1. Compare the candidate with the actual deployed Ruleset; run Emulator Rules
+   tests for anonymous, ordinary user, resident/guest, guard, society admin,
+   master, and cross-society attempts. Confirm no untracked client depends on
+   direct Firestore access.
+2. Review/approve account-to-membership binding, verified-email state, master
+   record protection, canonical society IDs, and legacy aliases. No production
+   mapping or membership records were changed.
+3. The deployed API runtime remains **Datastore Viewer**. Vehicle/contest/admin
+   writes will not work on it. Do not grant write IAM or open write routes until
+   the server implementation, transaction behavior, IAM scope, and operational
+   budget are separately approved. The 80% guard is not a hard billing cap.
+4. The current vehicle registration and contest APIs use device IDs for
+   compatibility. They improve race/bypass resistance but cannot authenticate a
+   resident. Higher-assurance protection requires a separate identity proof that
+   the owner has not selected for this scope.
+5. Confirm all public ad and greeting fields are intentionally public. Public
+   ad content currently includes the client-rendered contest configuration; a
+   correct answer delivered to a browser cannot be kept secret from that browser.
+6. Run Android/Web App Check and GitHub Pages end-to-end tests after emulator
+   Rules testing. The pilot, branch tests, and successful prior curl checks do
+   not verify these full flows.
+
+Production stays read-only. No Rules deployment, IAM/data changes, frontend
+cutover, wider backend access, or full-app release is authorized by this review.

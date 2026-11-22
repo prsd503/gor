@@ -1,8 +1,9 @@
-> **Security update:** Sign-in is not admin authorization. Only verified custom
-> admin claims or exact server-side `ADMIN_UIDS` grant global admin authority;
-> old unversioned backend JWTs no longer confer admin privileges. The restricted
-> [GitHub Pages/MacBook preview](github-pages-macbook.md) deliberately blocks all
-> private routes and writes pending society-level authorization work.
+> **Security update:** Sign-in is not app authorization. The staged API resolves
+> current staff memberships from Firestore `admins`/`guards`, binds them to a
+> verified Firebase email (and a stored UID when present), and scopes regular
+> administrators/guards to one canonical society. Only `admins.isMaster === true`
+> is global. Token role claims and `ADMIN_UIDS` do not grant access. This code is
+> not deployed; the live Firebase pilot remains read-only.
 
 > **Deployment update:** Hostinger is no longer the default API target. See
 > [Firebase deployment and quota cutoff](deployment.md) and
@@ -76,9 +77,10 @@ Added handlers the frontend already calls: `GET /api/societies/:id`, `PATCH /api
 
 ### 5. Other hardening
 
-- Admin writes require a verified admin role; residents keep unauthenticated vehicle registration and contest spins.
-- Editing an existing vehicle by `id` now requires admin.
-- Contest spin counting uses a Firestore transaction instead of read-then-write.
+- Society-scoped writes require an active Firestore `admins` membership; guards are limited to their society and cannot use admin mutations; global settings/code issuance require `admins.isMaster === true`.
+- Vehicle enrollment remains guest/resident-facing, but server transactions enforce canonical society, flat membership, device/flat locks, duplicate plates and configured limits. Public vehicle/contest lookups query by plate, flat, or device rather than bulk-reading a society collection. Public plate searches return only plate/flat; resident details require an exact device-to-flat match, while unbound legacy records return slot counts only. Device IDs are spoofable and are not strong residency proof.
+- Contest spin eligibility, single-use attempts and winner claims are checked server-side in transactions against the registered device/flat; the client sends the existing device ID and contest identifier.
+- Sensitive API responses use explicit projections; Firestore Rules deny direct client reads/writes except narrow compatibility gets.
 - Body size limits, stricter auth-endpoint rate limits, and a JSON error handler.
 
 ## App Check rollout

@@ -19,6 +19,7 @@
 const DEFAULT_CACHE_TTL_MS = 20000;
 
 function unwrapRef(ref) {
+    if (ref && typeof ref._getRawQuery === 'function') return ref._getRawQuery();
     return ref && ref.ref ? ref.ref : ref;
 }
 
@@ -81,12 +82,15 @@ function createDbLayer(rawDb, options = {}) {
             path: rawRef.path,
             ref: rawRef,
             parent: rawRef.parent,
-            async get() {
-                const cached = cacheGet(key);
-                if (cached) return cached;
+            async get(getOptions = {}) {
+                const fresh = Boolean(getOptions && getOptions.fresh);
+                if (!fresh) {
+                    const cached = cacheGet(key);
+                    if (cached) return cached;
+                }
                 const version = generation;
                 const snapshot = countRead(await rawRef.get());
-                cacheSet(key, snapshot, version);
+                if (!fresh) cacheSet(key, snapshot, version);
                 return snapshot;
             },
             async set(value, setOptions) {
@@ -110,8 +114,25 @@ function createDbLayer(rawDb, options = {}) {
         };
     }
 
+    function buildRawQuery(name, descriptor) {
+        let built = rawDb.collection(name);
+        for (const filter of descriptor.filters) {
+            built = built.where(filter.field, filter.operator, filter.value);
+        }
+        for (const order of descriptor.orderBy) {
+            built = built.orderBy(order.field, order.direction);
+        }
+        if (descriptor.limit !== null && descriptor.limit !== undefined) {
+            built = built.limit(descriptor.limit);
+        }
+        return built;
+    }
+
     function query(name, descriptor) {
         return {
+            // Lazily build the raw query only when a transaction reads it;
+            // normal document operations must not create an extra collection ref.
+            _getRawQuery() { return buildRawQuery(name, descriptor); },
             where(field, operator, value) {
                 return query(name, {
                     ...descriptor,
@@ -127,23 +148,16 @@ function createDbLayer(rawDb, options = {}) {
             limit(count) {
                 return query(name, { ...descriptor, limit: count });
             },
-            async get() {
+            async get(getOptions = {}) {
+                const fresh = Boolean(getOptions && getOptions.fresh);
                 const cacheKey = `c:${name}:${JSON.stringify(descriptor)}`;
-                const cached = cacheGet(cacheKey);
-                if (cached) return cached;
+                if (!fresh) {
+                    const cached = cacheGet(cacheKey);
+                    if (cached) return cached;
+                }
                 const version = generation;
-                let built = rawDb.collection(name);
-                for (const filter of descriptor.filters) {
-                    built = built.where(filter.field, filter.operator, filter.value);
-                }
-                for (const order of descriptor.orderBy) {
-                    built = built.orderBy(order.field, order.direction);
-                }
-                if (descriptor.limit !== null && descriptor.limit !== undefined) {
-                    built = built.limit(descriptor.limit);
-                }
-                const snapshot = countRead(await built.get());
-                cacheSet(cacheKey, snapshot, version);
+                const snapshot = countRead(await buildRawQuery(name, descriptor).get());
+                if (!fresh) cacheSet(cacheKey, snapshot, version);
                 return snapshot;
             }
         };
@@ -209,9 +223,11 @@ function createDbLayer(rawDb, options = {}) {
     async function runTransaction(updateFunction) {
         try { return await rawDb.runTransaction(async transaction => {
             const wrapped = {
-                get(ref) {
-                    counters.reads += 1;
-                    return transaction.get(unwrapRef(ref));
+                async get(ref) {
+                    const snapshot = await transaction.get(unwrapRef(ref));
+                    const size = snapshot && typeof snapshot.size === 'number' ? snapshot.size : 1;
+                    counters.reads += Math.max(1, size);
+                    return snapshot;
                 },
                 set(ref, value, setOptions) {
                     counters.writes += 1;

@@ -11,7 +11,7 @@
 
 The existing Express API now runs either as a Firebase **second-generation Cloud Function** or as a long-running Node server on a MacBook. Hostinger is no longer the frontend's default API target. `api-env.js` is the one place to configure the deployed API and optional fallback.
 
-- Cloud: `server/firebase.js` exports `api` plus a nightly `maintenance` function.
+- Cloud: `server/firebase.js` exports only the HTTP `api` function. The Firebase pilot disables cron and blocks private routes and all writes.
 - MacBook: `npm run start:local` runs the backend with a local JSON database and dev login, **without initializing the Firebase Admin SDK**.
 - Guard: application requests return HTTP **503** at/above 80% of a tracked allowance, before App Check, authentication or route database work. Health/quota diagnostics remain available. Scheduled maintenance also skips work while draining.
 - Browser: `api-config.js` switches to a **preconfigured, trusted** fallback after an explicit drain. GET/HEAD also fail over on network errors or 502/503/504. Writes are **not** retried on ambiguous network/server errors, to avoid duplicate commits.
@@ -135,7 +135,7 @@ npm run deploy:hosting
 
 `prepare-hosting.js` stages only an explicit allowlist of public files and `assets/`, **not** `.env`, database files, dependencies, or server code. It excludes the development console. Firebase Hosting uses clean HTML URLs. For native apps, rebuild/resync the web assets too; old installed clients with hardcoded Hostinger URLs will not acquire this change automatically.
 
-Only after checking all production routes and clients should you remove the old Hostinger service/DNS. This code change does not cancel your Hostinger plan or change DNS.
+Hostinger is not an authorized backend host; do not direct backend traffic there. This code does not cancel a Hostinger plan or change DNS, and those cleanup actions require separate approval.
 
 ## 4. Optional MacBook fallback
 
