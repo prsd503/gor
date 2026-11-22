@@ -76,8 +76,10 @@
         gifBlob: null,
         gifUrl: null,
         busy: false,
+        sharing: false,
+        redeeming: false,
         theme: 'night',        // selected theme id
-        unlocked: false,       // a code has been accepted this session
+        unlocked: false,       // a code is available for one share attempt
         unlockedCode: null,
         pendingTheme: null     // premium theme the visitor tried to pick
     };
@@ -574,7 +576,7 @@
     }
 
     async function createGif() {
-        if (state.busy) return;
+        if (state.busy || state.sharing || state.redeeming) return;
         const ids = selectedFlowerIds();
         if (ids.length < MIN_BLOOMS) {
             setNotice(el.shareNotice, 'Pick at least ' + MIN_BLOOMS + ' blooms first.', 'warn');
@@ -691,12 +693,16 @@
     // involved. Resolves true only once the file is really on the device, so
     // the hint never reports a save that did not happen.
     async function downloadGif() {
-        const file = gifFile();
+        if (state.sharing || needsCode()) return false;
+        return saveGifFile(gifFile());
+    }
+
+    async function saveGifFile(file) {
         if (!file) return false;
 
         if (nativePlatformName()) {
             try {
-                await nativeSaveGif(file.name);
+                await nativeSaveGif(file.name, file);
                 el.sendHint.textContent = 'Saved ' + file.name + ' — the animated GIF is all yours.';
                 return true;
             } catch (err) {
@@ -706,7 +712,7 @@
             }
         }
 
-        const url = URL.createObjectURL(state.gifBlob);
+        const url = URL.createObjectURL(file);
         const a = document.createElement('a');
         a.href = url;
         a.download = file.name;
@@ -760,12 +766,12 @@
     // Writes the GIF into the WebView app's own storage and hands back the file
     // URI. The cache directory is used for sharing because it always exists and
     // needs no storage permission; Documents is used for a saved copy.
-    async function nativeWriteGif(fileName, directory) {
+    async function nativeWriteGif(fileName, directory, blob) {
         const filesystem = nativePlugin('Filesystem');
         if (!filesystem || typeof filesystem.writeFile !== 'function') {
             throw new Error('The Filesystem plugin is not available in this build.');
         }
-        const data = await blobToBase64(state.gifBlob);
+        const data = await blobToBase64(blob);
         const written = await filesystem.writeFile({
             path: fileName,
             data,
@@ -776,19 +782,19 @@
         return written.uri;
     }
 
-    async function nativeSaveGif(fileName) {
-        return nativeWriteGif(fileName, 'DOCUMENTS');
+    async function nativeSaveGif(fileName, blob) {
+        return nativeWriteGif(fileName, 'DOCUMENTS', blob);
     }
 
-    async function nativeShareGif(fileName) {
+    async function nativeShareGif(fileName, blob, text) {
         const share = nativePlugin('Share');
         if (!share || typeof share.share !== 'function') {
             throw new Error('The Share plugin is not available in this build.');
         }
-        const uri = await nativeWriteGif(fileName, 'CACHE');
+        const uri = await nativeWriteGif(fileName, 'CACHE', blob);
         await share.share({
             title: 'E-Bouquet by Owl Watcher',
-            text: state.shareText || '',
+            text,
             files: [uri],
             dialogTitle: 'Share your E-Bouquet'
         });
@@ -799,6 +805,7 @@
     // payload - never a link. Where the sheet is unavailable we fall back to
     // a plain download instead of opening any third-party service.
     async function shareGif() {
+        if (state.sharing || state.busy || state.redeeming) return;
         const file = gifFile();
         if (!file) return;
 
@@ -813,9 +820,39 @@
             return;
         }
 
+        // Capture the authorized payload before relocking. Async OS handoffs and
+        // their save fallback must never read the now-invalidated global export.
+        const text = state.shareText || '';
+        const consumed = state.unlocked;
+        state.sharing = true;
+        el.shareGifBtn.disabled = true;
+        el.createBtn.disabled = true;
+        if (consumed) {
+            state.unlocked = false;
+            state.unlockedCode = null;
+            state.pendingTheme = null;
+            releaseGif();
+            syncThemeGrid();
+            syncFlowerGrid();
+            syncMessageLock();
+            drawPreview();
+            setPremiumStatus('Premium locked again. Redeem a new unused code for another share attempt.', 'err');
+            setNotice(el.shareNotice, 'This unlock was used. Redeem a new unused code and create a new GIF to share premium again.', 'warn');
+        }
+        try {
+            await transferGif(file, text);
+        } finally {
+            state.sharing = false;
+            el.shareGifBtn.disabled = false;
+            el.createBtn.disabled = false;
+            if (consumed) el.createBtn.innerHTML = 'Create my bouquet GIF';
+        }
+    }
+
+    async function transferGif(file, text) {
         if (nativePlatformName()) {
             try {
-                await nativeShareGif(file.name);
+                await nativeShareGif(file.name, file, text);
                 el.sendHint.textContent = 'Shared — the animated GIF went out as an image file.';
             } catch (err) {
                 if (err && err.name === 'AbortError') return;
@@ -823,7 +860,7 @@
                 // Only claim a save once the file is really on the device.
                 let saved = false;
                 try {
-                    await nativeSaveGif(file.name);
+                    await nativeSaveGif(file.name, file);
                     saved = true;
                 } catch (saveErr) {
                     console.error('E-Bouquet: native save failed too.', saveErr);
@@ -836,7 +873,7 @@
         }
 
         if (!canShareFiles(file)) {
-            const saved = await downloadGif();
+            const saved = await saveGifFile(file);
             el.sendHint.textContent = saved
                 ? 'This browser cannot open a share sheet, so the GIF was downloaded instead — attach it wherever you like.'
                 : 'Sorry, this browser could not share or download the GIF.';
@@ -844,11 +881,11 @@
         }
 
         try {
-            await navigator.share({ files: [file], text: state.shareText || '' });
+            await navigator.share({ files: [file], text });
             el.sendHint.textContent = 'Shared — the animated GIF went out as an image file.';
         } catch (err) {
             if (err && err.name === 'AbortError') return;
-            const saved = await downloadGif();
+            const saved = await saveGifFile(file);
             el.sendHint.textContent = saved
                 ? 'The share sheet could not open, so the GIF was downloaded instead.'
                 : 'Sorry, the share sheet could not open and the download failed too.';
@@ -900,13 +937,14 @@
     // confirms it is unused, and flips it to used inside a transaction. The
     // page only reflects the answer.
     async function redeemCode() {
-        if (!el.codeInput) return;
+        if (!el.codeInput || state.sharing || state.redeeming || state.unlocked || state.busy) return;
         const raw = el.codeInput.value.replace(/[\s-]/g, '');
         if (!/^\d{9}$/.test(raw)) {
             setPremiumStatus('Enter the full 9 digit code.', 'err');
             return;
         }
 
+        state.redeeming = true;
         if (el.redeemBtn) el.redeemBtn.disabled = true;
         setPremiumStatus('Checking your code…', null);
 
@@ -928,6 +966,7 @@
             result = { ok: false, offline: true };
         }
 
+        state.redeeming = false;
         if (el.redeemBtn) el.redeemBtn.disabled = false;
 
         if (!result.ok) {
@@ -943,7 +982,7 @@
         state.unlocked = true;
         state.unlockedCode = raw;
         el.codeInput.value = '';
-        setPremiumStatus('Unlocked! Premium themes and flowers are available for this bouquet.', 'ok');
+        setPremiumStatus('Unlocked! Premium themes and flowers are available until you press Share GIF once (even if cancelled or unsuccessful).', 'ok');
         renderThemeGrid();
         syncFlowerGrid();
         syncMessageLock();
