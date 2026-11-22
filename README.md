@@ -72,9 +72,11 @@ a premium bloom is in the bouquet (or a premium theme is chosen), the rendered c
 carries a **PREVIEW ribbon across the bloom cluster** as well as the page watermark,
 so a crop of the bouquet cannot pass as an unlocked card.
 
-**The unlock lasts for the current page session only.** Redeeming opens every
-premium theme and flower immediately, so the bouquet can be built and shared on
-the spot. Nothing is written to `localStorage` or `sessionStorage` and nothing is
+**Each unlock allows one Share GIF attempt on this page only.** Redeeming opens
+every premium theme and flower immediately. Pressing Share GIF relocks all premium
+features immediately, while that GIF finishes sharing (or the save fallback).
+Cancellation or failure also consumes the unlock; another premium share needs a
+new valid unused code and a newly created GIF. Free bouquets remain free. Nothing is written to `localStorage` or `sessionStorage` and nothing is
 tied to an account, so refreshing or reopening the page locks the premium set
 again — and the spent code cannot be reused. This is stated in the on-page rules.
 

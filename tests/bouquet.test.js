@@ -1023,3 +1023,113 @@ test('quantiser produces a usable palette for a mixed frame', () => {
     assert.ok(first >= 0 && first < size);
     assert.equal(map(samples[0], samples[1], samples[2]), first, 'mapping is stable');
 });
+
+for (const mode of ['browser', 'cancel', 'fallback', 'browser-error', 'native', 'native-fallback', 'native-failure']) {
+    test('premium is consumed once on Share GIF: ' + mode, async (t) => {
+        const { window, doc } = pageDom(t);
+        await settle();
+        const page = window.OwBouquetPage;
+        const used = new Set();
+        let requests = 0;
+        window.fetch = async (_url, options) => {
+            requests++;
+            const code = JSON.parse(options.body).code;
+            const ok = ['123456789', '987654321'].includes(code) && !used.has(code);
+            if (ok) used.add(code);
+            return { ok, json: async () => ok ? { unlocked: true } : { error: 'Code invalid or already used.' } };
+        };
+        async function redeem(code) {
+            doc.getElementById('codeInput').value = code;
+            await page.redeemCode();
+        }
+        await redeem('123456789');
+        assert.equal(page.state.unlocked, true);
+        page.chooseTheme('birthday');
+        page.addBloom('hydrangea');
+        const original = new window.Blob(['GIF89a-authorized-payload'], { type: 'image/gif' });
+        page.state.gifBlob = original;
+        page.state.gifUrl = 'blob:authorized';
+        doc.getElementById('gifPreview').src = 'blob:authorized';
+        const revoked = [];
+        window.URL.revokeObjectURL = (url) => revoked.push(url);
+        const downloaded = [];
+        window.HTMLAnchorElement.prototype.click = function () { downloaded.push(this.download); };
+        let finish;
+        let shared = 0;
+        let cap;
+        if (mode.startsWith('native')) {
+            cap = installCapacitor(window, { shareFails: mode !== 'native', writeFails: mode === 'native-failure' });
+        } else {
+            window.navigator.canShare = () => mode !== 'fallback';
+            window.navigator.share = async ({ files }) => {
+                shared++;
+                assert.equal(files[0].size, original.size, 'captured authorized file');
+                if (mode === 'cancel') throw new window.DOMException('Cancelled', 'AbortError');
+                if (mode === 'browser-error') throw new Error('share failed');
+                await new Promise((resolve) => { finish = resolve; });
+            };
+        }
+        const draws = [];
+        const drawCard = window.OwBouquet.drawCard;
+        window.OwBouquet.drawCard = (ctx, options) => { draws.push(options); return drawCard(ctx, options); };
+        const attempt = page.shareGif();
+        assert.equal(page.state.unlocked, false, 'locked before OS completes');
+        assert.equal(page.state.unlockedCode, null);
+        assert.equal(page.needsCode(), true);
+        assert.ok(draws.some((options) => options.watermark && options.markPremium), 'locked preview watermarks restored');
+        assert.equal(doc.querySelector('.theme-tile[data-theme="birthday"]').dataset.locked, 'true');
+        assert.equal(page.state.gifBlob, null, 'old unlocked export cannot be reused');
+        assert.equal(page.state.gifUrl, null);
+        assert.ok(revoked.includes('blob:authorized'));
+        assert.equal(doc.getElementById('gifPreview').hasAttribute('src'), false);
+        assert.equal(doc.getElementById('messageInput').readOnly, true);
+        assert.equal(doc.querySelector('.flower-btn[data-flower="hydrangea"]').disabled, true);
+        const before = page.totalBlooms();
+        page.addBloom('hydrangea');
+        assert.equal(page.totalBlooms(), before, 'premium additions gated again');
+        const repeated = page.shareGif();
+        const duringShare = redeem('987654321');
+        assert.equal(requests, 1, 'redemption blocked during current attempt');
+        doc.getElementById('createBtn').click();
+        assert.equal(page.state.busy, false, 'no racing export during sharing');
+        if (finish) finish();
+        await Promise.all([attempt, repeated, duringShare]);
+        assert.equal(page.state.sharing, false);
+        await page.shareGif();
+        assert.equal(shared, mode.startsWith('native') || mode === 'fallback' ? 0 : 1);
+        assert.equal(downloaded.length, ['fallback', 'browser-error'].includes(mode) ? 1 : 0);
+        if (mode === 'native') assert.equal(cap.shares.length, 1);
+        if (mode === 'native-fallback') {
+            assert.deepEqual(cap.writes.map((w) => w.directory), ['CACHE', 'DOCUMENTS']);
+            assert.equal(cap.writes[0].data, cap.writes[1].data, 'fallback retains same authorized bytes');
+        }
+        await redeem('123456789');
+        assert.equal(page.state.unlocked, false, 'spent code does not unlock again');
+        await redeem('000000000');
+        assert.equal(page.state.unlocked, false, 'incorrect code does not unlock');
+        await redeem('987654321');
+        assert.equal(page.state.unlocked, true, 'new valid unused code unlocks');
+        assert.equal(page.state.gifBlob, null, 'a new GIF must be built');
+        assert.equal(doc.getElementById('messageInput').readOnly, false);
+    });
+}
+
+test('an unlocked free bouquet also consumes its code; ordinary free sharing remains reusable', async (t) => {
+    const { window } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    window.navigator.canShare = () => true;
+    let shares = 0;
+    window.navigator.share = async () => { shares++; };
+    page.state.unlocked = true;
+    page.state.gifBlob = new window.Blob(['premium-free']);
+    await page.shareGif();
+    assert.equal(page.state.unlocked, false);
+    assert.equal(page.state.gifBlob, null);
+    assert.equal(page.needsCode(), false, 'free design still needs no code');
+    page.state.gifBlob = new window.Blob(['ordinary-free']);
+    await page.shareGif();
+    await page.shareGif();
+    assert.equal(shares, 3);
+    assert.ok(page.state.gifBlob, 'ordinary free export remains reusable');
+});
