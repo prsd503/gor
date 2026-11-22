@@ -1,9 +1,9 @@
 /* Owl Watcher API server.
  *
- * The same Express app runs in three places:
- *   1. Firebase Cloud Functions  - `server/firebase.js` (deploy target)
- *   2. A MacBook                 - `npm run start:local` (free fallback + testing)
- *   3. Any VPS                   - `npm start` (the old Hostinger setup)
+ * The same Express app runs in two supported places:
+ *   1. Firebase Cloud Functions  - `server/firebase.js` (restricted deploy target)
+ *   2. A MacBook                 - `npm run start:local` (local test/fallback)
+ * Former VPS/Hostinger deployment is historical and is not an authorized backend target.
  *
  * The Firebase copy is wrapped in a quota guard: once any free-tier meter
  * (Firestore reads/writes/deletes, function invocations, egress) reaches
@@ -48,7 +48,7 @@ const { rateLimit } = require('express-rate-limit');
 
 const { buildVersionResponse } = require('./lib/version-policy');
 const { createAuthMiddleware } = require('./lib/auth');
-const { parseAdminUids, firebaseRole } = require('./lib/admin-policy');
+const { createAuthorization, normalize: normalizeAuthValue } = require('./lib/authorization');
 const { validatePreviewConfig, createPreviewGate } = require('./lib/tunnel-preview');
 const { createFirebaseReadOnlyGate } = require('./lib/firebase-release');
 const { createGiftCodeService } = require('./lib/gift-codes');
@@ -89,7 +89,6 @@ const APP_CHECK_MODE = lower(process.env.APP_CHECK_MODE, AUTH_MODE === 'local' ?
 const SERVE_STATIC = flag(process.env.SERVE_STATIC);
 const TUNNEL_PREVIEW = flag(process.env.TUNNEL_PREVIEW);
 const FIREBASE_READ_ONLY = flag(process.env.FIREBASE_READ_ONLY);
-const ADMIN_UIDS = parseAdminUids(process.env.ADMIN_UIDS);
 const ENABLE_CRON = !IS_FUNCTIONS && String(process.env.ENABLE_CRON || '1') !== '0';
 
 if (!['firestore', 'local'].includes(DATA_BACKEND)) {
@@ -293,14 +292,19 @@ app.use(createAppCheckMiddleware({
         : token => require('firebase-admin/app-check').getAppCheck().verifyToken(token)
 }));
 
-const { optionalAuth, requireAuth, requireAdmin } = createAuthMiddleware({
+const { optionalAuth } = createAuthMiddleware({
     projectId: PROJECT_ID,
-    adminUids: ADMIN_UIDS,
     verifyIdToken: AUTH_MODE === 'firebase'
         ? token => require('firebase-admin/auth').getAuth().verifyIdToken(token, true)
         : async () => { throw new Error('Firebase ID tokens are not accepted while AUTH_MODE=local.'); },
     verifyJwt: token => jwt.verify(token, JWT_SECRET)
 });
+
+const authorization = createAuthorization({ db, authMode: AUTH_MODE });
+const requireStaff = authorization.requireStaff;
+const requireMaster = authorization.requireMaster;
+const requireAdminForSociety = identifier => authorization.requireSociety(['admin'], identifier);
+const requireStaffForSociety = identifier => authorization.requireSociety(['admin', 'guard'], identifier);
 
 const giftCodes = createGiftCodeService({ db, FieldValue });
 const maintenance = createMaintenance({ db, FieldValue, logger: console, timeZone: process.env.CRON_TIMEZONE, beforeRun: async () => {
@@ -347,6 +351,148 @@ function healthPayload() {
     };
 }
 
+function requestedSociety(req) {
+    const query = req.query || {};
+    const body = req.body || {};
+    return query.societyId || query.societyName || query.society ||
+        body.societyId || body.societyName || body.society || null;
+}
+
+function publicSociety(society) {
+    const data = society.data || {};
+    const flatList = Array.isArray(data.flatList) ? data.flatList : (Array.isArray(data.flats) ? data.flats : []);
+    const result = { id: society.id, name: society.name, flatList, flats: flatList };
+    for (const field of ['max2Wheeler', 'max4Wheeler']) {
+        if (Number.isInteger(data[field]) && data[field] >= 0) result[field] = data[field];
+    }
+    return result;
+}
+
+function isVehicleForSociety(data, society) {
+    if (!data || typeof data !== 'object') return false;
+    if (data.societyId !== undefined && data.societyId !== null && data.societyId !== '') {
+        return String(data.societyId) === society.id;
+    }
+    const aliases = new Set(society.aliases.map(normalizeAuthValue));
+    return [data.societyName, data.society].some(value => aliases.has(normalizeAuthValue(value)));
+}
+
+function vehicleSocietyQueries(society) {
+    const aliases = society.aliases.slice(0, 30);
+    return [
+        db.collection('vehicles').where('societyId', '==', society.id),
+        db.collection('vehicles').where('societyName', 'in', aliases),
+        db.collection('vehicles').where('society', 'in', aliases)
+    ];
+}
+
+async function collectVehicleSnapshots(snapshots, society) {
+    const documents = new Map();
+    for (const snapshot of snapshots) {
+        snapshot.forEach(doc => {
+            if (isVehicleForSociety(doc.data(), society)) documents.set(doc.id, doc);
+        });
+    }
+    return [...documents.values()];
+}
+
+async function getVehiclesForSociety(society, fresh = false) {
+    const queries = vehicleSocietyQueries(society);
+    const snapshots = await Promise.all(queries.map(query => query.get(fresh ? { fresh: true } : undefined)));
+    return collectVehicleSnapshots(snapshots, society);
+}
+
+function lookupVariants(value) {
+    const raw = String(value == null ? '' : value).trim();
+    return [...new Set([raw, raw.toLowerCase(), raw.toUpperCase()].filter(Boolean))];
+}
+
+async function getVehiclesMatchingField(society, field, values, fresh = false) {
+    const variants = [...new Set(values.flatMap(value => field === 'deviceId'
+        ? [String(value == null ? '' : value).trim()]
+        : lookupVariants(value)).filter(Boolean))];
+    if (!variants.length) return [];
+    const query = variants.length === 1
+        ? db.collection('vehicles').where(field, '==', variants[0])
+        : db.collection('vehicles').where(field, 'in', variants);
+    const snapshot = await query.get(fresh ? { fresh: true } : undefined);
+    return collectVehicleSnapshots([snapshot], society);
+}
+
+function mergeVehicleDocuments(groups) {
+    const found = new Map();
+    for (const documents of groups) for (const doc of documents) found.set(doc.id, doc);
+    return [...found.values()];
+}
+
+async function getVehiclesForRegistration(transaction, society, flatNumber, deviceId, vehicleNumbers) {
+    const flatVariants = lookupVariants(flatNumber);
+    const plateVariants = [...new Set(vehicleNumbers.flatMap(lookupVariants))];
+    const queries = [
+        db.collection('vehicles').where('flatNumber', flatVariants.length === 1 ? '==' : 'in', flatVariants),
+        ...(deviceId ? [db.collection('vehicles').where('deviceId', '==', deviceId)] : []),
+        db.collection('vehicles').where('vehicleNumber', plateVariants.length === 1 ? '==' : 'in', plateVariants)
+    ];
+    const snapshots = await Promise.all(queries.map(query => transaction.get(query)));
+    return collectVehicleSnapshots(snapshots, society);
+}
+
+async function getVehiclesForDeviceInTransaction(transaction, society, deviceId) {
+    const query = db.collection('vehicles').where('deviceId', '==', deviceId);
+    const snapshot = await transaction.get(query);
+    return collectVehicleSnapshots([snapshot], society);
+}
+
+function uniqueVehicleForDevice(documents, deviceId, expectedFlat) {
+    const matches = documents.filter(doc => (doc.data() || {}).deviceId === deviceId);
+    const flats = new Set(matches.map(doc => normalizeAuthValue((doc.data() || {}).flatNumber)));
+    if (flats.size !== 1) return null;
+    const linkedFlat = flats.values().next().value;
+    if (!linkedFlat || (expectedFlat !== undefined && linkedFlat !== normalizeAuthValue(expectedFlat))) return null;
+    return matches.find(doc => normalizeAuthValue((doc.data() || {}).flatNumber) === linkedFlat) || null;
+}
+
+function recordMatchesSociety(data, docId, society) {
+    if (data && data.societyId) return data.societyId === society.id;
+    const aliases = new Set(society.aliases.map(normalizeAuthValue));
+    return aliases.has(normalizeAuthValue(docId)) ||
+        [data && data.society, data && data.societyName].some(value => aliases.has(normalizeAuthValue(value)));
+}
+
+async function getSocietyDocument(collectionName, society) {
+    const found = new Map();
+    const names = [...new Set([society.id, ...society.aliases])].slice(0, 30);
+    for (const id of names) {
+        try {
+            const doc = await db.collection(collectionName).doc(id).get();
+            if (doc.exists && recordMatchesSociety(doc.data() || {}, doc.id, society)) found.set(doc.id, doc);
+        } catch (_) { /* Invalid legacy document IDs are skipped. */ }
+    }
+    const aliases = society.aliases.slice(0, 30);
+    const queries = [
+        db.collection(collectionName).where('societyId', '==', society.id),
+        db.collection(collectionName).where('societyName', 'in', aliases),
+        db.collection(collectionName).where('society', 'in', aliases)
+    ];
+    const snapshots = await Promise.all(queries.map(query => query.get()));
+    for (const snapshot of snapshots) snapshot.forEach(doc => {
+        if (recordMatchesSociety(doc.data() || {}, doc.id, society)) found.set(doc.id, doc);
+    });
+    return found.values().next().value || null;
+}
+
+function hashValue(value) {
+    return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+function contestAttemptDocumentId(societyId, date, deviceId, contestId) {
+    return hashValue([societyId, date, deviceId, contestId].join('\\0'));
+}
+
+function utcDate(date = new Date()) {
+    return date.toISOString().slice(0, 10);
+}
+
 // --- APP VERSION POLICY ---
 // Read with the Admin SDK, which bypasses Firestore rules AND App Check enforcement.
 // This lets the update popup work even when native attestation is still misconfigured.
@@ -387,7 +533,7 @@ app.post('/api/auth/token', authLimiter, async (req, res) => {
         if (!idToken) return res.status(400).json({ error: 'Firebase ID token is required' });
         const decoded = await require('firebase-admin/auth').getAuth().verifyIdToken(idToken, true);
         const token = jwt.sign(
-            { uid: decoded.uid, email: decoded.email || null, role: firebaseRole(decoded, ADMIN_UIDS), authVersion: 2 },
+            { uid: decoded.uid, email: decoded.email || null, email_verified: decoded.email_verified === true, authVersion: 2 },
             JWT_SECRET,
             { expiresIn: '1h' }
         );
@@ -432,7 +578,7 @@ app.post('/api/gift-codes/redeem', async (req, res) => {
 });
 
 // Staff only: mint a batch of codes to hand out after payment.
-app.post('/api/gift-codes', requireAuth, requireAdmin, async (req, res) => {
+app.post('/api/gift-codes', requireMaster, async (req, res) => {
     try {
         const created = await giftCodes.create(req.body && req.body.count, req.user.email || req.user.uid);
         return res.json({ created, price: giftCodes.PRICE_INR, count: created.length });
@@ -446,8 +592,9 @@ app.get('/api/config', async (req, res) => {
     try {
         const doc = await db.collection('configs').doc('owlwatcher').get();
         if (!doc.exists) return res.status(404).json({ error: 'Config not found' });
-        res.json(doc.data());
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const data = doc.data() || {};
+        return res.set('Cache-Control', 'public, max-age=60').json({ teamPhone: data.teamPhone || null });
+    } catch (err) { res.status(500).json({ error: 'Internal server error' }); }
 });
 
 app.get('/api/ads/global', async (req, res) => {
@@ -500,235 +647,385 @@ app.get('/api/ads/greeting/:id', async (req, res) => {
     } catch (err) { console.error('Greeting fetch error:', err); res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admins', async (req, res) => {
+app.get('/api/admins', requireStaff, async (req, res) => {
     try {
-        const { society, societyName, email } = req.query;
-        const targetSociety = (society || societyName || '').trim().toLowerCase();
-        const snapshot = await db.collection('admins').get();
-        const admins = [];
-        snapshot.forEach(doc => admins.push({ id: doc.id, ...doc.data() }));
-        const matched = admins.find(a => {
-            if (email && a.email && a.email.toLowerCase() === String(email).toLowerCase()) return true;
-            if (targetSociety && a.society && a.society.toLowerCase() === targetSociety) return true;
-            return false;
+        const membership = req.membership;
+        if (!['admin', 'master'].includes(membership.role)) {
+            return res.status(403).json({ error: 'Administrator membership required.', code: 'role-forbidden' });
+        }
+        return res.json({
+            id: membership.membershipId,
+            email: membership.email,
+            society: membership.societyName || membership.societyId || '',
+            societyId: membership.societyId || null,
+            isMaster: membership.role === 'master'
         });
-        if (!matched) return res.status(404).json({ error: 'Admin not found' });
-        res.json(matched);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (_) { return res.status(503).json({ error: 'Authorization could not be verified.' }); }
 });
 
-app.get('/api/admins/verify-society', async (req, res) => {
+app.get('/api/admins/verify-society', requireStaff, async (req, res) => {
     try {
-        const search = String(req.query.society || '').trim().toLowerCase();
+        const search = String(req.query.society || '').trim();
         if (!search) return res.status(400).json({ error: 'society is required' });
-        const snapshot = await db.collection('admins').get();
-        let matched = null;
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            if (doc.id.toLowerCase() === search || (data.society || '').toLowerCase() === search) {
-                matched = { id: doc.id, society: data.society || doc.id };
-            }
-        });
-        if (!matched) return res.status(404).json({ error: 'Society not found' });
-        res.json(matched);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        if (!['admin', 'master'].includes(req.membership.role)) {
+            return res.status(403).json({ error: 'Administrator membership required.', code: 'role-forbidden' });
+        }
+        const society = await authorization.resolveSociety(search);
+        if (!society) return res.status(404).json({ error: 'Society not found' });
+        if (req.membership.role !== 'master' && req.membership.societyId !== society.id) {
+            return res.status(403).json({ error: 'Your staff account is not assigned to this society.', code: 'society-scope-forbidden' });
+        }
+        return res.json({ exists: true, id: society.id, society: society.name, name: society.name });
+    } catch (_) { return res.status(503).json({ error: 'Authorization could not be verified.' }); }
 });
 
-app.get('/api/admins/:email', async (req, res) => {
+app.get('/api/admins/:email', requireStaff, async (req, res) => {
     try {
-        const doc = await db.collection('admins').doc(req.params.email).get();
+        const email = normalizeAuthValue(req.params.email);
+        if (req.membership.role !== 'master' && email !== req.membership.email) {
+            return res.status(403).json({ error: 'Only the signed-in administrator profile is available.', code: 'self-only' });
+        }
+        const doc = await db.collection('admins').doc(email).get({ fresh: true });
         if (!doc.exists) return res.status(404).json({ error: 'Admin not found' });
-        res.json({ id: doc.id, ...doc.data() });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const data = doc.data() || {};
+        const society = await authorization.resolveSociety(data.societyId || data.society || data.societyName);
+        return res.json({
+            id: doc.id, email: normalizeAuthValue(data.email || doc.id),
+            society: society ? society.name : '', societyId: society ? society.id : null,
+            isMaster: data.isMaster === true
+        });
+    } catch (_) { return res.status(503).json({ error: 'Authorization could not be verified.' }); }
 });
 
-app.get('/api/guards', async (req, res) => {
+app.get('/api/guards', requireStaff, async (req, res) => {
     try {
-        const { society, email, name_lower } = req.query;
-        let query = db.collection('guards');
-        if (society) query = query.where('society', '==', society);
-        if (email) query = query.where('email', '==', email);
-        if (name_lower) query = query.where('name_lower', '==', name_lower);
-        const snapshot = await query.get();
-        const guards = [];
-        snapshot.forEach(doc => guards.push({ id: doc.id, ...doc.data() }));
-        res.json(guards);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const membership = req.membership;
+        if (!['admin', 'guard', 'master'].includes(membership.role)) {
+            return res.status(403).json({ error: 'Guard-directory access is not allowed.', code: 'role-forbidden' });
+        }
+        const requested = req.query.society || req.query.societyId ||
+            (membership.role === 'master' ? '' : (membership.societyName || membership.societyId));
+        const email = normalizeAuthValue(req.query.email || '');
+        if (membership.role === 'master' && !requested && !email) {
+            return res.status(400).json({ error: 'society or email is required.' });
+        }
+        if (membership.role === 'guard' && email && email !== membership.email) {
+            return res.status(403).json({ error: 'Guards may only view their own membership.', code: 'self-only' });
+        }
+
+        let society = null;
+        if (requested) {
+            society = await authorization.resolveSociety(requested);
+            if (!society) return res.status(404).json({ error: 'Society not found.' });
+            if (membership.role !== 'master' && society.id !== membership.societyId) {
+                return res.status(403).json({ error: 'Your staff account is not assigned to this society.', code: 'society-scope-forbidden' });
+            }
+        } else if (membership.role !== 'master') {
+            society = await authorization.resolveSociety(membership.societyId);
+        }
+
+        let docs = [];
+        if (society) {
+            const aliases = society.aliases.slice(0, 30);
+            const snapshots = await Promise.all([
+                db.collection('guards').where('societyId', '==', society.id).get(),
+                db.collection('guards').where('society', 'in', aliases).get(),
+                db.collection('guards').where('societyName', 'in', aliases).get()
+            ]);
+            const found = new Map();
+            for (const snapshot of snapshots) snapshot.forEach(doc => found.set(doc.id, doc));
+            docs = [...found.values()].filter(doc => {
+                const data = doc.data() || {};
+                if (data.societyId) return data.societyId === society.id;
+                return [data.society, data.societyName].some(value =>
+                    society.aliases.some(alias => normalizeAuthValue(alias) === normalizeAuthValue(value)));
+            });
+        } else {
+            const doc = await db.collection('guards').doc(email).get({ fresh: true });
+            if (doc.exists && normalizeAuthValue((doc.data() || {}).email || doc.id) === email) docs = [doc];
+        }
+        const nameLower = normalizeAuthValue(req.query.name_lower || '');
+        const guards = docs.filter(doc => {
+            const data = doc.data() || {};
+            if (email && normalizeAuthValue(data.email || doc.id) !== email) return false;
+            if (nameLower && normalizeAuthValue(data.name_lower || data.name) !== nameLower) return false;
+            return true;
+        }).map(doc => {
+            const data = doc.data() || {};
+            return {
+                id: doc.id, email: data.email || doc.id, name: data.name || '',
+                name_lower: data.name_lower || normalizeAuthValue(data.name), phone: data.phone || '',
+                society: society ? society.name : (data.society || data.societyName || '')
+            };
+        });
+        return res.json(guards);
+    } catch (_) { return res.status(503).json({ error: 'Guard access could not be verified.' }); }
 });
 
 app.get('/api/vehicles', async (req, res) => {
     try {
-        const { societyName, society, vehicleNumber, flatNumber } = req.query;
-        const targetSociety = (societyName || society || '').trim();
-        let query = db.collection('vehicles');
-        if (targetSociety) query = query.where('societyName', '==', targetSociety);
-        if (vehicleNumber) query = query.where('vehicleNumber', '==', String(vehicleNumber).toUpperCase());
-        if (flatNumber) query = query.where('flatNumber', '==', flatNumber);
-        const snapshot = await query.get();
-        const vehicles = [];
-        snapshot.forEach(doc => vehicles.push({ id: doc.id, ...doc.data() }));
-        res.json(vehicles);
-    } catch (err) { console.error('Vehicle fetch error:', err); res.status(500).json({ error: err.message }); }
+        const requested = requestedSociety(req);
+        if (!requested) return res.status(400).json({ error: 'A society is required.' });
+        const society = await authorization.resolveSociety(requested);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+
+        let membership = null;
+        if (req.user) membership = await authorization.resolveMembership(req.user);
+        const staff = membership && ['admin', 'guard', 'master'].includes(membership.role);
+        if (staff && membership.role !== 'master' && membership.societyId !== society.id) {
+            return res.status(403).json({ error: 'Your staff account is not assigned to this society.', code: 'society-scope-forbidden' });
+        }
+
+        const targetVehicle = String(req.query.vehicleNumber || '').trim().toUpperCase();
+        const targetFlat = String(req.query.flatNumber || '').trim();
+        const deviceId = String(req.query.deviceId || '').trim();
+        if (targetVehicle.length > 32 || targetFlat.length > 80 || deviceId.length > 256) {
+            return res.status(400).json({ error: 'Vehicle, flat, or device lookup value is too long.' });
+        }
+        if (!staff && !targetVehicle && (!targetFlat || !deviceId || deviceId === 'unknown')) {
+            return res.status(400).json({ error: 'Public vehicle reads require a plate lookup or a device-and-flat lookup.' });
+        }
+        let docs;
+        if (targetVehicle) {
+            docs = await getVehiclesMatchingField(society, 'vehicleNumber', [targetVehicle], true);
+        } else if (staff && targetFlat) {
+            docs = await getVehiclesMatchingField(society, 'flatNumber', [targetFlat], true);
+        } else if (staff) {
+            docs = await getVehiclesForSociety(society);
+        } else {
+            const [flatMatches, deviceMatches] = await Promise.all([
+                getVehiclesMatchingField(society, 'flatNumber', [targetFlat], true),
+                getVehiclesMatchingField(society, 'deviceId', [deviceId], true)
+            ]);
+            docs = mergeVehicleDocuments([flatMatches, deviceMatches]);
+        }
+
+        // Public plate lookup is the guest flow; return only the fields shown by
+        // the vehicle search UI. It must never disclose resident contact data.
+        if (!staff && targetVehicle) {
+            const matches = docs.filter(doc => String((doc.data() || {}).vehicleNumber || '').trim().toUpperCase() === targetVehicle)
+                .map(doc => {
+                    const data = doc.data() || {};
+                    return { vehicleNumber: data.vehicleNumber || '', flatNumber: data.flatNumber || '' };
+                });
+            return res.set('Cache-Control', 'private, no-store').json(matches);
+        }
+
+        if (!staff) {
+            const sameFlat = value => normalizeAuthValue(value) === normalizeAuthValue(targetFlat);
+            const deviceRows = docs.filter(doc => (doc.data() || {}).deviceId === deviceId);
+            const flatRows = docs.filter(doc => sameFlat((doc.data() || {}).flatNumber));
+            const deviceOnOtherFlat = deviceRows.find(doc => !sameFlat((doc.data() || {}).flatNumber));
+            if (deviceOnOtherFlat) {
+                const data = deviceOnOtherFlat.data() || {};
+                // The resident UI needs the linked flat to show its lock message;
+                // do not include the other flat's plate or contact details.
+                return res.set('Cache-Control', 'private, no-store').json([
+                    { flatNumber: data.flatNumber || '', deviceId }
+                ]);
+            }
+
+            const flatDevices = flatRows.map(doc => (doc.data() || {}).deviceId).filter(Boolean);
+            const flatHasOtherDevice = flatDevices.some(registeredDevice => registeredDevice !== deviceId);
+            if (flatHasOtherDevice) {
+                // This marker is consumed by entry.html to stop a device from
+                // reading or modifying another device's registration.
+                return res.set('Cache-Control', 'private, no-store').json([
+                    { flatNumber: targetFlat, deviceId: { locked: true } }
+                ]);
+            }
+
+            const deviceMatchesFlat = flatDevices.some(registeredDevice => registeredDevice === deviceId);
+            if (deviceMatchesFlat) {
+                const vehicles = flatRows.map(doc => {
+                    const data = doc.data() || {};
+                    return {
+                        vehicleNumber: data.vehicleNumber || '', flatNumber: data.flatNumber || '',
+                        vehicleType: data.vehicleType || '', residentType: data.residentType || '',
+                        mobileNumber: data.mobileNumber || '',
+                        deviceId: data.deviceId ? deviceId : null
+                    };
+                });
+                return res.set('Cache-Control', 'private, no-store').json(vehicles);
+            }
+
+            // Historic rows without a device binding may be enrolled from the
+            // current device, but the API exposes only slot counts until the
+            // device is bound; no plate, resident type, or phone number leaks.
+            if (flatRows.length) {
+                const counts = { '2-Wheeler': 0, '4-Wheeler': 0 };
+                for (const doc of flatRows) {
+                    const type = (doc.data() || {}).vehicleType;
+                    if (Object.hasOwn(counts, type)) counts[type] += 1;
+                }
+                return res.set('Cache-Control', 'private, no-store').json([{
+                    flatNumber: targetFlat, registrationSummary: true,
+                    totalRegisteredCount: flatRows.length,
+                    registered2WheelerCount: counts['2-Wheeler'],
+                    registered4WheelerCount: counts['4-Wheeler']
+                }]);
+            }
+            return res.set('Cache-Control', 'private, no-store').json([]);
+        }
+
+        const vehicles = docs.filter(doc => {
+            const data = doc.data() || {};
+            if (targetVehicle) return String(data.vehicleNumber || '').trim().toUpperCase() === targetVehicle;
+            if (targetFlat && String(data.flatNumber || '').trim() !== targetFlat) return false;
+            return true;
+        }).map(doc => {
+            const data = doc.data() || {};
+            return {
+                id: doc.id,
+                vehicleNumber: data.vehicleNumber || '', flatNumber: data.flatNumber || '',
+                vehicleType: data.vehicleType || '', residentType: data.residentType || '',
+                mobileNumber: data.mobileNumber || '', deviceId: data.deviceId || null
+            };
+        });
+        return res.set('Cache-Control', 'private, no-store').json(vehicles);
+    } catch (_) { return res.status(503).json({ error: 'Vehicle access could not be verified.' }); }
 });
 
 app.get('/api/verify-device/:deviceId', async (req, res) => {
     try {
-        const { deviceId } = req.params;
-        if (!deviceId) return res.status(400).json({ registered: false, error: 'Device ID is required' });
-        const snapshot = await db.collection('vehicles').where('deviceId', '==', deviceId).limit(1).get();
-        if (snapshot.empty) return res.json({ registered: false });
-        res.json({ registered: true, data: snapshot.docs[0].data() });
-    } catch (err) { console.error('Device verification error:', err); res.status(500).json({ error: err.message }); }
+        const deviceId = String(req.params.deviceId || '').trim();
+        if (!deviceId || deviceId === 'unknown' || deviceId.length > 256) return res.status(400).json({ registered: false, error: 'A valid device ID is required.' });
+        const requested = req.query.societyId || req.query.societyName || req.query.society;
+        if (requested) {
+            const society = await authorization.resolveSociety(requested);
+            if (!society) return res.status(404).json({ registered: false });
+            const vehicles = await getVehiclesMatchingField(society, 'deviceId', [deviceId], true);
+            const record = uniqueVehicleForDevice(vehicles, deviceId);
+            return res.set('Cache-Control', 'no-store').json(record
+                ? { registered: true, flatNumber: (record.data() || {}).flatNumber || '' }
+                : { registered: false });
+        }
+        const snapshot = await db.collection('vehicles').where('deviceId', '==', deviceId).limit(1).get({ fresh: true });
+        return res.set('Cache-Control', 'no-store').json({ registered: !snapshot.empty });
+    } catch (_) { return res.status(503).json({ error: 'Device registration could not be verified.' }); }
 });
 
 app.get('/api/notices/:societyIdentifier', async (req, res) => {
     try {
-        await maintenance.checkAndShiftNotices();
-        const identifier = req.params.societyIdentifier;
-        let noticeDoc = await db.collection('notices').doc(identifier).get();
-        if (!noticeDoc.exists) {
-            const snapshot = await db.collection('notices').get();
-            const matched = snapshot.docs.find(doc => {
-                const data = doc.data();
-                return doc.id.toLowerCase() === identifier.toLowerCase() ||
-                    (data.societyName && data.societyName.toLowerCase() === identifier.toLowerCase());
-            });
-            if (matched) noticeDoc = matched;
-        }
-        if (!noticeDoc.exists) return res.status(404).json({ error: 'Notice not found' });
-        res.json(noticeDoc.data());
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const society = await authorization.resolveSociety(req.params.societyIdentifier);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const noticeDoc = await getSocietyDocument('notices', society);
+        if (!noticeDoc) return res.status(404).json({ error: 'Notice not found' });
+        const data = noticeDoc.data() || {};
+        return res.set('Cache-Control', 'no-store').json({
+            societyName: society.name,
+            date: data.date || '',
+            todayMessage: data.todayMessage || '',
+            tomorrowMessage: data.tomorrowMessage || ''
+        });
+    } catch (_) { return res.status(503).json({ error: 'Notice could not be loaded.' }); }
 });
 
 app.get('/api/facilities/:societyIdentifier', async (req, res) => {
     try {
-        const identifier = req.params.societyIdentifier;
-        let docSnap = await db.collection('facilities').doc(identifier).get();
-        if (!docSnap.exists) {
-            const snapshot = await db.collection('facilities').get();
-            const matched = snapshot.docs.find(doc => {
-                const data = doc.data();
-                return doc.id.toLowerCase() === identifier.toLowerCase() ||
-                    (data.societyName && data.societyName.toLowerCase() === identifier.toLowerCase());
-            });
-            if (matched) docSnap = matched;
+        const society = await authorization.resolveSociety(req.params.societyIdentifier);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const doc = await getSocietyDocument('facilities', society);
+        const raw = doc ? doc.data() || {} : {};
+        const safe = {};
+        for (const [key, value] of Object.entries(raw)) {
+            if (/^F\d{1,2}$/.test(key) && typeof value === 'string') safe[key] = value.slice(0, 120);
         }
-        res.json(docSnap.exists ? docSnap.data() : {});
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        return res.set('Cache-Control', 'public, max-age=30').json(safe);
+    } catch (_) { return res.status(503).json({ error: 'Facilities could not be loaded.' }); }
 });
 
 app.get('/api/bookings', async (req, res) => {
     try {
-        const snapshot = await db.collection('bookings').where('society', '==', req.query.society).get();
-        const bookings = [];
-        snapshot.forEach(doc => bookings.push({ id: doc.id, ...doc.data() }));
-        res.json(bookings);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const requested = requestedSociety(req);
+        if (!requested) return res.status(400).json({ error: 'A society is required.' });
+        const society = await authorization.resolveSociety(requested);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const membership = req.user ? await authorization.resolveMembership(req.user) : null;
+        if (membership && ['admin', 'guard'].includes(membership.role) && membership.societyId !== society.id) {
+            return res.status(403).json({ error: 'Your staff account is not assigned to this society.', code: 'society-scope-forbidden' });
+        }
+        const aliases = society.aliases.slice(0, 30);
+        const snapshots = await Promise.all([
+            db.collection('bookings').where('societyId', '==', society.id).get(),
+            db.collection('bookings').where('society', 'in', aliases).get(),
+            db.collection('bookings').where('societyName', 'in', aliases).get()
+        ]);
+        const docs = new Map();
+        for (const snapshot of snapshots) snapshot.forEach(doc => {
+            if (recordMatchesSociety(doc.data() || {}, doc.id, society)) docs.set(doc.id, doc);
+        });
+        const bookings = [...docs.values()].map(doc => {
+            const data = doc.data() || {};
+            return { id: doc.id, facilityId: data.facilityId || '', start: data.start || '', end: data.end || '' };
+        });
+        return res.set('Cache-Control', 'public, no-store').json(bookings);
+    } catch (_) { return res.status(503).json({ error: 'Bookings could not be loaded.' }); }
 });
 
 app.get('/api/societies', async (req, res) => {
     try {
         const snapshot = await db.collection('societies').get();
-        const societies = [];
-        snapshot.forEach(doc => societies.push({ id: doc.id, name: doc.id, ...doc.data() }));
-        res.json(societies);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const societies = snapshot.docs.map(doc => {
+            const data = doc.data() || {};
+            return publicSociety({ id: doc.id, name: data.name || doc.id, data });
+        });
+        return res.set('Cache-Control', 'public, max-age=60').json(societies);
+    } catch (_) { return res.status(503).json({ error: 'Societies could not be loaded.' }); }
 });
 
 app.get('/api/societies/verify', async (req, res) => {
     try {
-        const searchName = String(req.query.name || '').trim().toLowerCase();
-        const snapshot = await db.collection('societies').get();
-        let matched = null;
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            if (doc.id.toLowerCase() === searchName || (data.name || '').toLowerCase() === searchName) {
-                matched = { id: doc.id, name: data.name || doc.id, ...data };
-            }
-        });
-        if (!matched) return res.status(404).json({ error: 'Society not found' });
-        res.json(matched);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const search = String(req.query.name || '').trim();
+        if (!search) return res.status(400).json({ error: 'name is required.' });
+        const society = await authorization.resolveSociety(search);
+        if (!society) return res.status(404).json({ error: 'Society not found' });
+        return res.set('Cache-Control', 'public, max-age=60').json(publicSociety(society));
+    } catch (_) { return res.status(503).json({ error: 'Society could not be verified.' }); }
 });
 
-// Specific subroutes must be declared before the generic /:identifier reader.
 app.get('/api/societies/:societyIdentifier/active-guard', async (req, res) => {
     try {
-        const doc = await findSocietyDoc(req.params.societyIdentifier);
-        if (!doc || !doc.exists) return res.status(404).json({ error: 'Society not found' });
-        const data = doc.data();
-        res.json({
-            id: doc.id, name: data.name || doc.id,
-            activeGuardName: data.activeGuardName || null,
-            activeGuardPhone: data.activeGuardPhone || null
+        const society = await authorization.resolveSociety(req.params.societyIdentifier);
+        if (!society) return res.status(404).json({ error: 'Society not found' });
+        return res.set('Cache-Control', 'no-store').json({
+            id: society.id, name: society.name,
+            activeGuardName: society.data.activeGuardName || null,
+            activeGuardPhone: society.data.activeGuardPhone || null
         });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (_) { return res.status(503).json({ error: 'Society could not be loaded.' }); }
 });
 
 app.get('/api/societies/:societyIdentifier', async (req, res) => {
     try {
-        const doc = await findSocietyDoc(req.params.societyIdentifier);
-        if (!doc || !doc.exists) return res.status(404).json({ error: 'Society not found' });
-        res.json({ id: doc.id, name: doc.id, ...doc.data() });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const society = await authorization.resolveSociety(req.params.societyIdentifier);
+        if (!society) return res.status(404).json({ error: 'Society not found' });
+        const membership = req.user ? await authorization.resolveMembership(req.user) : null;
+        if (membership && ['admin', 'guard'].includes(membership.role) && membership.societyId !== society.id) {
+            return res.status(403).json({ error: 'Your staff account is not assigned to this society.', code: 'society-scope-forbidden' });
+        }
+        return res.set('Cache-Control', 'private, no-store').json(publicSociety(society));
+    } catch (_) { return res.status(503).json({ error: 'Society could not be loaded.' }); }
 });
-
-async function findSocietyDoc(identifier) {
-    let doc = await db.collection('societies').doc(identifier).get();
-    if (doc.exists) return doc;
-    const snapshot = await db.collection('societies').get();
-    return snapshot.docs.find(d => {
-        const data = d.data();
-        return d.id.toLowerCase() === identifier.toLowerCase() ||
-            (data.name && data.name.toLowerCase() === identifier.toLowerCase());
-    }) || null;
-}
 
 // --- PASSWORD RESET ---
 app.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
+    const generic = { success: true, message: 'If an account exists for that email, a password reset link will be sent.' };
+    const email = normalizeAuthValue(req.body && req.body.email);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'A valid email is required.' });
     try {
-        const { email, role } = req.body || {};
-        if (!email) return res.status(400).json({ error: 'Email is required' });
-        if (!credential) {
-            return res.status(501).json({ error: 'Password reset needs Firebase Admin credentials and is disabled in local mode.' });
-        }
-        const emailLower = String(email).trim().toLowerCase();
-        const isGuard = role === 'guard';
-
-        let exists = false;
-        if (isGuard) {
-            const snapshot = await db.collection('guards').where('email', '==', emailLower).get();
-            exists = !snapshot.empty;
-        } else {
-            const adminDoc = await db.collection('admins').doc(emailLower).get();
-            exists = adminDoc.exists;
-            if (!exists) {
-                const snapshot = await db.collection('admins').where('email', '==', emailLower).get();
-                exists = !snapshot.empty;
-            }
-        }
-        if (!exists) {
-            return res.status(404).json({
-                error: isGuard ? 'No guard registered with entered emailid' : 'No admin registered with this entered email id'
+        if (credential) {
+            const accessToken = await credential.getAccessToken();
+            await fetch('https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken.access_token}` },
+                body: JSON.stringify({ requestType: 'PASSWORD_RESET', email })
             });
         }
-
-        // Administrative reset bypasses client App Check enforcement intentionally.
-        const accessToken = await credential.getAccessToken();
-        const response = await fetch('https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken.access_token}` },
-            body: JSON.stringify({ requestType: 'PASSWORD_RESET', email: emailLower })
-        });
-        const parsed = await response.json().catch(() => ({}));
-        if (!response.ok) {
-            console.error('Firebase reset error:', parsed);
-            return res.status(response.status).json({ error: (parsed.error && parsed.error.message) || 'Failed to send reset email' });
-        }
-        res.json({ success: true, message: 'Password reset link sent to your email!' });
-    } catch (err) {
-        console.error('[Forgot Password] Error:', err);
-        res.status(500).json({ error: 'Internal Server Error' });
+        return res.status(202).json(generic);
+    } catch (_) {
+        // Fail generically as well; do not reveal whether this account exists.
+        return res.status(202).json(generic);
     }
 });
 
@@ -737,278 +1034,564 @@ app.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
 // never allow it to overwrite an existing document by id.
 app.post('/api/vehicles', async (req, res) => {
     try {
-        let body = req.body;
-        if (typeof body === 'string') { try { body = JSON.parse(body); } catch (_) { body = {}; } }
-        body = body || {};
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const society = await authorization.resolveSociety(requestedSociety({ query: {}, body }) || 'Aangan');
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
 
-        const isAdmin = Boolean(req.user && req.user.role === 'admin');
-        const deviceId = body.deviceId || null;
-        const societyName = (body.societyName || body.society || '').trim();
-        const flatNumber = (body.flatNumber || body.flat || '').trim();
-        const residentType = (body.residentType || '').trim();
-        const mobileNumber = (body.mobileNumber || body.mobile || '').trim();
-        const docId = body.id;
+        const membership = req.user ? await authorization.resolveMembership(req.user) : null;
+        const staff = membership && ['admin', 'master'].includes(membership.role);
+        if (membership && membership.role === 'guard') {
+            return res.status(403).json({ error: 'Guards cannot register or edit vehicles.', code: 'role-forbidden' });
+        }
+        if (staff && membership.role !== 'master' && membership.societyId !== society.id) {
+            return res.status(403).json({ error: 'Your staff account is not assigned to this society.', code: 'society-scope-forbidden' });
+        }
+
+        const docId = body.id == null || body.id === '' ? null : String(body.id);
+        if (docId && !staff) {
+            return res.status(403).json({ error: 'Editing a vehicle requires a society administrator.', code: 'role-forbidden' });
+        }
+        if (docId && (body.vehicles && (Array.isArray(body.vehicles) ? body.vehicles.length : 1) !== 1)) {
+            return res.status(400).json({ error: 'Exactly one vehicle is required when editing.' });
+        }
 
         let vehiclesToProcess = [];
         if (Array.isArray(body.vehicles)) vehiclesToProcess = body.vehicles;
-        else if (typeof body.vehicles === 'string') { try { vehiclesToProcess = JSON.parse(body.vehicles); } catch (_) {} }
+        else if (typeof body.vehicles === 'string') {
+            try { vehiclesToProcess = JSON.parse(body.vehicles); } catch (_) { vehiclesToProcess = []; }
+        }
         if (vehiclesToProcess.length === 0 && body.vehicleNumber) {
             vehiclesToProcess = [{ vehicleNumber: body.vehicleNumber, vehicleType: body.vehicleType || '2-Wheeler' }];
         }
-        const valid = vehiclesToProcess.filter(v => v && String(v.vehicleNumber || '').trim() !== '');
-        if (valid.length === 0) {
-            return res.status(400).json({ error: 'Vehicle number is required. Please fill in at least one vehicle number.' });
-        }
-
-        // Editing an existing record is an admin action.
-        if (docId) {
-            if (!isAdmin) return res.status(403).json({ error: 'Forbidden: Admin privileges required to edit a vehicle.' });
-            if (valid.length !== 1) return res.status(400).json({ error: 'Exactly one vehicle is required when editing.' });
-            await db.collection('vehicles').doc(docId).set({
-                flatNumber: flatNumber || 'Unknown',
-                residentType: residentType || 'Resident',
-                mobileNumber: mobileNumber || '',
-                vehicleType: String(valid[0].vehicleType || '2-Wheeler').trim(),
-                vehicleNumber: String(valid[0].vehicleNumber).trim().toUpperCase(),
-                deviceId,
-                updatedAt: FieldValue.serverTimestamp()
-            }, { merge: true });
-            return res.json({ success: true });
-        }
-
-        const batch = db.batch();
-        for (const v of valid) {
-            batch.set(db.collection('vehicles').doc(), {
-                vehicleNumber: String(v.vehicleNumber).trim().toUpperCase(),
-                vehicleType: String(v.vehicleType || '2-Wheeler').trim(),
-                flatNumber: flatNumber || 'Unknown',
-                residentType: residentType || 'Resident',
-                mobileNumber: mobileNumber || '',
-                societyName: societyName || 'Aangan',
-                deviceId,
-                createdAt: FieldValue.serverTimestamp()
+        const requestedVehicles = vehiclesToProcess
+            .filter(vehicle => vehicle && String(vehicle.vehicleNumber || '').trim())
+            .map(vehicle => {
+                let vehicleType = String(vehicle.vehicleType || '2-Wheeler').trim();
+                if (/^2w$/i.test(vehicleType)) vehicleType = '2-Wheeler';
+                if (/^4w$/i.test(vehicleType)) vehicleType = '4-Wheeler';
+                return { vehicleNumber: String(vehicle.vehicleNumber).trim().toUpperCase(), vehicleType };
             });
+        if (!requestedVehicles.length) return res.status(400).json({ error: 'At least one vehicle number is required.' });
+        if (requestedVehicles.length > 12) return res.status(400).json({ error: 'Too many vehicles in one request.' });
+        if (docId && requestedVehicles.length !== 1) return res.status(400).json({ error: 'Exactly one vehicle is required when editing.' });
+
+        const isResident = !staff;
+        const flatNumber = String(body.flatNumber || body.flat || '').trim();
+        const residentType = String(body.residentType || (isResident ? '' : 'Resident')).trim();
+        const mobileNumber = String(body.mobileNumber || body.mobile || '').trim();
+        const deviceId = String(body.deviceId || '').trim();
+        if (!flatNumber || flatNumber.length > 80) return res.status(400).json({ error: 'A valid flat number is required.' });
+        if (isResident && (!deviceId || deviceId === 'unknown' || deviceId.length > 256)) {
+            return res.status(400).json({ error: 'A valid device ID is required for resident registration.' });
         }
-        await batch.commit();
-        res.json({ success: true });
-    } catch (err) { console.error('Vehicle API Error:', err); res.status(500).json({ error: err.message }); }
+        if (isResident && !/^\d{10}$/.test(mobileNumber)) {
+            return res.status(400).json({ error: 'Mobile number must contain exactly 10 digits.' });
+        }
+        if (isResident && !['Owner', 'Tenant'].includes(residentType)) {
+            return res.status(400).json({ error: 'Resident type must be Owner or Tenant.' });
+        }
+        for (const vehicle of requestedVehicles) {
+            if (!['2-Wheeler', '4-Wheeler'].includes(vehicle.vehicleType)) {
+                return res.status(400).json({ error: 'Vehicle type must be 2-Wheeler or 4-Wheeler.' });
+            }
+            if (isResident && !/^[A-Z0-9]{10}$/.test(vehicle.vehicleNumber)) {
+                return res.status(400).json({ error: 'Vehicle number must contain exactly 10 letters or digits.' });
+            }
+            if (!isResident && !/^[A-Z0-9 -]{1,20}$/.test(vehicle.vehicleNumber)) {
+                return res.status(400).json({ error: 'Vehicle number contains unsupported characters.' });
+            }
+        }
+        const numbers = requestedVehicles.map(vehicle => vehicle.vehicleNumber);
+        if (new Set(numbers).size !== numbers.length) {
+            return res.status(409).json({ error: 'Duplicate vehicle number in this request.' });
+        }
+
+        const fail = (status, message, code = 'vehicle-registration-rejected') => {
+            const error = new Error(message);
+            error.status = status;
+            error.code = code;
+            throw error;
+        };
+        const societyRef = db.collection('societies').doc(society.id);
+        // A per-society lock document serializes resident registrations so two
+        // concurrent query-based uniqueness/limit checks cannot both commit.
+        const registrationLockRef = db.collection('vehicleRegistrationLocks').doc(hashValue(society.id));
+        const existingRef = docId ? db.collection('vehicles').doc(docId) : null;
+        const newRefs = docId ? [] : requestedVehicles.map(() => db.collection('vehicles').doc());
+
+        await db.runTransaction(async transaction => {
+            const [societySnap, existingVehicles, registrationLock] = await Promise.all([
+                transaction.get(societyRef),
+                getVehiclesForRegistration(transaction, society, flatNumber, isResident ? deviceId : '', numbers),
+                transaction.get(registrationLockRef)
+            ]);
+            if (!societySnap.exists) fail(404, 'Society not found.');
+            const societyData = societySnap.data() || {};
+            const flatList = Array.isArray(societyData.flatList) ? societyData.flatList :
+                (Array.isArray(societyData.flats) ? societyData.flats : []);
+            const flatIsKnown = flatList.some(flat => normalizeAuthValue(flat) === normalizeAuthValue(flatNumber));
+            if ((isResident || flatList.length > 0) && !flatIsKnown) fail(400, 'Flat is not registered in this society.');
+
+            let oldDoc = null;
+            let oldData = null;
+            if (existingRef) {
+                oldDoc = await transaction.get(existingRef);
+                if (!oldDoc.exists) fail(404, 'Vehicle not found.');
+                oldData = oldDoc.data() || {};
+                if (!isVehicleForSociety(oldData, society)) fail(403, 'Vehicle is outside your society scope.', 'society-scope-forbidden');
+                if (oldData.deviceId && normalizeAuthValue(oldData.flatNumber) !== normalizeAuthValue(flatNumber)) {
+                    fail(409, 'A device-linked vehicle cannot be reassigned to another flat through this edit.');
+                }
+            }
+
+            const rows = existingVehicles.filter(doc => doc.id !== (oldDoc && oldDoc.id)).map(doc => ({ id: doc.id, data: doc.data() || {} }));
+            if (isResident) {
+                const linkedToOtherFlat = rows.find(row => row.data.deviceId === deviceId &&
+                    normalizeAuthValue(row.data.flatNumber) !== normalizeAuthValue(flatNumber));
+                if (linkedToOtherFlat) fail(409, 'This device is already linked to a different flat.');
+                const flatOnOtherDevice = rows.find(row =>
+                    normalizeAuthValue(row.data.flatNumber) === normalizeAuthValue(flatNumber) &&
+                    row.data.deviceId && row.data.deviceId !== deviceId);
+                if (flatOnOtherDevice) fail(409, 'This flat is already linked to another device.');
+            }
+
+            for (const vehicle of requestedVehicles) {
+                const duplicate = rows.find(row => String(row.data.vehicleNumber || '').trim().toUpperCase() === vehicle.vehicleNumber);
+                if (duplicate) fail(409, 'This vehicle number is already registered in this society.');
+            }
+
+            if (isResident) {
+                const counts = { '2-Wheeler': 0, '4-Wheeler': 0 };
+                for (const row of rows) {
+                    if (normalizeAuthValue(row.data.flatNumber) === normalizeAuthValue(flatNumber) &&
+                        Object.hasOwn(counts, row.data.vehicleType)) counts[row.data.vehicleType] += 1;
+                }
+                const limit = type => Number.isInteger(societyData[type]) && societyData[type] >= 0 ? societyData[type] : 0;
+                for (const vehicle of requestedVehicles) {
+                    counts[vehicle.vehicleType] += 1;
+                    const max = limit(vehicle.vehicleType === '2-Wheeler' ? 'max2Wheeler' : 'max4Wheeler');
+                    if (counts[vehicle.vehicleType] > max) fail(409, `Vehicle limit reached for this flat (${vehicle.vehicleType}).`);
+                }
+            }
+
+            const stamp = FieldValue.serverTimestamp();
+            const lockVersion = registrationLock.exists ? Number((registrationLock.data() || {}).version) || 0 : 0;
+            transaction.set(registrationLockRef, {
+                societyId: society.id, version: lockVersion + 1, updatedAt: stamp
+            });
+            if (existingRef) {
+                transaction.update(existingRef, {
+                    societyId: society.id,
+                    societyName: society.name,
+                    flatNumber,
+                    residentType: residentType || oldData.residentType || 'Resident',
+                    mobileNumber: mobileNumber || oldData.mobileNumber || '',
+                    vehicleType: requestedVehicles[0].vehicleType,
+                    vehicleNumber: requestedVehicles[0].vehicleNumber,
+                    deviceId: oldData.deviceId || null,
+                    updatedAt: stamp
+                });
+            } else {
+                requestedVehicles.forEach((vehicle, index) => {
+                    transaction.set(newRefs[index], {
+                        societyId: society.id,
+                        societyName: society.name,
+                        flatNumber,
+                        residentType: residentType || 'Resident',
+                        mobileNumber: mobileNumber || '',
+                        vehicleType: vehicle.vehicleType,
+                        vehicleNumber: vehicle.vehicleNumber,
+                        deviceId: isResident ? deviceId : (deviceId || null),
+                        createdAt: stamp
+                    });
+                });
+            }
+        });
+        return res.json({ success: true });
+    } catch (err) {
+        if (err && Number.isInteger(err.status)) return res.status(err.status).json({ error: err.message, code: err.code });
+        console.error('Vehicle API Error:', err);
+        return res.status(500).json({ error: 'Could not register the vehicle.' });
+    }
 });
 
 app.post('/api/contest/spin', async (req, res) => {
     try {
-        const { societyName, flatNumber, winnerFlat } = req.body || {};
-        const resolvedFlat = flatNumber || winnerFlat;
-        if (!societyName) return res.status(400).json({ error: 'Society name is required' });
-        const searchName = String(societyName).trim().toLowerCase();
+        const body = req.body || {};
+        const society = await authorization.resolveSociety(body.societyId || body.societyName || body.society);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const deviceId = String(body.deviceId || '').trim();
+        const submittedFlat = String(body.flatNumber || '').trim();
+        const contestId = String(body.contestId || 'default').trim();
+        if (!deviceId || deviceId === 'unknown' || deviceId.length > 256 || !submittedFlat || submittedFlat.length > 80 || !contestId || contestId.length > 2048) {
+            return res.status(400).json({ error: 'Registered device, flat number, and contest ID are required.' });
+        }
 
-        const societiesSnapshot = await db.collection('societies').get();
-        let matchedDocId = null, societyData = {};
-        societiesSnapshot.forEach(doc => {
-            const data = doc.data();
-            if (doc.id.toLowerCase() === searchName || (data.name || '').toLowerCase() === searchName) {
-                matchedDocId = doc.id; societyData = data;
+        const today = utcDate();
+        const statRef = db.collection('spinStats').doc(`${normalizeAuthValue(society.name)}_${today}`);
+        const attemptRef = db.collection('contestAttempts').doc(contestAttemptDocumentId(society.id, today, deviceId, contestId));
+        const societyRef = db.collection('societies').doc(society.id);
+        const result = await db.runTransaction(async transaction => {
+            const [societySnap, statSnap, attemptSnap, vehicles] = await Promise.all([
+                transaction.get(societyRef), transaction.get(statRef), transaction.get(attemptRef),
+                getVehiclesForDeviceInTransaction(transaction, society, deviceId)
+            ]);
+            if (!societySnap.exists) {
+                const error = new Error('Society not found.'); error.status = 404; throw error;
             }
-        });
-        if (!matchedDocId) return res.status(404).json({ error: 'Society not found' });
-
-        const raw = societyData.spintodayNumber;
-        const target = (raw !== undefined && raw !== null && raw !== '') ? Number(raw) : null;
-        const todayStr = new Date().toISOString().split('T')[0];
-        const statRef = db.collection('spinStats').doc(`${searchName}_${todayStr}`);
-
-        // Atomic increment avoids the read-then-write race in the original handler.
-        const currentCount = await db.runTransaction(async tx => {
-            const snap = await tx.get(statRef);
-            const next = snap.exists ? (snap.data().spinCount || 0) + 1 : 1;
-            const payload = { spinCount: next };
-            if (resolvedFlat) payload.winnerFlat = String(resolvedFlat).trim();
-            if (!snap.exists) {
-                payload.societyName = matchedDocId;
-                payload.date = todayStr;
-                payload.createdAt = FieldValue.serverTimestamp();
-                tx.set(statRef, payload);
-            } else {
-                tx.update(statRef, payload);
+            const linkedVehicle = uniqueVehicleForDevice(vehicles, deviceId, submittedFlat);
+            if (!linkedVehicle) {
+                const error = new Error('This device is not linked to the submitted flat in this society.'); error.status = 403; throw error;
             }
-            return next;
-        });
+            if (attemptSnap.exists) {
+                const error = new Error('This device has already spun for this contest today.'); error.status = 409; throw error;
+            }
 
-        res.json({ success: true, spinCount: currentCount, won: target !== null && currentCount === target });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+            const societyData = societySnap.data() || {};
+            const rawTarget = societyData.spintodayNumber;
+            const parsedTarget = rawTarget === undefined || rawTarget === null || rawTarget === '' ? null : Number(rawTarget);
+            const target = Number.isFinite(parsedTarget) && parsedTarget > 0 ? parsedTarget : null;
+            const current = statSnap.exists ? Number((statSnap.data() || {}).spinCount) || 0 : 0;
+            const next = current + 1;
+            const won = target !== null && next === target;
+            const stamp = FieldValue.serverTimestamp();
+            const stat = {
+                societyId: society.id, societyName: society.name,
+                spinCount: next, date: today, updatedAt: stamp
+            };
+            if (!statSnap.exists) stat.createdAt = stamp;
+            transaction.set(statRef, stat, { merge: true });
+            transaction.set(attemptRef, {
+                societyId: society.id, contestIdHash: hashValue(contestId),
+                deviceIdHash: hashValue(deviceId), flatNumber: linkedVehicle.data().flatNumber,
+                date: today, spinCount: next, won, claimed: false, createdAt: stamp
+            });
+            return { spinCount: next, won };
+        });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        if (err && Number.isInteger(err.status)) return res.status(err.status).json({ error: err.message });
+        console.error('Contest spin failed:', err);
+        return res.status(500).json({ error: 'Could not complete the spin.' });
+    }
 });
 
 app.post('/api/contest/winner', async (req, res) => {
     try {
-        const { societyName, flatNumber, winnerFlatnumber } = req.body || {};
-        const resolvedFlat = flatNumber || winnerFlatnumber;
-        if (!societyName || !resolvedFlat) {
-            return res.status(400).json({ error: 'Society name and flat number are required' });
+        const body = req.body || {};
+        const society = await authorization.resolveSociety(body.societyId || body.societyName || body.society);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const deviceId = String(body.deviceId || '').trim();
+        const flatNumber = String(body.flatNumber || body.winnerFlatnumber || '').trim();
+        const contestId = String(body.contestId || 'default').trim();
+        if (!deviceId || deviceId === 'unknown' || deviceId.length > 256 || !flatNumber || flatNumber.length > 80 || !contestId || contestId.length > 2048) {
+            return res.status(400).json({ error: 'Registered device, flat number, and contest ID are required.' });
         }
-        const trimmed = String(societyName).trim();
-        await db.collection('winners').add({
-            societyName: trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase(),
-            winnerFlatnumber: String(resolvedFlat).trim(),
-            flatNumber: String(resolvedFlat).trim(),
-            createdAt: FieldValue.serverTimestamp()
+
+        const dates = [utcDate(), utcDate(new Date(Date.now() - 24 * 60 * 60 * 1000))];
+        const attemptRefs = dates.map(date => ({
+            date,
+            ref: db.collection('contestAttempts').doc(contestAttemptDocumentId(society.id, date, deviceId, contestId))
+        }));
+        const winnerRef = db.collection('winners').doc();
+        await db.runTransaction(async transaction => {
+            const [attemptSnaps, vehicles] = await Promise.all([
+                Promise.all(attemptRefs.map(attempt => transaction.get(attempt.ref))),
+                getVehiclesForDeviceInTransaction(transaction, society, deviceId)
+            ]);
+            const index = attemptSnaps.findIndex(snap => snap.exists && (snap.data() || {}).won === true);
+            if (index < 0) {
+                const error = new Error('No winning spin is available for this device and contest.'); error.status = 403; throw error;
+            }
+            const attempt = attemptSnaps[index];
+            const attemptData = attempt.data() || {};
+            if (attemptData.claimed === true) {
+                const error = new Error('This winning spin has already been claimed.'); error.status = 409; throw error;
+            }
+            const linkedVehicle = uniqueVehicleForDevice(vehicles, deviceId, flatNumber);
+            if (!linkedVehicle || normalizeAuthValue(attemptData.flatNumber) !== normalizeAuthValue(flatNumber)) {
+                const error = new Error('The submitted flat does not match the winning device registration.'); error.status = 403; throw error;
+            }
+
+            const stamp = FieldValue.serverTimestamp();
+            transaction.update(attemptRefs[index].ref, { claimed: true, claimedAt: stamp });
+            transaction.set(winnerRef, {
+                societyId: society.id, societyName: society.name,
+                flatNumber: linkedVehicle.data().flatNumber,
+                winnerFlatnumber: linkedVehicle.data().flatNumber,
+                contestIdHash: hashValue(contestId), createdAt: stamp
+            });
         });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        return res.json({ success: true });
+    } catch (err) {
+        if (err && Number.isInteger(err.status)) return res.status(err.status).json({ error: err.message });
+        console.error('Contest winner claim failed:', err);
+        return res.status(500).json({ error: 'Could not register the winning flat.' });
+    }
 });
 
 app.get('/api/contest/winners', async (req, res) => {
     try {
         const snapshot = await db.collection('winners').orderBy('createdAt', 'desc').limit(10).get();
         const winners = [];
-        snapshot.forEach(doc => winners.push({ id: doc.id, ...doc.data() }));
-        res.json(winners);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        snapshot.forEach(doc => {
+            const data = doc.data() || {};
+            winners.push({
+                societyName: data.societyName || '',
+                flatNumber: data.flatNumber || data.winnerFlatnumber || '',
+                createdAt: data.createdAt || null
+            });
+        });
+        return res.json(winners);
+    } catch (_) { return res.status(503).json({ error: 'Contest results could not be loaded.' }); }
 });
 
-app.get('/api/contest/spinstats', async (req, res) => {
+app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
     try {
-        const { societyName } = req.query;
-        if (!societyName) return res.status(400).json({ error: 'Society name is required' });
-        const searchName = String(societyName).trim().toLowerCase();
-        const todayStr = new Date().toISOString().split('T')[0];
-        const statDoc = await db.collection('spinStats').doc(`${searchName}_${todayStr}`).get();
-        const data = statDoc.exists ? statDoc.data() : {};
-        const spinCount = data.spinCount || 0;
-
-        const winnersSnapshot = await db.collection('winners')
-            .where('societyName', '==', String(societyName).trim()).get();
-        let latestWinnerFlat = 'None yet';
-        if (!winnersSnapshot.empty) {
-            const docs = winnersSnapshot.docs.map(d => d.data())
-                .filter(d => (d.societyName || '').trim().toLowerCase() === searchName);
-            docs.sort((a, b) => {
-                const t = v => (v && v.toMillis) ? v.toMillis() : new Date(v || 0).getTime();
-                return t(b.createdAt) - t(a.createdAt);
-            });
-            if (docs.length) latestWinnerFlat = docs[0].flatNumber || docs[0].winnerFlatnumber || 'None yet';
-        }
-        res.json({
-            societyName, totalSpins: spinCount, totalDaySpins: spinCount,
-            totalMonthSpins: 0, winnerFlat: latestWinnerFlat
+        const requested = String(req.query.societyName || req.query.society || '').trim();
+        if (!requested) return res.status(400).json({ error: 'Society name is required.' });
+        const society = await authorization.resolveSociety(requested);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const today = utcDate();
+        const statDoc = await db.collection('spinStats').doc(`${normalizeAuthValue(society.name)}_${today}`).get();
+        const data = statDoc.exists ? statDoc.data() || {} : {};
+        const snapshot = await db.collection('winners').where('societyId', '==', society.id).get();
+        const winners = snapshot.docs.map(doc => doc.data() || []).sort((a, b) => {
+            const time = value => value && typeof value.toMillis === 'function' ? value.toMillis() : new Date(value || 0).getTime();
+            return time(b.createdAt) - time(a.createdAt);
         });
-    } catch (err) { console.error('Spin Stats API Error:', err); res.status(500).json({ error: err.message }); }
+        const winnerFlat = winners.length ? (winners[0].flatNumber || winners[0].winnerFlatnumber || 'None yet') : 'None yet';
+        const spinCount = Number(data.spinCount) || 0;
+        return res.json({
+            societyName: society.name, totalSpins: spinCount, totalDaySpins: spinCount,
+            totalMonthSpins: 0, winnerFlat
+        });
+    } catch (_) { return res.status(503).json({ error: 'Spin statistics could not be loaded.' }); }
 });
 
 // --- ADMIN WRITES (require a verified admin identity) ---
-app.post('/api/config', requireAuth, requireAdmin, async (req, res) => {
+app.post('/api/config', requireMaster, async (req, res) => {
     try {
-        const { teamPhone } = req.body || {};
+        const teamPhone = String((req.body && req.body.teamPhone) || '').trim();
+        if (!/^\+?[0-9 ()-]{7,24}$/.test(teamPhone)) return res.status(400).json({ error: 'A valid team phone is required.' });
         await db.collection('configs').doc('owlwatcher').set({ teamPhone }, { merge: true });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not update configuration.' }); }
 });
 
-app.post('/api/notices/:societyId', requireAuth, requireAdmin, async (req, res) => {
+app.post('/api/notices/:societyId', requireAdminForSociety(req => req.params.societyId), async (req, res) => {
     try {
-        const { todayMessage, tomorrowMessage, date } = req.body || {};
-        await db.collection('notices').doc(req.params.societyId).set({
+        const { todayMessage = '', tomorrowMessage = '', date = '' } = req.body || {};
+        if (typeof todayMessage !== 'string' || todayMessage.length > 5000 ||
+            typeof tomorrowMessage !== 'string' || tomorrowMessage.length > 5000 ||
+            (date && (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)))) {
+            return res.status(400).json({ error: 'Invalid notice fields.' });
+        }
+        const society = req.authorizedSociety;
+        await db.collection('notices').doc(society.id).set({
+            societyId: society.id, societyName: society.name,
             todayMessage, tomorrowMessage, date, updatedAt: FieldValue.serverTimestamp()
         }, { merge: true });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not update the notice.' }); }
 });
 
-app.delete('/api/notices/:societyId', requireAuth, requireAdmin, async (req, res) => {
+app.delete('/api/notices/:societyId', requireAdminForSociety(req => req.params.societyId), async (req, res) => {
     try {
-        await db.collection('notices').doc(req.params.societyId).delete();
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        await db.collection('notices').doc(req.authorizedSociety.id).delete();
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not delete the notice.' }); }
 });
 
-app.post('/api/guards', requireAuth, requireAdmin, async (req, res) => {
+app.post('/api/guards', requireAdminForSociety(req => requestedSociety(req)), async (req, res) => {
     try {
-        const { targetDocId, email, name, name_lower, phone, society } = req.body || {};
-        const docId = targetDocId || email;
-        if (!docId) return res.status(400).json({ error: 'email or targetDocId is required' });
-        await db.collection('guards').doc(docId).set({
-            email, name, name_lower, phone, society, updatedAt: FieldValue.serverTimestamp()
+        const { targetDocId, email, name, phone } = req.body || {};
+        const normalizedEmail = normalizeAuthValue(email);
+        const cleanName = String(name || '').trim();
+        const cleanPhone = String(phone || '').trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail) || cleanName.length < 1 || cleanName.length > 120 || cleanPhone.length > 40) {
+            return res.status(400).json({ error: 'A valid guard email, name, and phone are required.' });
+        }
+        const society = req.authorizedSociety;
+        const docId = String(targetDocId || normalizedEmail).trim();
+        if (!docId || docId.length > 180 || docId.includes('/')) return res.status(400).json({ error: 'Invalid guard record ID.' });
+        const ref = db.collection('guards').doc(docId);
+        const existing = await ref.get({ fresh: true });
+        if (existing.exists && !recordMatchesSociety(existing.data() || {}, existing.id, society)) {
+            return res.status(403).json({ error: 'Guard record is outside your society scope.', code: 'society-scope-forbidden' });
+        }
+        await ref.set({
+            email: normalizedEmail, name: cleanName, name_lower: cleanName.toLowerCase(), phone: cleanPhone,
+            societyId: society.id, society: society.name, updatedAt: FieldValue.serverTimestamp()
         }, { merge: true });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not save the guard record.' }); }
 });
 
-app.delete('/api/guards/:id', requireAuth, requireAdmin, async (req, res) => {
+app.delete('/api/guards/:id', requireStaff, async (req, res) => {
     try {
-        await db.collection('guards').doc(req.params.id).delete();
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        if (!['admin', 'master'].includes(req.membership.role)) {
+            return res.status(403).json({ error: 'Only a society administrator may delete guards.', code: 'role-forbidden' });
+        }
+        const ref = db.collection('guards').doc(req.params.id);
+        const doc = await ref.get({ fresh: true });
+        if (!doc.exists) return res.status(404).json({ error: 'Guard not found.' });
+        const data = doc.data() || {};
+        const society = await authorization.resolveSociety(data.societyId || data.society || data.societyName);
+        if (!society || (req.membership.role !== 'master' && society.id !== req.membership.societyId)) {
+            return res.status(403).json({ error: 'Guard record is outside your society scope.', code: 'society-scope-forbidden' });
+        }
+        await ref.delete();
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not delete the guard record.' }); }
 });
 
-app.delete('/api/vehicles/:id', requireAuth, requireAdmin, async (req, res) => {
+app.delete('/api/vehicles/:id', requireStaff, async (req, res) => {
     try {
-        await db.collection('vehicles').doc(req.params.id).delete();
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        if (!['admin', 'master'].includes(req.membership.role)) {
+            return res.status(403).json({ error: 'Only a society administrator may delete vehicles.', code: 'role-forbidden' });
+        }
+        const ref = db.collection('vehicles').doc(req.params.id);
+        const doc = await ref.get({ fresh: true });
+        if (!doc.exists) return res.status(404).json({ error: 'Vehicle not found.' });
+        const data = doc.data() || {};
+        const society = await authorization.resolveSociety(data.societyId || data.societyName || data.society);
+        if (!society || (req.membership.role !== 'master' && society.id !== req.membership.societyId)) {
+            return res.status(403).json({ error: 'Vehicle is outside your society scope.', code: 'society-scope-forbidden' });
+        }
+        await ref.delete();
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not delete the vehicle.' }); }
 });
 
-app.post('/api/facilities/:societyIdentifier', requireAuth, requireAdmin, async (req, res) => {
+app.post('/api/facilities/:societyIdentifier', requireAdminForSociety(req => req.params.societyIdentifier), async (req, res) => {
     try {
-        await db.collection('facilities').doc(req.params.societyIdentifier).set(req.body || {}, { merge: true });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const updates = {};
+        for (const [key, value] of Object.entries(req.body || {})) {
+            if (!/^F\d{1,2}$/.test(key) || typeof value !== 'string' || value.length > 120) {
+                return res.status(400).json({ error: 'Facility updates may contain only short F1-F99 text labels.' });
+            }
+            updates[key] = value.trim();
+        }
+        const society = req.authorizedSociety;
+        await db.collection('facilities').doc(society.id).set({
+            societyId: society.id, societyName: society.name, ...updates,
+            updatedAt: FieldValue.serverTimestamp()
+        }, { merge: true });
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not update facilities.' }); }
 });
 
-app.post('/api/bookings', requireAuth, requireAdmin, async (req, res) => {
+app.post('/api/bookings', requireAdminForSociety(req => requestedSociety(req)), async (req, res) => {
     try {
-        const { society, facilityId, start, end } = req.body || {};
-        const bookingEndDate = new Date(end || start);
-        if (Number.isNaN(bookingEndDate.getTime())) return res.status(400).json({ error: 'Invalid booking date.' });
+        const { facilityId, start, end } = req.body || {};
+        if (typeof facilityId !== 'string' || !/^F\d{1,2}$/.test(facilityId) || typeof start !== 'string') {
+            return res.status(400).json({ error: 'A facility and start time are required.' });
+        }
+        const startDate = new Date(start);
+        const endDate = new Date(end || start);
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate < startDate) {
+            return res.status(400).json({ error: 'Invalid booking date range.' });
+        }
+        const society = req.authorizedSociety;
         await db.collection('bookings').add({
-            society, facilityId, start, end,
-            expireAt: new Date(bookingEndDate.getTime() + 7 * 24 * 60 * 60 * 1000)
+            societyId: society.id, society: society.name, societyName: society.name,
+            facilityId, start: startDate.toISOString(), end: endDate.toISOString(),
+            expireAt: new Date(endDate.getTime() + 7 * 24 * 60 * 60 * 1000)
         });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not create the booking.' }); }
 });
 
-app.delete('/api/bookings/:id', requireAuth, requireAdmin, async (req, res) => {
+app.delete('/api/bookings/:id', requireStaff, async (req, res) => {
     try {
-        await db.collection('bookings').doc(req.params.id).delete();
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        if (!['admin', 'master'].includes(req.membership.role)) {
+            return res.status(403).json({ error: 'Only a society administrator may delete bookings.', code: 'role-forbidden' });
+        }
+        const ref = db.collection('bookings').doc(req.params.id);
+        const doc = await ref.get({ fresh: true });
+        if (!doc.exists) return res.status(404).json({ error: 'Booking not found.' });
+        const data = doc.data() || {};
+        const society = await authorization.resolveSociety(data.societyId || data.society || data.societyName);
+        if (!society || (req.membership.role !== 'master' && society.id !== req.membership.societyId)) {
+            return res.status(403).json({ error: 'Booking is outside your society scope.', code: 'society-scope-forbidden' });
+        }
+        await ref.delete();
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not delete the booking.' }); }
 });
 
-app.patch('/api/societies/:societyId/active-guard', requireAuth, async (req, res) => {
+app.patch('/api/societies/:societyId/active-guard', requireStaffForSociety(req => req.params.societyId), async (req, res) => {
     try {
-        const { activeGuardName, activeGuardPhone } = req.body || {};
-        await db.collection('societies').doc(req.params.societyId).set({
+        const society = req.authorizedSociety;
+        const activeGuardName = String((req.body && req.body.activeGuardName) || '').trim();
+        let activeGuardPhone = null;
+        if (activeGuardName) {
+            const aliases = society.aliases.slice(0, 30);
+            const snapshots = await Promise.all([
+                db.collection('guards').where('societyId', '==', society.id).get(),
+                db.collection('guards').where('society', 'in', aliases).get(),
+                db.collection('guards').where('societyName', 'in', aliases).get()
+            ]);
+            const guard = snapshots.flatMap(snapshot => snapshot.docs).find(doc => {
+                const data = doc.data() || {};
+                return recordMatchesSociety(data, doc.id, society) && normalizeAuthValue(data.name) === normalizeAuthValue(activeGuardName);
+            });
+            if (!guard) return res.status(400).json({ error: 'Selected guard is not registered in this society.' });
+            activeGuardPhone = (guard.data() || {}).phone || null;
+        }
+        await db.collection('societies').doc(society.id).set({
             activeGuardName: activeGuardName || null,
-            activeGuardPhone: activeGuardPhone || null
+            activeGuardPhone,
+            updatedAt: FieldValue.serverTimestamp()
         }, { merge: true });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not update the active guard.' }); }
 });
 
-app.patch('/api/societies/:societyId/limits', requireAuth, requireAdmin, async (req, res) => {
+app.patch('/api/societies/:societyId/limits', requireAdminForSociety(req => req.params.societyId), async (req, res) => {
     try {
         const max4Wheeler = Number(req.body && req.body.max4Wheeler);
         const max2Wheeler = Number(req.body && req.body.max2Wheeler);
-        if (!Number.isInteger(max4Wheeler) || !Number.isInteger(max2Wheeler) || max4Wheeler < 0 || max2Wheeler < 0) {
-            return res.status(400).json({ error: 'max4Wheeler and max2Wheeler must be non-negative integers.' });
+        if (!Number.isInteger(max4Wheeler) || !Number.isInteger(max2Wheeler) || max4Wheeler < 0 || max2Wheeler < 0 || max4Wheeler > 100 || max2Wheeler > 100) {
+            return res.status(400).json({ error: 'Vehicle limits must be integers between 0 and 100.' });
         }
-        await db.collection('societies').doc(req.params.societyId).set({ max4Wheeler, max2Wheeler }, { merge: true });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.patch('/api/societies/:societyId/flats', requireAuth, requireAdmin, async (req, res) => {
-    try {
-        await db.collection('societies').doc(req.params.societyId).set({
-            flats: (req.body && req.body.flats) || [], updatedAt: FieldValue.serverTimestamp()
+        await db.collection('societies').doc(req.authorizedSociety.id).set({
+            max4Wheeler, max2Wheeler, updatedAt: FieldValue.serverTimestamp()
         }, { merge: true });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not update society limits.' }); }
 });
 
-app.patch('/api/ads/:adKey', requireAuth, requireAdmin, async (req, res) => {
+app.patch('/api/societies/:societyId/flats', requireAdminForSociety(req => req.params.societyId), async (req, res) => {
     try {
-        await db.collection('ads').doc(req.params.adKey).set(req.body || {}, { merge: true });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const supplied = req.body && (req.body.flatList || req.body.flats);
+        if (!Array.isArray(supplied) || supplied.length > 1000 || supplied.some(flat => typeof flat !== 'string' || !flat.trim() || flat.trim().length > 80)) {
+            return res.status(400).json({ error: 'flatList must contain up to 1000 non-empty flat identifiers.' });
+        }
+        const flatList = [...new Set(supplied.map(flat => flat.trim()))];
+        const society = req.authorizedSociety;
+        await db.collection('societies').doc(society.id).set({
+            societyId: society.id, flatList, flats: flatList,
+            updatedAt: FieldValue.serverTimestamp()
+        }, { merge: true });
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not update society flats.' }); }
+});
+
+app.patch('/api/ads/:adKey', requireMaster, async (req, res) => {
+    try {
+        const adKey = String(req.params.adKey || '').trim();
+        const body = req.body || {};
+        if (!/^[A-Za-z0-9_-]{1,120}$/.test(adKey) || Object.keys(body).length !== 1 || typeof body.societyApproved !== 'boolean') {
+            return res.status(400).json({ error: 'Only the societyApproved boolean may be changed.' });
+        }
+        const ref = db.collection('ads').doc(adKey);
+        const doc = await ref.get({ fresh: true });
+        if (!doc.exists) return res.status(404).json({ error: 'Advertisement not found.' });
+        await ref.set({ societyApproved: body.societyApproved, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        return res.json({ success: true });
+    } catch (_) { return res.status(500).json({ error: 'Could not update the advertisement.' }); }
 });
 
 // --- FALLBACKS ---

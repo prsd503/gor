@@ -191,11 +191,15 @@
 
                     try {
                         const headers = await getAuthHeaders();
-                        const res = await fetch(`${API_BASE_URL}/vehicles?society=${encodeURIComponent(societyName)}`, { headers });
+                        const lookup = new URLSearchParams({ society: societyName, flatNumber: selectedFlat, deviceId });
+                        const res = await fetch(`${API_BASE_URL}/vehicles?${lookup.toString()}`, { headers });
                         const allVehiclesResponse = await res.json();
                         
                         const allVehicles = Array.isArray(allVehiclesResponse) ? allVehiclesResponse : [];
-                        const existingVehicles = allVehicles.filter(v => String(v.flatNumber).trim() === String(selectedFlat).trim());
+                        const registrationSummary = allVehicles.find(v => v && v.registrationSummary === true &&
+                            String(v.flatNumber).trim() === String(selectedFlat).trim());
+                        const existingVehicles = allVehicles.filter(v => v && v.registrationSummary !== true &&
+                            String(v.flatNumber).trim() === String(selectedFlat).trim());
 
                         // 1. Device-to-Flat Lock Check (Global across society)
                         // Checks if this physical device is already tied to a DIFFERENT flat
@@ -225,9 +229,15 @@
                         const max4W = currentSocietyData ? (currentSocietyData.max4Wheeler || 0) : 0;
                         const totalAllowed = max2W + max4W;
 
-                        let registered2W = existingVehicles.filter(v => v.vehicleType === '2-Wheeler');
-                        let registered4W = existingVehicles.filter(v => v.vehicleType === '4-Wheeler');
-                        let totalRegisteredCount = existingVehicles.length;
+                        const registered2WCount = registrationSummary
+                            ? Number(registrationSummary.registered2WheelerCount) || 0
+                            : existingVehicles.filter(v => v.vehicleType === '2-Wheeler').length;
+                        const registered4WCount = registrationSummary
+                            ? Number(registrationSummary.registered4WheelerCount) || 0
+                            : existingVehicles.filter(v => v.vehicleType === '4-Wheeler').length;
+                        const totalRegisteredCount = registrationSummary
+                            ? Number(registrationSummary.totalRegisteredCount) || 0
+                            : existingVehicles.length;
 
                         if (existingVehicles.length > 0) {
                             mobileInput.value = existingVehicles[0].mobileNumber || '';
@@ -239,14 +249,18 @@
                         if (totalRegisteredCount > 0) {
                             fieldsHTML += `<div class="note" style="margin-bottom: 12px;">
                                 <b>Already Registered Vehicles (${totalRegisteredCount}/${totalAllowed}):</b>`;
-                            existingVehicles.forEach(v => {
-                                fieldsHTML += `<div>• ${v.vehicleNumber} (${v.vehicleType})</div>`;
-                            });
+                            if (registrationSummary) {
+                                fieldsHTML += `<div>Existing vehicle details are hidden until this device is linked.</div>`;
+                            } else {
+                                existingVehicles.forEach(v => {
+                                    fieldsHTML += `<div>• ${v.vehicleNumber} (${v.vehicleType})</div>`;
+                                });
+                            }
                             fieldsHTML += `</div>`;
                         }
 
-                        const remaining2W = Math.max(0, max2W - registered2W.length);
-                        const remaining4W = Math.max(0, max4W - registered4W.length);
+                        const remaining2W = Math.max(0, max2W - registered2WCount);
+                        const remaining4W = Math.max(0, max4W - registered4WCount);
                         const totalRemaining = remaining2W + remaining4W;
 
                         if (totalRemaining > 0) {
@@ -336,24 +350,18 @@
 
                     try {
                         const headers = await getAuthHeaders();
-                        const res = await fetch(`${API_BASE_URL}/vehicles?society=${encodeURIComponent(societyName)}`, { headers });
-                        const allVehiclesResponse = await res.json();
-                        const allVehicles = Array.isArray(allVehiclesResponse) ? allVehiclesResponse : [];
+                        const duplicateLookups = await Promise.all(vehiclesToSubmit.map(async vehicle => {
+                            const lookup = new URLSearchParams({ society: societyName, vehicleNumber: vehicle.vehicleNumber });
+                            const response = await fetch(`${API_BASE_URL}/vehicles?${lookup.toString()}`, { headers });
+                            if (!response.ok) throw new Error('Could not check vehicle duplicates.');
+                            const matches = await response.json();
+                            return { vehicle, matches: Array.isArray(matches) ? matches : [] };
+                        }));
+                        const duplicate = duplicateLookups.flatMap(item => item.matches.map(match => ({ ...item, match })))
+                            .find(item => String(item.match.flatNumber).trim() !== String(flatNumber).trim());
 
-                        let duplicateFound = null;
-                        for (const subVehicle of vehiclesToSubmit) {
-                            const foundMatch = allVehicles.find(v => 
-                                String(v.vehicleNumber).trim().toUpperCase() === subVehicle.vehicleNumber.toUpperCase() &&
-                                String(v.flatNumber).trim() !== String(flatNumber).trim()
-                            );
-                            if (foundMatch) {
-                                duplicateFound = subVehicle.vehicleNumber;
-                                break;
-                            }
-                        }
-
-                        if (duplicateFound) {
-                            showModal(`⚠️ Vehicle number <b>${duplicateFound}</b> is already registered under another flat in this society.`);
+                        if (duplicate) {
+                            showModal(`⚠️ Vehicle number <b>${duplicate.vehicle.vehicleNumber}</b> is already registered under another flat in this society.`);
                             submitBtn.disabled = false;
                             submitBtn.innerText = "Submit Entry";
                             return;

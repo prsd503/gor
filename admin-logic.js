@@ -119,9 +119,7 @@ async function fetchSocietySpins() {
     resultDiv.innerHTML = "Fetching stats...";
 
     try {
-        const res = await fetch(`${window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api'}/contest/spinstats?societyName=${encodeURIComponent(societyName)}`, {
-            headers: { 'ngrok-skip-browser-warning': 'true' }
-        });
+        const res = await authenticatedFetch(`${window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api'}/contest/spinstats?societyName=${encodeURIComponent(societyName)}`);
         
         if (res.ok) {
             const data = await res.json();
@@ -692,36 +690,14 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('forgotPasswordBtn')?.addEventListener('click', async () => {
         const emailInput = document.getElementById('email');
         const email = emailInput ? emailInput.value.trim().toLowerCase() : "";
-
-        if (!email) {
-            window.showModal("Pls enter email id");
-            return;
-        }
+        if (!email) return window.showModal("Pls enter email id");
 
         try {
-            const res = await authenticatedFetch(`${API_BASE_URL}/admins?email=${encodeURIComponent(email)}`);
-            const adminData = await res.json();
-
-            let exists = res.ok && adminData;
-            if (Array.isArray(adminData)) {
-                exists = exists && adminData.length > 0;
-            } else if (adminData && typeof adminData === 'object') {
-                exists = exists && (adminData.society || adminData.email || adminData.id);
-            } else {
-                exists = false;
-            }
-
-            if (!exists) {
-                window.showModal("No admin registered with this entered email id");
-                return;
-            }
-
             await sendPasswordResetEmail(auth, email);
-            window.showModal("Password reset link sent to your email!");
-        } catch (error) {
-            console.error("Error sending password reset email:", error);
-            window.showModal("No admin registered with this entered email id");
+        } catch (_) {
+            // Do not reveal whether an address has an admin membership/account.
         }
+        window.showModal("If an account is registered for that email, a password reset link will be sent.");
     });
 
     document.getElementById('logoutBtn')?.addEventListener('click', () => signOut(auth));

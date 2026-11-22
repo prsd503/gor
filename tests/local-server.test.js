@@ -28,8 +28,8 @@ test('real Express app runs without Firebase: login, CRUD, gift code and drain',
     assert.equal((await request('/api/auth/token','POST',{email:'admin@local.test',password:'wrong'})).status,401);
     const login=await request('/api/auth/token','POST',{email:'admin@local.test',password:'a-long-testing-password'});
     assert.equal(login.status,200);const {token}=await login.json();assert.ok(token);
-    assert.equal((await request('/api/config','POST',{teamPhone:'123'},token)).status,200);
-    assert.equal((await (await request('/api/config')).json()).teamPhone,'123');
+    assert.equal((await request('/api/config','POST',{teamPhone:'+919033406816'},token)).status,200);
+    assert.equal((await (await request('/api/config')).json()).teamPhone,'+919033406816');
     const codes=await (await request('/api/gift-codes','POST',{count:1},token)).json();
     const code=codes.created[0];
     const beforeValidation=JSON.parse(fs.readFileSync(process.env.LOCAL_DB_FILE,'utf8')).collections;

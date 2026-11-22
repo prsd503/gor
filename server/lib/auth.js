@@ -10,8 +10,6 @@
  */
 'use strict';
 
-const { firebaseRole } = require('./admin-policy');
-
 function bearerToken(req) {
     const header = req.header ? req.header('Authorization') : (req.headers || {}).authorization;
     if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
@@ -50,7 +48,10 @@ function createAuthMiddleware(options) {
                 type: 'firebase_user',
                 uid: decoded.uid,
                 email: decoded.email || null,
-                role: firebaseRole(decoded, options.adminUids),
+                emailVerified: decoded.email_verified === true,
+                // Authorization is resolved from Firestore membership on each
+                // protected request, never from client-controlled role claims.
+                role: 'user',
                 claims: decoded
             };
         }
@@ -59,9 +60,10 @@ function createAuthMiddleware(options) {
             type: 'backend_jwt',
             uid: decoded.uid || null,
             email: decoded.email || null,
-            // Earlier releases minted admin JWTs for every Firebase sign-in.
-            // Never grandfather those privileged tokens into the fixed policy.
-            role: decoded.role === 'admin' && decoded.authVersion !== 2 ? 'user' : (decoded.role || 'user'),
+            emailVerified: decoded.email_verified === true,
+            // A signed token proves identity, not a current role. The active
+            // Firestore membership is loaded for each privileged request.
+            role: 'user',
             claims: decoded
         };
     }
@@ -97,15 +99,7 @@ function createAuthMiddleware(options) {
         }
     }
 
-    function requireAdmin(req, res, next) {
-        if (!req.user) return res.status(401).json({ error: 'Unauthorized: Authentication required.' });
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Forbidden: Admin privileges required.' });
-        }
-        return next();
-    }
-
-    return { optionalAuth, requireAuth, requireAdmin, resolveUser };
+    return { optionalAuth, requireAuth, resolveUser };
 }
 
 module.exports = { bearerToken, looksLikeFirebaseIdToken, createAuthMiddleware };

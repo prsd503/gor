@@ -199,8 +199,7 @@ It should report `accessMode: 'tunnel-preview'`. In developer tools → Network,
 verify advertisement requests go to the ngrok hostname and return JSON. The
 private/disabled routes should return the explicit 403 preview message, not data.
 Do not sign in, submit forms or expect searches/registration to work in this pilot.
-Do not switch off the gate to remove errors. Keep Hostinger running until the
-intended replacement is fully verified; this is not a finished production migration.
+Do not switch off the gate to remove errors. Hostinger is not an authorized backend target; this pilot is still not a finished production migration. It does not cancel a Hostinger plan or change DNS.
 Also open the plain index URL in a different tab and verify normal API routing
 does not use ngrok. Browser tests here are separate from the user's earlier
 Terminal health/CORS checks; mocked automated tests do not prove a live tunnel
@@ -208,45 +207,49 @@ or GitHub Pages deployment is available.
 
 ## Administration compatibility/security change
 
-Previously any Firebase sign-in defaulted to admin, and `/api/auth/token` issued
-an admin backend JWT to every verified account. Those defaults are removed.
-A verified Firebase user now needs an actual `admin: true`, `role: 'admin'` or
-`adminRole: 'admin'` **custom claim**, or their exact UID in the server's comma-
-separated `ADMIN_UIDS` environment setting. User-editable profile documents,
-email matching, and browser localStorage flags do not grant backend admin rights.
+The staged full-API code no longer treats Firebase custom role claims, `ADMIN_UIDS`,
+email queries from the browser, or localStorage flags as authorization. It resolves
+current staff membership from Firestore `admins` and `guards` records. The signed-in
+Firebase email must be verified; a stored UID on the membership record must match.
+Regular admins and guards are confined to one canonical society. Only
+`admins.isMaster === true` grants global scope. Membership is re-read for protected
+requests so deleting or changing the record revokes access without waiting for a
+role-bearing JWT to expire.
 
-Only the project owner should grant global admin privileges, via trusted Firebase
-Admin tooling or `ADMIN_UIDS` (look up UIDs in Console → Authentication → Users).
-Do not put ordinary residents/guards/society admins in a global admin allowlist.
-There is no public endpoint to grant claims. No production accounts/claims were
-modified by this code change.
+This policy and the related server/Rules changes are **staged source only**. The
+production Firebase Function still rejects private routes and all writes before
+Firestore access. Do not disable the gate, grant runtime write IAM, change DNS,
+move GitHub Pages/Android to a different backend, or publish a full app from this
+preview. Stop using Hostinger for backend hosting; cancellation or DNS cleanup is
+a separate action and has not been performed here.
 
-Legacy backend JWTs lacking the new `authVersion: 2` marker no longer confer
-admin authority. Authorized staff should sign in/exchange a new token. Existing
-Firebase ID tokens are reclassified from verified claims on each authenticated
-request. Changing `ADMIN_UIDS` requires restarting the server; an already minted
-v2 backend token can retain its role until its one-hour expiration. Rotate the
-backend JWT secret if immediate backend-session invalidation is required.
-The normal API still needs resource/society-level authorization beyond this global
-admin fix. The restricted preview avoids exposing it while that work is pending.
+## Current full-release blockers
 
-## Before a full public rollout (not completed by this preview)
-
-- Add/test server-side society/resource authorization for admin and guard reads
-  and writes; Firebase sign-in alone must not grant access to other societies.
-- Protect resident registration, contest writes and account-recovery flows against
-  anonymous abuse without relying on Origin/CORS as proof of identity.
-- Minimize public response fields and verify no personal/contact data leaks.
-- Verify browser Auth and App Check for every relevant flow. Many existing fetch
-  calls do not attach App Check; setting `enforce` alone will break those calls.
-- Use a least-privilege runtime identity rather than broadly privileged personal
-  ADC for sustained public hosting. Use a stable HTTPS hostname, managed process,
-  safe secrets, OS updates, backups and provider-side rate/abuse controls.
+- The supplied Rules were reviewed as source but the deployed Ruleset was not
+  fetched. Run the Firestore Emulator Rules tests and review direct fallbacks for
+  all client builds before an independently approved Rules release.
+- `admins.isMaster` and society memberships are security-critical data. Their
+  account binding, revocation, canonical IDs, and legacy aliases need production
+  owner review; this code does not modify production membership records.
+- Device ID remains client-controlled and spoofable. Server transactions enforce
+  vehicle/contest locks against ordinary bypasses, but this is not proof of human
+  residency or ownership. Public resident screens still require a compatibility
+  read of limited flat/vehicle fields; phone/device-only access cannot be made
+  high-assurance without a separate identity proof.
+- Firebase runtime identity is currently Datastore Viewer. The full write API is
+  not ready for production until least-privilege write IAM is separately reviewed.
+- Verify Android App Check/WebView and GitHub Pages behavior end-to-end. This
+  repository's mocked/local tests do not substitute for a live integration test.
 - Keep the MacBook awake (`caffeinate -i` can help during a supervised test).
   Sleep, loss of Wi-Fi or closing the server/tunnel stops the backend.
-- Roll back by restoring the previous reviewed `api-env.js` and republishing,
-  then stopping ngrok. Do not publish an unverified cloud endpoint as a fallback.
+
+## Operational notes
+
+- Use a stable HTTPS hostname and provider-side rate/abuse controls for any later
+  approved release. Quota alerts and the 80% guard are not a hard billing cap.
+- Restore only a previously reviewed `api-env.js` for rollback, then stop ngrok.
+  Do not publish an unverified cloud endpoint or use Hostinger as backend fallback.
 
 The MacBook still uses the same Firestore quota. At 80% of a tracked allowance
-it pauses work; moving compute from Hostinger/Functions to the MacBook does not
+it pauses work; moving compute between Firebase Functions and the MacBook does not
 reset or bypass the Firestore allowance.

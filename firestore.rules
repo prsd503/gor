@@ -1,0 +1,41 @@
+rules_version = '2';
+
+// Client SDK access is intentionally narrow. Application data reads/writes go
+// through the authenticated API; Admin SDK rules bypass is handled by the
+// server's route authorization, not by these client rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // The update popup may read this one public policy document directly when
+    // the API is unavailable. It must never be client-writable.
+    match /app_config/appVersion {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
+    // greet.html's existing compatibility fallback reads only this public
+    // greeting document. No collection listing or client-side writes.
+    match /ads/Aangan {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
+    // studio.html has a public contact-link fallback at this exact document.
+    // Replace with the API projection if this document later contains private
+    // fields; never allow client writes here.
+    match /settings/contact {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
+    // Admins, guards, vehicles, societies, notices, bookings, facilities,
+    // ads, configs, gift codes, contest records, and unknown collections are
+    // not directly accessible to browser/mobile SDKs. The server API must
+    // authenticate and authorize every request before using the Admin SDK.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
