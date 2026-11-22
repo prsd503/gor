@@ -477,8 +477,8 @@ test('the unlock lasts for the page session only and is not persisted', async (t
     page.chooseTheme('birthday');
     assert.equal(page.needsCode(), false, 'unlocked: premium theme can be shared');
 
-    // Nothing may be written to storage, or a refresh would stay unlocked and
-    // the one-use rule would be easy to dodge.
+    // Unlocks are not stored locally. The unused code can be validated again
+    // after refresh; only server-side consumption makes it one-use.
     assert.equal(window.localStorage.length, 0, 'no localStorage entries written');
     assert.equal(window.sessionStorage.length, 0, 'no sessionStorage entries written');
 
@@ -500,10 +500,13 @@ test('premium flowers stay in full colour in the picker', () => {
     assert.ok(!/grayscale|greyscale/i.test(html), 'no greyscale rule either');
 });
 
-test('the page warns that the unlock dies on refresh', () => {
-    const warn = html.slice(html.indexOf('id="sessionWarn"'), html.indexOf('id="sessionWarn"') + 300);
-    assert.match(warn, /Finish and share before refreshing/i, 'tells the visitor to finish first');
-    assert.match(warn, /refresh/i, 'says a refresh loses the unlock');
+test('the page explains that refresh preserves unused codes and only Share GIF spends them', () => {
+    const warn = doc0(html, 'sessionWarn') && html.split('id="sessionWarn"')[1].split('</p>')[0];
+    assert.match(warn, /Unlocking does not use your code/i);
+    assert.match(warn, /refresh.*same unused code/i);
+    assert.match(warn, /marked used only when you press Share GIF/i);
+    assert.match(warn, /cancelled or fails/i);
+    assert.ok(!/marked used the moment it is accepted|Finish and share before refreshing/.test(html));
 });
 
 test('a locked bouquet with premium blooms is stamped over the flowers', () => {
@@ -1031,12 +1034,12 @@ for (const mode of ['browser', 'cancel', 'fallback', 'browser-error', 'native', 
         const page = window.OwBouquetPage;
         const used = new Set();
         let requests = 0;
-        window.fetch = async (_url, options) => {
+        window.fetch = async (url, options) => {
             requests++;
             const code = JSON.parse(options.body).code;
             const ok = ['123456789', '987654321'].includes(code) && !used.has(code);
-            if (ok) used.add(code);
-            return { ok, json: async () => ok ? { unlocked: true } : { error: 'Code invalid or already used.' } };
+            if (ok && url.endsWith('/redeem')) used.add(code);
+            return { ok, json: async () => ok ? { unlocked: true, consumed: url.endsWith('/redeem') } : { error: 'Code invalid or already used.' } };
         };
         async function redeem(code) {
             doc.getElementById('codeInput').value = code;
@@ -1044,6 +1047,7 @@ for (const mode of ['browser', 'cancel', 'fallback', 'browser-error', 'native', 
         }
         await redeem('123456789');
         assert.equal(page.state.unlocked, true);
+        assert.equal(used.size, 0, 'unlocking never spends the code');
         page.chooseTheme('birthday');
         page.addBloom('hydrangea');
         const original = new window.Blob(['GIF89a-authorized-payload'], { type: 'image/gif' });
@@ -1089,12 +1093,14 @@ for (const mode of ['browser', 'cancel', 'fallback', 'browser-error', 'native', 
         assert.equal(page.totalBlooms(), before, 'premium additions gated again');
         const repeated = page.shareGif();
         const duringShare = redeem('987654321');
-        assert.equal(requests, 1, 'redemption blocked during current attempt');
+        assert.equal(requests, 2, 'one validation and one consumption; concurrent actions blocked');
         doc.getElementById('createBtn').click();
         assert.equal(page.state.busy, false, 'no racing export during sharing');
+        await settle();
         if (finish) finish();
         await Promise.all([attempt, repeated, duringShare]);
         assert.equal(page.state.sharing, false);
+        assert.ok(used.has('123456789'), 'only Share GIF spends the code');
         await page.shareGif();
         assert.equal(shared, mode.startsWith('native') || mode === 'fallback' ? 0 : 1);
         assert.equal(downloaded.length, ['fallback', 'browser-error'].includes(mode) ? 1 : 0);
@@ -1122,6 +1128,13 @@ test('an unlocked free bouquet also consumes its code; ordinary free sharing rem
     let shares = 0;
     window.navigator.share = async () => { shares++; };
     page.state.unlocked = true;
+    page.state.unlockedCode = '123456789';
+    let consumptions = 0;
+    window.fetch = async (url) => {
+        assert.ok(url.endsWith('/redeem'));
+        consumptions++;
+        return { ok: true, json: async () => ({ consumed: true }) };
+    };
     page.state.gifBlob = new window.Blob(['premium-free']);
     await page.shareGif();
     assert.equal(page.state.unlocked, false);
@@ -1131,5 +1144,166 @@ test('an unlocked free bouquet also consumes its code; ordinary free sharing rem
     await page.shareGif();
     await page.shareGif();
     assert.equal(shares, 3);
+    assert.equal(consumptions, 1, 'ordinary free sharing makes no code requests');
     assert.ok(page.state.gifBlob, 'ordinary free export remains reusable');
+});
+
+// Shared server double for page reloads and multiple tabs. Production service
+// transaction behavior is tested independently in gift-codes.test.js.
+function codeServer() {
+    const used = new Set();
+    const calls = [];
+    const fetch = async (url, options) => {
+        const code = JSON.parse(options.body).code;
+        const action = url.split('/').pop();
+        calls.push({ action, code });
+        const ok = code === '123456789' && !used.has(code);
+        if (ok && action === 'redeem') used.add(code);
+        return { ok, json: async () => ok
+            ? { unlocked: true, consumed: action === 'redeem' }
+            : { error: 'That code has already been used or is invalid.' } };
+    };
+    return { used, calls, fetch };
+}
+
+async function unlockPage(view, server) {
+    view.window.fetch = server.fetch;
+    view.doc.getElementById('codeInput').value = '123456789';
+    await view.window.OwBouquetPage.redeemCode();
+}
+
+function readyPremiumGif(view) {
+    const page = view.window.OwBouquetPage;
+    page.chooseTheme('birthday');
+    page.state.gifBlob = new view.window.Blob(['GIF89a-premium'], { type: 'image/gif' });
+    return page;
+}
+
+test('refresh before Share GIF preserves the code benefit; it can unlock again', async (t) => {
+    const server = codeServer();
+    const original = pageDom(t);
+    await settle();
+    await unlockPage(original, server);
+    assert.equal(original.window.OwBouquetPage.state.unlocked, true);
+    assert.equal(server.used.size, 0);
+    const refreshed = pageDom(t);
+    await settle();
+    assert.equal(refreshed.window.OwBouquetPage.state.unlocked, false);
+    await unlockPage(refreshed, server);
+    assert.equal(refreshed.window.OwBouquetPage.state.unlocked, true);
+    assert.equal(server.used.size, 0);
+    assert.deepEqual(server.calls.map((c) => c.action), ['validate', 'validate']);
+    assert.match(refreshed.doc.getElementById('premiumStatus').textContent, /still unused/);
+});
+
+test('two previously unlocked tabs race to share and only the winner transfers a GIF', async (t) => {
+    const server = codeServer();
+    const tabs = [pageDom(t), pageDom(t)];
+    await settle();
+    let shares = 0;
+    for (const view of tabs) {
+        await unlockPage(view, server);
+        assert.equal(view.window.OwBouquetPage.state.unlocked, true);
+        readyPremiumGif(view);
+        view.window.navigator.canShare = () => true;
+        view.window.navigator.share = async () => { shares++; };
+    }
+    await Promise.all(tabs.map((v) => v.window.OwBouquetPage.shareGif()));
+    assert.equal(shares, 1);
+    assert.equal(server.used.size, 1);
+    assert.equal(server.calls.filter((c) => c.action === 'redeem').length, 2);
+    for (const view of tabs) {
+        assert.equal(view.window.OwBouquetPage.state.unlocked, false);
+        assert.equal(view.window.OwBouquetPage.state.gifBlob, null);
+        await unlockPage(view, server);
+        assert.equal(view.window.OwBouquetPage.state.unlocked, false, 'spent code cannot unlock either tab');
+    }
+});
+
+test('Share GIF waits for consumption confirmation and ignores concurrent taps/redemption/export', async (t) => {
+    const view = pageDom(t);
+    await settle();
+    const server = codeServer();
+    await unlockPage(view, server);
+    const page = readyPremiumGif(view);
+    let resolve;
+    let requests = 0;
+    let transfers = 0;
+    view.window.fetch = async (url, options) => {
+        requests++;
+        assert.ok(url.endsWith('/redeem'));
+        assert.equal(JSON.parse(options.body).code, '123456789');
+        return new Promise((done) => { resolve = done; });
+    };
+    view.window.navigator.canShare = () => true;
+    view.window.navigator.share = async () => { transfers++; };
+    const sharing = page.shareGif();
+    await settle();
+    assert.equal(transfers, 0, 'no bytes transferred before server confirms usage');
+    assert.equal(page.state.unlocked, false);
+    await page.shareGif();
+    view.doc.getElementById('codeInput').value = '987654321';
+    await page.redeemCode();
+    view.doc.getElementById('createBtn').click();
+    assert.equal(requests, 1);
+    assert.equal(page.state.busy, false);
+    assert.equal(await page.downloadGif(), false);
+    resolve({ ok: true, json: async () => ({ consumed: true }) });
+    await sharing;
+    assert.equal(transfers, 1);
+    assert.equal(page.state.sharing, false);
+});
+
+for (const failure of ['spent', 'disabled', 'unavailable', 'network', 'unconfirmed', 'invalid-json']) {
+    test('no transfer or retained premium export when consumption fails: ' + failure, async (t) => {
+        const view = pageDom(t);
+        await settle();
+        await unlockPage(view, codeServer());
+        const page = readyPremiumGif(view);
+        let transfers = 0;
+        view.window.navigator.canShare = () => true;
+        view.window.navigator.share = async () => { transfers++; };
+        view.window.HTMLAnchorElement.prototype.click = () => { transfers++; };
+        view.window.fetch = async () => {
+            if (failure === 'network') throw new Error('offline');
+            return {
+                ok: ['unconfirmed', 'invalid-json'].includes(failure),
+                json: async () => {
+                    if (failure === 'invalid-json') throw new Error('bad JSON');
+                    return failure === 'unconfirmed' ? { unlocked: true } : { error: failure };
+                }
+            };
+        };
+        await page.shareGif();
+        assert.equal(transfers, 0);
+        assert.equal(page.state.unlocked, false);
+        assert.equal(page.state.unlockedCode, null);
+        assert.equal(page.state.gifBlob, null);
+        assert.equal(page.state.sharing, false);
+        assert.equal(view.doc.getElementById('shareGifBtn').disabled, false);
+        assert.match(view.doc.getElementById('shareNotice').textContent, /Nothing was shared/i);
+        await unlockPage(view, codeServer());
+        assert.equal(page.state.unlocked, true, 'a genuinely unused code can be revalidated after a failed request');
+    });
+}
+
+test('a lost consumption response blocks sharing even if the server already spent the code', async (t) => {
+    const view = pageDom(t);
+    await settle();
+    const server = codeServer();
+    await unlockPage(view, server);
+    const page = readyPremiumGif(view);
+    let transfers = 0;
+    view.window.navigator.canShare = () => true;
+    view.window.navigator.share = async () => { transfers++; };
+    view.window.fetch = async (url, options) => {
+        await server.fetch(url, options); // transaction commits, response is lost
+        throw new Error('connection dropped');
+    };
+    await page.shareGif();
+    assert.equal(transfers, 0);
+    assert.equal(server.used.size, 1);
+    await unlockPage(view, server);
+    assert.equal(page.state.unlocked, false);
+    assert.match(view.doc.getElementById('premiumStatus').textContent, /already been used/);
 });

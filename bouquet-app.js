@@ -694,6 +694,11 @@
     // the hint never reports a save that did not happen.
     async function downloadGif() {
         if (state.sharing || needsCode()) return false;
+        // Premium transfers must go through the server-backed Share GIF path.
+        if (state.unlocked) {
+            el.sendHint.textContent = 'Use Share GIF to use your premium code and share or save this GIF.';
+            return false;
+        }
         return saveGifFile(gifFile());
     }
 
@@ -810,7 +815,7 @@
         if (!file) return;
 
         // A locked bouquet can be looked at (with a watermark) but not sent.
-        // The code has to be accepted first, and the server marks it used.
+        // Validate to unlock first; only this Share action asks the server to spend it.
         if (needsCode()) {
             el.sendHint.textContent = 'This bouquet needs a premium code before it can be shared.';
             setPremiumStatus('Enter your 9 digit code to unlock sharing.', 'err');
@@ -823,11 +828,12 @@
         // Capture the authorized payload before relocking. Async OS handoffs and
         // their save fallback must never read the now-invalidated global export.
         const text = state.shareText || '';
-        const consumed = state.unlocked;
+        const hadUnlock = state.unlocked;
+        const code = state.unlockedCode;
         state.sharing = true;
         el.shareGifBtn.disabled = true;
         el.createBtn.disabled = true;
-        if (consumed) {
+        if (hadUnlock) {
             state.unlocked = false;
             state.unlockedCode = null;
             state.pendingTheme = null;
@@ -836,16 +842,31 @@
             syncFlowerGrid();
             syncMessageLock();
             drawPreview();
-            setPremiumStatus('Premium locked again. Redeem a new unused code for another share attempt.', 'err');
-            setNotice(el.shareNotice, 'This unlock was used. Redeem a new unused code and create a new GIF to share premium again.', 'warn');
+            setPremiumStatus('Checking and using your code for this share…', null);
+            setNotice(el.shareNotice, 'Waiting for the server to confirm this code before sharing.', 'warn');
         }
         try {
+            if (hadUnlock) {
+                const result = await requestGiftCode('redeem', code);
+                if (!result.ok) {
+                    // A failed/lost response is not permission to transfer. The
+                    // server might have committed before the connection failed.
+                    const message = result.offline
+                        ? 'Could not confirm code usage. Nothing was shared. Check your connection and enter your code again; it will unlock only if still unused.'
+                        : result.message + ' Nothing was shared. Enter an unused code and create a new GIF.';
+                    setPremiumStatus(message, 'err');
+                    setNotice(el.shareNotice, message, 'warn');
+                    return;
+                }
+                setPremiumStatus('Code used. Premium locked again. Enter a new unused code for another share attempt.', 'err');
+                setNotice(el.shareNotice, 'This code was used for this Share GIF attempt, even if sharing is cancelled or fails. Another premium share needs a new unused code and a new GIF.', 'warn');
+            }
             await transferGif(file, text);
         } finally {
             state.sharing = false;
             el.shareGifBtn.disabled = false;
             el.createBtn.disabled = false;
-            if (consumed) el.createBtn.innerHTML = 'Create my bouquet GIF';
+            if (hadUnlock) el.createBtn.innerHTML = 'Create my bouquet GIF';
         }
     }
 
@@ -932,10 +953,27 @@
     }
 
     // --------------------------------------------------------------- init --
-    // ---------------------------------------------------- code redemption ---
-    // The code is validated by the backend, never here: it re-reads the code,
-    // confirms it is unused, and flips it to used inside a transaction. The
-    // page only reflects the answer.
+    // -------------------------------------------------------- premium codes --
+    // Validation never spends a code. Only Share GIF calls redeem; both checks
+    // are server-side and the share transaction can reject a previously valid
+    // code that has since been used or disabled on another page.
+    async function requestGiftCode(action, code) {
+        try {
+            const res = await fetch(API_BASE_URL + '/gift-codes/' + action, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code })
+            });
+            const body = await res.json().catch(() => ({}));
+            const confirmed = action === 'redeem' ? body.consumed === true : body.unlocked === true;
+            if (res.ok && confirmed) return { ok: true };
+            return { ok: false, message: body.error || 'The server could not confirm this code. Please check it and try again.' };
+        } catch (err) {
+            console.error('E-Bouquet: code request failed.', err);
+            return { ok: false, offline: true };
+        }
+    }
+
     async function redeemCode() {
         if (!el.codeInput || state.sharing || state.redeeming || state.unlocked || state.busy) return;
         const raw = el.codeInput.value.replace(/[\s-]/g, '');
@@ -948,23 +986,7 @@
         if (el.redeemBtn) el.redeemBtn.disabled = true;
         setPremiumStatus('Checking your code…', null);
 
-        let result = null;
-        try {
-            const res = await fetch(API_BASE_URL + '/gift-codes/redeem', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code: raw })
-            });
-            const body = await res.json().catch(() => ({}));
-            if (res.ok && body && body.unlocked) {
-                result = { ok: true };
-            } else {
-                result = { ok: false, message: (body && body.error) || 'That code could not be redeemed.' };
-            }
-        } catch (err) {
-            console.error('E-Bouquet: code redemption failed.', err);
-            result = { ok: false, offline: true };
-        }
+        const result = await requestGiftCode('validate', raw);
 
         state.redeeming = false;
         if (el.redeemBtn) el.redeemBtn.disabled = false;
@@ -982,7 +1004,7 @@
         state.unlocked = true;
         state.unlockedCode = raw;
         el.codeInput.value = '';
-        setPremiumStatus('Unlocked! Premium themes and flowers are available until you press Share GIF once (even if cancelled or unsuccessful).', 'ok');
+        setPremiumStatus('Unlocked! Your code is still unused. You can enter it again after a refresh. It is used only when you press Share GIF and the server confirms it, even if sharing is then cancelled or fails.', 'ok');
         renderThemeGrid();
         syncFlowerGrid();
         syncMessageLock();

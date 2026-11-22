@@ -32,7 +32,18 @@ test('real Express app runs without Firebase: login, CRUD, gift code and drain',
     assert.equal((await (await request('/api/config')).json()).teamPhone,'123');
     const codes=await (await request('/api/gift-codes','POST',{count:1},token)).json();
     const code=codes.created[0];
-    assert.equal((await request('/api/gift-codes/redeem','POST',{code})).status,200);
+    const beforeValidation=JSON.parse(fs.readFileSync(process.env.LOCAL_DB_FILE,'utf8')).collections;
+    for(let i=0;i<2;i++){
+        const validated=await request('/api/gift-codes/validate','POST',{code});
+        assert.equal(validated.status,200);
+        assert.equal(validated.headers.get('cache-control'),'no-store');
+        assert.equal((await validated.json()).unlocked,true);
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(process.env.LOCAL_DB_FILE,'utf8')).collections,beforeValidation,'unlock changes no document or usage metadata');
+    const spent=await request('/api/gift-codes/redeem','POST',{code});
+    assert.equal(spent.status,200);
+    assert.equal((await spent.json()).consumed,true);
+    assert.notEqual((await request('/api/gift-codes/validate','POST',{code})).status,200);
     assert.notEqual((await request('/api/gift-codes/redeem','POST',{code})).status,200);
     for(const url of ['/server/index.js','/%73erver/index.js','/.env','/package.json'])assert.equal((await fetch(base+url)).status,404,url);
     const config=await (await fetch(base+'/api-env.js')).text();assert.match(config,/location.origin/);
@@ -40,6 +51,8 @@ test('real Express app runs without Firebase: login, CRUD, gift code and drain',
     assert.equal((await fetch(base+'/local-test.html')).status,200);
     app.quota.record({reads:40000});
     assert.equal((await request('/api/config')).status,503);
+    assert.equal((await request('/api/gift-codes/validate','POST',{code})).status,503);
+    assert.equal((await request('/api/gift-codes/redeem','POST',{code})).status,503);
     assert.equal((await request('/api/health')).status,200);
     assert.equal((await request('/api/quota')).status,200);
     // Auth token exchange is also blocked, before any credentials are verified.
