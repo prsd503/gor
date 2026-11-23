@@ -170,6 +170,12 @@ same message.
 POST /api/vehicles        { societyName, flatNumber, residentType, mobileNumber, deviceId, vehicles }
 ```
 
+This is a public write: the resident page does not require a bearer token. When
+the host page does have a Firebase session it installs `window.OWL_GET_ID_TOKEN`
+and the page exchanges that ID token at `POST /api/auth/token` for the API JWT.
+Without such a provider the page skips the exchange entirely instead of
+requesting a token that can only answer `400 Firebase ID token is required`.
+
 `vehicles` accepts every shape a client may send. The parser used to read only
 `vehicle.vehicleNumber`, so bare strings and `plate` / `vehicle_no` keys were
 silently discarded and the caller got `400 At least one vehicle number is
@@ -185,9 +191,21 @@ required` while the resident had typed one:
 | `vehicleNumber` on the body | no `vehicles` field at all |
 
 Duplicates inside one request collapse to one entry; a plate that is not exactly
-10 letters/digits is rejected naming the rule. An empty payload answers
-`400 { code: "vehicle-number-required" }`, which the page turns into "enter at
-least one vehicle number".
+10 letters/digits is rejected naming the rule. A JSON body labelled
+`text/plain` is accepted, because that is what a browser sends once a page loses
+its `Content-Type` header — the plate must not be lost over a header.
+
+Two failure codes keep "you forgot the plate" separate from "the plate was never
+readable":
+
+| Response | When |
+| --- | --- |
+| `400 { code: "vehicle-number-required", field: "vehicles" }` | body parsed, no plate in it |
+| `400 { code: "unreadable-body" }` | body type is not parsed at all (e.g. `multipart/form-data`), so a typed plate would silently disappear |
+
+The page turns `vehicle-number-required` into a message naming the plate it
+actually sent, rather than asking the resident to type a number that is already
+on screen.
 
 The page also mirrors the server's allowance defaults (2 two-wheelers, 1
 four-wheeler) when a society has never configured limits, so the resident is not
