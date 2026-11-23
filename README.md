@@ -154,8 +154,25 @@ and are validated before anything is written:
 The page lists every row with its outcome, so the admin sees exactly what
 changed and what was ignored. Re-uploading the same file changes nothing.
 
-*Bulk delete from CSV* (available to every society admin, and in the master
-login's danger zone) reads the first column of the same file format, asks for
-confirmation, and posts the plates to `POST /api/vehicles/bulk-delete`. It then
-reports each plate as deleted, not found, or skipped, so a typo in the file is
-visible instead of silently ignored.
+*Bulk delete from CSV* and *Export all data* are master-login only; the import
+and template buttons stay available to every society admin. The delete flow
+reads the first column of the same file format, asks for confirmation, and
+posts the plates to `POST /api/vehicles/bulk-delete`. It then reports each plate
+as deleted, not found, or skipped, so a typo in the file is visible instead of
+silently ignored.
+
+
+
+## Master login controls
+
+The master account additionally sees *Bulk delete*, *Export all data*, the
+vehicle allowance limits (`max2Wheeler` / `max4Wheeler` per flat), the flat
+number list, and the per-society spin counts.
+
+* **Allowances** apply to every vehicle write, admin edits included. A flat at
+  its limit is refused with a message naming the allowance; raise the limit to
+  admit more. Societies that never set a limit keep 1 car / 2 bikes.
+* **Flat numbers** assigned under *🏠 Flat numbers* feed the add/edit vehicle
+  dropdown, so a vehicle can only be attached to a registered flat.
+* **Spin counts** sum the per-day `spinStats` documents: lifetime, today and
+  this month, plus the latest winner flat.

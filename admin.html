@@ -144,7 +144,10 @@
                 <label for="vNum">Vehicle number</label>
                 <input type="text" id="vNum" class="uppercase" placeholder="Vehicle Number">
                 <label for="fNum">Flat number / name</label>
-                <input type="text" id="fNum" class="uppercase" placeholder="Flat Number/Name">
+                <input type="text" id="fNum" class="uppercase" list="flatNumberOptions" autocomplete="off"
+                    placeholder="Start typing the flat number" aria-describedby="fNumHint">
+                <datalist id="flatNumberOptions"></datalist>
+                <p class="note small" id="fNumHint">Choose from this society's registered flat numbers.</p>
                 <div class="row">
                     <div>
                         <label for="rType">Resident type</label>
@@ -242,7 +245,7 @@
                 <div class="form-actions">
                     <button type="button" id="downloadTemplateBtn" class="btn-secondary">Download CSV template</button>
                     <button type="button" id="importBtn">Bulk import CSV file</button>
-                    <button type="button" id="bulkDeleteTopBtn" class="btn-danger-soft">Bulk delete from CSV</button>
+                    <button type="button" id="bulkDeleteTopBtn" class="btn-danger-soft" data-master-only style="display: none;">Bulk delete from CSV</button>
                 </div>
                 <p class="note small">Columns: VehicleNumber, FlatNumber/Name, ResidentType, MobileNumber, VehicleType.
                     Existing plates are updated only when something changed; identical rows are skipped as duplicates.</p>
@@ -251,7 +254,7 @@
                 <div id="bulk-section" style="display: none;">
                     <div class="form-actions">
                         <button type="button" id="bulkDeleteBtn" class="btn-danger-soft">Bulk delete</button>
-                        <button type="button" id="exportBtn" class="btn-secondary">Export all data</button>
+                        <button type="button" id="exportBtn" class="btn-secondary" data-master-only>Export all data</button>
                     </div>
                     <hr>
                     <h3>🚗 Vehicle allowance limits</h3>
@@ -344,9 +347,9 @@
                 if (res.ok) {
                     const data = await res.json();
                     
-                    const lifetime = data.totalSpins !== undefined ? data.totalSpins : (data.totalLifetimeSpins || 0);
-                    const daily = data.totalDaySpins !== undefined ? data.totalDaySpins : 0;
-                    const monthly = data.totalMonthSpins !== undefined ? data.totalMonthSpins : 0;
+                    const lifetime = data.totalLifetimeSpins !== undefined ? data.totalLifetimeSpins : (data.totalSpins || 0);
+                    const daily = data.totalDaySpins || 0;
+                    const monthly = data.totalMonthSpins || 0;
                     const winnerFlat = data.winnerFlat || "None yet";
                     
                     resultDiv.innerHTML = `

@@ -137,6 +137,39 @@ change flat are counted as `rejected` with a reason. The response is the report
 the admin portal renders: `{ total, added, updated, repeat, rejected, changes[], errors[] }`.
 Up to 2000 rows per request.
 
+## Flat numbers for the vehicle form (admin portal)
+
+```
+GET /api/societies/:societyIdentifier/flats   (admin token, that society or master)
+→ { societyId, society, flats[], max2Wheeler, max4Wheeler, counts{ flat: { '2-Wheeler', '4-Wheeler', other } } }
+```
+
+`societies/:id/flatList`, de-duplicated and in natural order, plus the current
+per-flat vehicle counts. The admin add/edit form uses `flats` as its dropdown;
+`POST /api/vehicles` still re-validates and answers `400 Flat is not registered
+in this society.` for anything else.
+
+**Per-flat allowances.** `PATCH /api/societies/:id/limits` sets
+`max2Wheeler` / `max4Wheeler` (0-100). Every vehicle write - admin edits
+included - refuses to take a flat past its allowance with
+`409 { code: "vehicle-limit-reached", error: "This flat already has N 4-Wheeler(s),
+the allowance in <society>. Increase the limit under vehicle allowance limits
+first." }`. A society that has never set limits keeps the defaults 1 / 2. An
+edit that keeps the same plate on the same flat and type is never blocked by an
+already-full flat.
+
+## Society spin counts (master login)
+
+```
+GET /api/contest/spinstats?societyName=Aangan   (master token)
+→ { societyName, totalSpins, totalLifetimeSpins, totalDaySpins, totalMonthSpins, daysRecorded, winnerFlat }
+```
+
+Spin documents are keyed `<society>_<YYYY-MM-DD>`, so the lifetime total sums
+every day for that society, the month total sums that calendar month, and the
+day total is today's count - all from the same document set the spin endpoint
+writes.
+
 ## Bulk delete vehicles (admin portal)
 
 ```

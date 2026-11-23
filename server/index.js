@@ -1083,6 +1083,35 @@ app.get('/api/societies/:societyIdentifier/active-guard', async (req, res) => {
     } catch (_) { return res.status(503).json({ error: 'Society could not be loaded.' }); }
 });
 
+// Flat numbers registered for one society, used by the admin add/edit vehicle
+// form so a plate can only be attached to a real flat. Admin of that society
+// (or the master login) only.
+app.get('/api/societies/:societyIdentifier/flats', requireAdminForSociety(req => req.params.societyIdentifier), async (req, res) => {
+    try {
+        const society = req.authorizedSociety;
+        const flats = [...new Set(publicSociety(society).flatList.map(flat => String(flat).trim()).filter(Boolean))]
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+        const vehicles = await getVehiclesForSociety(society, true);
+        const counts = {};
+        for (const doc of vehicles) {
+            const data = doc.data() || {};
+            const flat = String(data.flatNumber || '').trim();
+            if (!flat) continue;
+            const entry = counts[flat] || (counts[flat] = { '2-Wheeler': 0, '4-Wheeler': 0, other: 0 });
+            if (data.vehicleType === '2-Wheeler' || data.vehicleType === '4-Wheeler') entry[data.vehicleType] += 1;
+            else entry.other += 1;
+        }
+        return res.set('Cache-Control', 'private, no-store').json({
+            societyId: society.id,
+            society: society.name,
+            flats,
+            max2Wheeler: Number.isInteger((society.data || {}).max2Wheeler) ? society.data.max2Wheeler : null,
+            max4Wheeler: Number.isInteger((society.data || {}).max4Wheeler) ? society.data.max4Wheeler : null,
+            counts
+        });
+    } catch (_) { return res.status(503).json({ error: 'Flat numbers could not be loaded.' }); }
+});
+
 app.get('/api/societies/:societyIdentifier', async (req, res) => {
     try {
         const society = await authorization.resolveSociety(req.params.societyIdentifier);
@@ -1246,17 +1275,32 @@ app.post('/api/vehicles', async (req, res) => {
                 if (duplicate) fail(409, 'This vehicle number is already registered in this society.');
             }
 
-            if (isResident) {
-                const counts = { '2-Wheeler': 0, '4-Wheeler': 0 };
-                for (const row of rows) {
-                    if (normalizeAuthValue(row.data.flatNumber) === normalizeAuthValue(flatNumber) &&
-                        Object.hasOwn(counts, row.data.vehicleType)) counts[row.data.vehicleType] += 1;
-                }
-                const limit = type => Number.isInteger(societyData[type]) && societyData[type] >= 0 ? societyData[type] : 0;
+            // Per-flat allowance from societies/:id, applied to admin edits as well
+            // as resident registrations. A society that has never set a limit keeps
+            // the historical defaults (1 four-wheeler, 2 two-wheelers); a configured
+            // 0 is deliberate and still blocks every new vehicle of that type.
+            const limit = type => Number.isInteger(societyData[type]) && societyData[type] >= 0
+                ? societyData[type]
+                : (type === 'max4Wheeler' ? 1 : 2);
+            const counts = { '2-Wheeler': 0, '4-Wheeler': 0 };
+            for (const row of rows) {
+                if (normalizeAuthValue(row.data.flatNumber) === normalizeAuthValue(flatNumber) &&
+                    Object.hasOwn(counts, row.data.vehicleType)) counts[row.data.vehicleType] += 1;
+            }
+            // An edit that leaves the type/vehicle/plate unchanged must never be
+            // blocked by a flat that is already at its allowance.
+            const keepsExistingSlot = Boolean(oldData) && requestedVehicles.length === 1 &&
+                oldData.vehicleType === requestedVehicles[0].vehicleType &&
+                normalizeAuthValue(oldData.flatNumber) === normalizeAuthValue(flatNumber) &&
+                String(oldData.vehicleNumber || '').toUpperCase() === requestedVehicles[0].vehicleNumber;
+            if (!keepsExistingSlot) {
                 for (const vehicle of requestedVehicles) {
+                    if (!Object.hasOwn(counts, vehicle.vehicleType)) continue;
                     counts[vehicle.vehicleType] += 1;
                     const max = limit(vehicle.vehicleType === '2-Wheeler' ? 'max2Wheeler' : 'max4Wheeler');
-                    if (counts[vehicle.vehicleType] > max) fail(409, `Vehicle limit reached for this flat (${vehicle.vehicleType}).`);
+                    if (counts[vehicle.vehicleType] > max) {
+                        fail(409, `This flat already has ${max} ${vehicle.vehicleType}(s), the allowance in ${society.name}. Increase the limit under vehicle allowance limits first.`, 'vehicle-limit-reached');
+                    }
                 }
             }
 
@@ -1465,6 +1509,10 @@ app.get('/api/contest/winners', async (req, res) => {
     } catch (_) { return res.status(503).json({ error: 'Contest results could not be loaded.' }); }
 });
 
+// Master login: society spin counts. Spin documents are keyed
+// `<society>_<date>`, so the lifetime/month totals come from every document for
+// that society rather than from today's one - which is what made "Total
+// Lifetime Spins" and "Spins This Month" wrong (they showed today's count and 0).
 app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
     try {
         const requested = String(req.query.societyName || req.query.society || '').trim();
@@ -1472,18 +1520,43 @@ app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
         const society = await authorization.resolveSociety(requested);
         if (!society) return res.status(404).json({ error: 'Society not found.' });
         const today = utcDate();
-        const statDoc = await db.collection('spinStats').doc(`${normalizeAuthValue(society.name)}_${today}`).get();
-        const data = statDoc.exists ? statDoc.data() || {} : {};
+        const prefix = `${normalizeAuthValue(society.name)}_`;
+        let stats = [];
+        try {
+            const snapshot = await db.collection('spinStats')
+                .where('societyId', '==', society.id).get();
+            stats = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() || {} }));
+        } catch (_) { stats = []; }
+        const belongs = entry => entry.data.societyId === society.id ||
+            String(entry.id).startsWith(prefix) ||
+            normalizeAuthValue(entry.data.societyName) === normalizeAuthValue(society.name);
+        const dayOf = entry => String(entry.data.date || String(entry.id).slice(prefix.length) || '');
+        let lifetime = 0;
+        let todaySpins = 0;
+        let monthSpins = 0;
+        const month = today.slice(0, 7);
+        for (const entry of stats) {
+            if (!belongs(entry)) continue;
+            const count = Number(entry.data.spinCount) || 0;
+            const date = dayOf(entry);
+            lifetime += count;
+            if (date === today) todaySpins = Math.max(todaySpins, count);
+            if (date.slice(0, 7) === month) monthSpins += count;
+        }
         const snapshot = await db.collection('winners').where('societyId', '==', society.id).get();
-        const winners = snapshot.docs.map(doc => doc.data() || []).sort((a, b) => {
+        const winners = snapshot.docs.map(doc => doc.data() || {}).sort((a, b) => {
             const time = value => value && typeof value.toMillis === 'function' ? value.toMillis() : new Date(value || 0).getTime();
             return time(b.createdAt) - time(a.createdAt);
         });
         const winnerFlat = winners.length ? (winners[0].flatNumber || winners[0].winnerFlatnumber || 'None yet') : 'None yet';
-        const spinCount = Number(data.spinCount) || 0;
-        return res.json({
-            societyName: society.name, totalSpins: spinCount, totalDaySpins: spinCount,
-            totalMonthSpins: 0, winnerFlat
+        return res.set('Cache-Control', 'no-store').json({
+            societyName: society.name,
+            totalSpins: lifetime,
+            totalLifetimeSpins: lifetime,
+            totalDaySpins: todaySpins,
+            totalMonthSpins: monthSpins,
+            daysRecorded: stats.filter(belongs).length,
+            winnerFlat
         });
     } catch (_) { return res.status(503).json({ error: 'Spin statistics could not be loaded.' }); }
 });

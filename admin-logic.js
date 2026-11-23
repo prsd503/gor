@@ -126,9 +126,9 @@ async function fetchSocietySpins() {
         if (res.ok) {
             const data = await res.json();
             
-            const lifetime = data.totalSpins !== undefined ? data.totalSpins : (data.totalLifetimeSpins || 0);
-            const daily = data.totalDaySpins !== undefined ? data.totalDaySpins : 0;
-            const monthly = data.totalMonthSpins !== undefined ? data.totalMonthSpins : 0;
+            const lifetime = data.totalLifetimeSpins !== undefined ? data.totalLifetimeSpins : (data.totalSpins || 0);
+            const daily = data.totalDaySpins || 0;
+            const monthly = data.totalMonthSpins || 0;
             const winnerFlat = data.winnerFlat || "None yet"; // 👈 Pulls from backend response
             
             resultDiv.innerHTML = `
@@ -309,7 +309,12 @@ window.editVehicle = (docId) => {
     const record = registryCache.get(docId);
     if (!record) return window.showModal("That record is no longer loaded. Search again.");
     document.getElementById('vNum').value = record.vehicleNumber || '';
-    document.getElementById('fNum').value = record.flatNumber || '';
+    const flatField = document.getElementById('fNum');
+    flatField.value = record.flatNumber || '';
+    if (flatField.value && !societyFlats.includes(flatField.value)) {
+        // Keep a stored flat selectable so an edit never silently changes it.
+        renderFlatOptions([...societyFlats, flatField.value]);
+    }
     document.getElementById('rType').value = record.residentType || '';
     document.getElementById('vType').value = record.vehicleType || '2-Wheeler';
     document.getElementById('mNum').value = digitsOnly(record.mobileNumber).slice(-10);
@@ -414,7 +419,7 @@ document.getElementById('adminSearch')?.addEventListener('keydown', (event) => {
 // never overwrite a vehicle in another society by pasting an id.
 document.getElementById('saveBtn')?.addEventListener('click', async () => {
     const vNum = document.getElementById('vNum').value.trim().toUpperCase().replace(/\s+/g, ' ');
-    const fNum = document.getElementById('fNum').value.trim();
+    let fNum = document.getElementById('fNum').value.trim();
     const rType = document.getElementById('rType').value;
     const mNum = digitsOnly(document.getElementById('mNum').value).slice(-10);
     const vType = document.getElementById('vType').value;
@@ -423,6 +428,18 @@ document.getElementById('saveBtn')?.addEventListener('click', async () => {
     if (!vNum || !fNum) return window.showModal("Vehicle number and Flat number/Name are required.");
     if (!/^[A-Z0-9 -]{1,20}$/.test(vNum)) return window.showModal("Vehicle number may contain only letters, digits, spaces and hyphens.");
     if (mNum && mNum.length !== 10) return window.showModal("Mobile number must be 10 digits (or left blank).");
+    // The flat must be one the society has registered; the dropdown lists them,
+    // and this catches a typed value that does not match any of them. The stored
+    // casing wins, so "b2-201" is saved as the society's "B2-201".
+    if (societyFlats.length) {
+        const normalise = value => String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+        const match = societyFlats.find(flat => normalise(flat) === normalise(fNum));
+        if (!match) {
+            return window.showModal(`${fNum} is not a registered flat in ${assignedSociety}. Pick a flat from the list.`);
+        }
+        fNum = match;
+        document.getElementById('fNum').value = match;
+    }
 
     const saveBtn = document.getElementById('saveBtn');
     if (saveBtn) saveBtn.disabled = true;
@@ -450,7 +467,15 @@ document.getElementById('saveBtn')?.addEventListener('click', async () => {
             })
         });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(body.error || `Save failed (${res.status})`);
+        if (!res.ok) {
+            if (body.code === 'vehicle-limit-reached') {
+                // The API message already names the allowance and where to raise it.
+                const limitError = new Error(body.error);
+                limitError.isAllowance = true;
+                throw limitError;
+            }
+            throw new Error(body.error || `Save failed (${res.status})`);
+        }
 
         window.showModal(existing
             ? `${vNum} already existed in ${assignedSociety}, so its record was updated.`
@@ -468,8 +493,10 @@ document.getElementById('saveBtn')?.addEventListener('click', async () => {
         document.getElementById('rType').value = "";
         document.getElementById('mNum').value = "";
         if (existing) renderVehicleResults([...registryCache.values()]);
+        loadSocietyFlats();
     } catch (err) {
-        window.showModal("Failed to save vehicle: " + (err.message || err));
+        const message = String(err.message || err);
+        window.showModal(err.isAllowance ? message : "Failed to save vehicle: " + message);
         console.error(err);
     } finally {
         if (saveBtn) saveBtn.disabled = false;
@@ -776,6 +803,50 @@ window.OwAdminVehicles = {
     parseVehiclePlateCsv, renderBulkDeleteReport, bulkDeleteHeadline
 };
 
+// Bulk delete and Export all data are master-login tools. Everything marked
+// data-master-only starts hidden (inline style) and is revealed only for the
+// master account, so a society admin never sees them even for a moment.
+function applyMasterOnlyVisibility(isMaster) {
+    document.querySelectorAll('[data-master-only]').forEach(element => {
+        element.style.display = isMaster ? '' : 'none';
+    });
+    const masterOnlySection = document.getElementById('bulk-section');
+    if (masterOnlySection) masterOnlySection.style.display = isMaster ? 'block' : 'none';
+}
+window.OwAdminMasterTools = { applyMasterOnlyVisibility };
+
+// Flat numbers for the add/edit form come from the society, not free text: the
+// field is a combobox backed by societies/:id/flats (a datalist keeps it usable
+// as a dropdown on desktop and as a typeahead in the app's WebView).
+let societyFlats = [];
+
+function renderFlatOptions(flats) {
+    societyFlats = Array.isArray(flats) ? flats.filter(Boolean) : [];
+    const list = document.getElementById('flatNumberOptions');
+    if (!list) return;
+    list.innerHTML = societyFlats.map(flat => `<option value="${escapeHtml(flat)}"></option>`).join('');
+    const hint = document.getElementById('fNumHint');
+    if (hint) {
+        hint.textContent = societyFlats.length
+            ? `Choose from ${societyFlats.length} registered flat number(s) in this society.`
+            : 'No flat numbers are registered for this society yet.';
+    }
+}
+
+async function loadSocietyFlats() {
+    if (!assignedSociety) return;
+    try {
+        const res = await authenticatedFetch(`${API_BASE_URL}/societies/${encodeURIComponent(assignedSociety)}/flats`);
+        if (!res.ok) throw new Error(`Flat list failed (${res.status})`);
+        const data = await res.json();
+        renderFlatOptions(data.flats);
+    } catch (err) {
+        console.error("Failed to load society flat numbers:", err);
+    }
+}
+
+window.OwAdminFlats = { loadSocietyFlats, renderFlatOptions, flats: () => [...societyFlats] };
+
 document.addEventListener('DOMContentLoaded', () => {
 
     async function loadSocietyLimits() {
@@ -784,12 +855,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await authenticatedFetch(`${API_BASE_URL}/societies/${assignedSociety}`);
             if (res.ok) {
                 const data = await res.json();
-                if (document.getElementById('max4WheelerInput')) {
-                    document.getElementById('max4WheelerInput').value = data.max4Wheeler !== undefined ? data.max4Wheeler : 1;
-                }
-                if (document.getElementById('max2WheelerInput')) {
-                    document.getElementById('max2WheelerInput').value = data.max2Wheeler !== undefined ? data.max2Wheeler : 2;
-                }
+                const max4 = document.getElementById('max4WheelerInput');
+                const max2 = document.getElementById('max2WheelerInput');
+                if (max4) max4.value = Number.isInteger(data.max4Wheeler) ? data.max4Wheeler : '';
+                if (max2) max2.value = Number.isInteger(data.max2Wheeler) ? data.max2Wheeler : '';
             }
         } catch (err) {
             console.error("Failed to load society limits:", err);
@@ -870,6 +939,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (typeof loadNoticeData === 'function') loadNoticeData();
             if (typeof loadFacilitiesDropdown === 'function') loadFacilitiesDropdown();
             if (typeof loadActiveBookings === 'function') loadActiveBookings();
+            if (typeof loadSocietyLimits === 'function') loadSocietyLimits();
+            if (typeof loadSocietyFlats === 'function') loadSocietyFlats();
 
             let resultsContainer = document.getElementById('master-society-data');
             if (!resultsContainer) {
@@ -975,10 +1046,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     document.getElementById('search-section').style.display = 'block';
                     document.getElementById('data-section').style.display = 'block';
 
+                    applyMasterOnlyVisibility(isMasterAdminUser);
                     if (isMasterAdminUser) {
                         localStorage.setItem("isAdminMaster", "true");
-                        const bulkSection = document.getElementById('bulk-section');
-                        if (bulkSection) bulkSection.style.display = 'block';
 
                         const masterPanel = document.getElementById('master-admin-panel');
                         if (masterPanel) {
@@ -996,6 +1066,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         loadNoticeData();
                         loadFacilitiesDropdown();
                         loadActiveBookings();
+                        loadSocietyFlats();
                     } else {
                         console.warn("Admin profile loaded, but no society assigned.");
                     }
