@@ -88,7 +88,13 @@ test('entry UI handles an unbound legacy registration without exposing saved veh
     assert.equal(inputs[0].dataset.type, '2-Wheeler');
     assert.equal(window.document.getElementById('mobileNumber').value, '', 'private legacy contact data is not prefetched');
     assert.equal(window.document.getElementById('residentTypeSelect').value, '', 'private legacy resident data is not prefetched');
-    assert.equal(window.document.getElementById('submitBtn').style.display, 'inline-block');
+    // The slot is offered, but the submit button waits for a plate: an empty form
+    // could previously be submitted and answered "fill at least one vehicle number".
+    const submitBtn = window.document.getElementById('submitBtn');
+    assert.equal(submitBtn.style.display, 'none', 'no submit button until a plate is typed');
+    inputs[0].value = 'GJ01AB1234';
+    inputs[0].dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert.equal(submitBtn.style.display, 'inline-block', 'the button appears once a plate is entered');
     dom.window.close();
 });
 

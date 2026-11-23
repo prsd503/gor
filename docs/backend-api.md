@@ -164,6 +164,36 @@ admin, not a guard…"*. A failed lookup says so instead of claiming the email i
 invalid, and a post-sign-in membership failure still signs the user out with the
 same message.
 
+## Resident vehicle entry (entry.html)
+
+```
+POST /api/vehicles        { societyName, flatNumber, residentType, mobileNumber, deviceId, vehicles }
+```
+
+`vehicles` accepts every shape a client may send. The parser used to read only
+`vehicle.vehicleNumber`, so bare strings and `plate` / `vehicle_no` keys were
+silently discarded and the caller got `400 At least one vehicle number is
+required` while the resident had typed one:
+
+| Payload | Meaning |
+| --- | --- |
+| `[{ vehicleNumber, vehicleType }]` | canonical |
+| `["GJ01AB1234", …]` | array of plates |
+| `[{ plate \| vehicle_no \| number \| regNumber, type }]` | aliased keys |
+| `{ vehicleNumber, vehicleType }` | single object instead of an array |
+| `'["GJ01AB1234"]'` or `"GJ01AB1234,GJ01CD5678"` | JSON / comma-separated string |
+| `vehicleNumber` on the body | no `vehicles` field at all |
+
+Duplicates inside one request collapse to one entry; a plate that is not exactly
+10 letters/digits is rejected naming the rule. An empty payload answers
+`400 { code: "vehicle-number-required" }`, which the page turns into "enter at
+least one vehicle number".
+
+The page also mirrors the server's allowance defaults (2 two-wheelers, 1
+four-wheeler) when a society has never configured limits, so the resident is not
+shown a form with no fields; the submit button appears only once a plate is
+typed, and a flat with no allowance left says so.
+
 ## Flat numbers for the vehicle form (admin portal)
 
 ```
