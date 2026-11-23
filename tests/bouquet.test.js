@@ -312,6 +312,42 @@ test('WhatsApp is used only to buy a code, never to send the GIF', () => {
     assert.ok(!doc0(html, 'sendGifBtn'), 'the old single send button is gone');
 });
 
+test('the buy-a-code link uses the team number stored in Firestore configs/owlwatcher', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const link = doc.getElementById('buyCodeLink');
+    assert.ok(link.href.startsWith('https://wa.me/'), 'a fallback link is ready before the request');
+
+    let asked = null;
+    window.fetch = async (url) => {
+        asked = url;
+        return { ok: true, json: async () => ({ teamPhone: '+91 75671 84961' }) };
+    };
+    const number = await page.refreshBuyCodeLink();
+    assert.ok(/\/config$/.test(asked), 'the public config endpoint is what gets read');
+    assert.equal(number, '917567184961', 'the number is normalised to digits');
+    assert.equal(link.href, page.codeHelpUrl('917567184961'));
+    assert.ok(link.href.startsWith('https://wa.me/917567184961?text='), 'chat opens with the stored number');
+    const sharing = fs.readFileSync(path.join(root, 'bouquet-app.js'), 'utf8');
+    assert.ok(!/const WA_NUMBER\s*=/.test(sharing), 'no second hardcoded number source');
+});
+
+test('the buy-a-code link falls back safely when config cannot be read', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    const link = doc.getElementById('buyCodeLink');
+
+    window.fetch = async () => ({ ok: false, json: async () => ({}) });
+    assert.equal(await page.refreshBuyCodeLink(), null);
+    assert.ok(link.href.startsWith('https://wa.me/'), 'the fallback link stays usable');
+
+    window.fetch = async () => { throw new Error('offline'); };
+    assert.equal(await page.refreshBuyCodeLink(), null);
+    assert.ok(link.href.startsWith('https://wa.me/'), 'an offline page still offers a link');
+});
+
 test('premium themes and flowers are locked until a code is accepted', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();

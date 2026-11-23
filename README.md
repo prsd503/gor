@@ -105,9 +105,12 @@ Merging the code does not deploy the Firebase backend.
 | `POST /api/gift-codes/redeem` | anyone | atomically spends the code on Share GIF; returns `consumed: true` |
 | `POST /api/gift-codes` | admin | mints a batch of codes |
 
-Buying a code is a WhatsApp chat with the team (`wa.me/919033406816`, the same
-number as the site's Contact links). The bouquet itself is never routed through
-WhatsApp.
+Buying a code is a WhatsApp chat with the team. The page reads the number from
+Firestore (`configs/owlwatcher.teamPhone`, served publicly by `GET /api/config`)
+so the team can change it without a redeploy; until that answer arrives, or if
+the request fails, the link falls back to the built-in
+`wa.me/919033406816` used by the site's Contact links. The bouquet itself is
+never routed through WhatsApp.
 
 The page offers two plain actions once the GIF is ready — **Download GIF** saves the file
 to the device, and **Share GIF** hands it to the OS share sheet (`navigator.share` with
