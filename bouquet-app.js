@@ -52,11 +52,20 @@
 
     // Where the redeem call goes. Same host as the API the rest of the app uses.
     const API_BASE_URL = (window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api');
-    // Owl Watcher team's WhatsApp for buying a code. Kept in step with the
-    // number used by the Contact links across the site.
-    const WA_NUMBER = '919033406816';
-    const CODE_HELP_URL = 'https://wa.me/' + WA_NUMBER +
-        '?text=' + encodeURIComponent('Hi Owl Watcher! I would like to buy an E-Bouquet premium code (Rs.30).');
+    // Owl Watcher team's WhatsApp for buying a code. The real number lives in
+    // Firestore (configs/owlwatcher.teamPhone) and is read through the public
+    // /config endpoint; this value is only used until that answer arrives or
+    // when the network is unavailable.
+    const FALLBACK_WA_NUMBER = '919033406816';
+    const CODE_HELP_TEXT = 'Hi Owl Watcher! I would like to buy an E-Bouquet premium code (Rs.30).';
+
+    function codeHelpUrl(number) {
+        const digits = String(number || '').replace(/\D/g, '');
+        const target = digits.length >= 10 ? digits : FALLBACK_WA_NUMBER;
+        return 'https://wa.me/' + target + '?text=' + encodeURIComponent(CODE_HELP_TEXT);
+    }
+
+    const CODE_HELP_URL = codeHelpUrl(FALLBACK_WA_NUMBER);
 
     const GREENERY_STYLES = [
         { id: 'classic', label: 'classic' },
@@ -1012,6 +1021,32 @@
         invalidateExport();
     }
 
+    // The purchase number is public contact data, not a secret: the same value
+    // is already rendered into the Contact links across the site. Keep the
+    // fallback link usable if this request fails.
+    async function fetchTeamPhone() {
+        try {
+            const res = await fetch(API_BASE_URL + '/config', {
+                headers: { 'ngrok-skip-browser-warning': 'true' }
+            });
+            if (!res.ok) return null;
+            const data = await res.json().catch(() => ({}));
+            const digits = String((data && data.teamPhone) || '').replace(/\D/g, '');
+            return digits.length >= 10 ? digits : null;
+        } catch (err) {
+            console.error('E-Bouquet: could not load the team WhatsApp number.', err);
+            return null;
+        }
+    }
+
+    async function refreshBuyCodeLink() {
+        if (!el.buyCodeLink) return null;
+        const number = await fetchTeamPhone();
+        if (!number) return null;
+        el.buyCodeLink.href = codeHelpUrl(number);
+        return number;
+    }
+
     function togglePremiumDetails() {
         if (!el.premiumDetails || !el.premiumToggle) return;
         const open = el.premiumDetails.hidden;
@@ -1028,6 +1063,8 @@
                 if (event.key === 'Enter') { event.preventDefault(); redeemCode(); }
             });
         }
+        // Start with the built-in link, then upgrade it to the number stored in
+        // Firestore (configs/owlwatcher) as soon as that answers.
         if (el.buyCodeLink) el.buyCodeLink.href = CODE_HELP_URL;
         if (el.shareGifBtn) el.shareGifBtn.setAttribute('aria-describedby', 'premiumStatus');
         el.shuffle.addEventListener('click', shuffleArrangement);
@@ -1060,6 +1097,7 @@
         renderThemeGrid();
         bindEvents();
         syncMessageLock();
+        refreshBuyCodeLink();
 
         const prefilled = readLink();
         if (prefilled) {
@@ -1095,6 +1133,7 @@
         totalBlooms, selectedFlowerIds, drawCardTo, downloadGif, shareGif,
         nativePlatformName, blobToBase64,
         needsCode, chooseTheme, redeemCode, renderThemeGrid,
+        fetchTeamPhone, refreshBuyCodeLink, codeHelpUrl,
         isPremiumFlower, selectedPremiumFlowers,
         messageLocked, syncMessageLock
     };

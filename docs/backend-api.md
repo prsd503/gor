@@ -122,6 +122,140 @@ Without query parameters it returns the full normalized policy. Invalid platform
 
 `update-popup.js` now calls this endpoint first and falls back to the direct Firestore read if the API is unreachable, so the popup keeps working during an API outage.
 
+## Bulk vehicle import (admin portal)
+
+```
+POST /api/vehicles/import      (admin token, society-scoped)
+{ "society": "Aangan", "rows": [{ "vehicleNumber", "flatNumber", "residentType", "mobileNumber", "vehicleType" }] }
+```
+
+Validates the whole file first, then writes in batches of 400. Existing plates
+are updated only when a field actually changes; identical rows and repeated
+plates in the same file are counted as `repeat`; rows with an unknown flat, a
+missing plate, a bad resident type/mobile, or a device-linked vehicle asked to
+change flat are counted as `rejected` with a reason. The response is the report
+the admin portal renders: `{ total, added, updated, repeat, rejected, changes[], errors[] }`.
+Up to 2000 rows per request.
+
+## Flat numbers for the vehicle form (admin portal)
+
+```
+GET /api/societies/:societyIdentifier/flats   (admin token, that society or master)
+→ { societyId, society, flats[], max2Wheeler, max4Wheeler, counts{ flat: { '2-Wheeler', '4-Wheeler', other } } }
+```
+
+`societies/:id/flatList`, de-duplicated and in natural order, plus the current
+per-flat vehicle counts. The admin add/edit form uses `flats` as its dropdown;
+`POST /api/vehicles` still re-validates and answers `400 Flat is not registered
+in this society.` for anything else.
+
+**Per-flat allowances.** `PATCH /api/societies/:id/limits` sets
+`max2Wheeler` / `max4Wheeler` (0-100). Every vehicle write - admin edits
+included - refuses to take a flat past its allowance with
+`409 { code: "vehicle-limit-reached", error: "This flat already has N 4-Wheeler(s),
+the allowance in <society>. Increase the limit under vehicle allowance limits
+first." }`. A society that has never set limits keeps the defaults 1 / 2. An
+edit that keeps the same plate on the same flat and type is never blocked by an
+already-full flat.
+
+## Society spin counts (master login)
+
+```
+GET /api/contest/spinstats?societyName=Aangan   (master token)
+→ { societyName, totalSpins, totalLifetimeSpins, totalDaySpins, totalMonthSpins, daysRecorded, winnerFlat }
+```
+
+Spin documents are keyed `<society>_<YYYY-MM-DD>`, so the lifetime total sums
+every day for that society, the month total sums that calendar month, and the
+day total is today's count - all from the same document set the spin endpoint
+writes.
+
+## Bulk delete vehicles (admin portal)
+
+```
+POST /api/vehicles/bulk-delete      (admin token, society-scoped)
+{ "society": "Aangan", "plates": ["GJ01AB1234", "GJ01CD5678"] }
+```
+
+Deletes every listed plate that belongs to the caller's society, in batches of
+400 (with per-document fallback), and returns
+`{ total… requested, deleted, notFound, skipped, failed, plates[], missing[], errors[] }`.
+Plates in another society are never matched. The admin portal reads the first
+column of the uploaded CSV (its own template and export format), asks for
+confirmation, and lists each plate as deleted / not found / skipped.
+
+## Facility bookings (admin portal)
+
+- `GET /api/bookings?society=<society>` returns `{ id, facilityId, start, end }`
+  for the society; the admin portal joins `facilityId` with
+  `GET /api/facilities/:society` to show the facility name, date and start/end
+  times, sorted soonest first, each with a delete action.
+- `POST /api/bookings` rejects a range where the end is not after the start
+  (`400 Invalid booking date range`), and bookings may only be made from today
+  up to 6 months ahead.
+- `DELETE /api/bookings/:id` is limited to admins of that booking's society.
+- Bookings older than **7 days** are deleted automatically by the scheduled
+  maintenance job; the admin list hides them in the same window so an expired
+  booking never appears as active before the clean-up runs.
+
+## Vehicle registry (admin portal)
+
+`GET /api/vehicles?societyName=<society>&vehicleNumber=<plate>` with a staff token
+returns the society's matching records (`id`, `vehicleNumber`, `flatNumber`,
+`vehicleType`, `residentType`, `mobileNumber`, `deviceId`), which is what the
+admin portal renders with its edit/delete actions.
+
+`POST /api/vehicles` with a staff token is the add-or-edit write:
+
+- no `id` → a new document is created;
+- `id` → that document is updated, but only if it belongs to the caller's
+  society (guards are refused entirely).
+- Admin writes accept `2-Wheeler`, `3-Wheeler` and `4-Wheeler` (the resident
+  entry flow stays limited to 2/4-wheelers).
+- The flat must exist in the society's `flatList`, and a plate that already
+  exists in the society is rejected when creating a duplicate.
+
+## Signed-in administrator profile
+
+```
+GET /api/admins/me        (staff token required)
+```
+
+Returns the caller's own membership resolved from the Firestore `admins` /
+`guards` records: `{ email, society, societyId, isMaster }`. Pages that need the
+administrator's society (for example the data deletion request, which names it
+in the WhatsApp message) or the full-account deletion request use this instead
+of trusting a URL parameter. The existing `GET /api/admins/:email` stays
+master-or-self only. Both deletion pages also read the Owl Watcher team number
+from `GET /api/config` (`configs/owlwatcher.teamPhone`) and keep a built-in
+number only as an offline fallback.
+
+## Facility calendar admin contact
+
+```
+GET /api/societies/:societyIdentifier/admin-contact
+```
+
+Public read (the facility calendar and the vehicle-entry page are
+guest-facing). It resolves the
+society the same way every other route does, then looks in the Firestore
+`admins` collection for a record whose `societyId`, `society` or `societyName`
+matches that society, and returns only the WhatsApp number:
+
+```json
+{ "societyId": "aangan", "society": "Aangan", "phone": "919033406816" }
+```
+
+- `phone` is normalised to digits (10–15, using `phone`, `whatsapp`,
+  `whatsappNumber` or `mobile`) and is `null` when no active admin stored one;
+  the page then shows "Admin contact not available."
+- Used by `facility.html` ("Contact Admin via WhatsApp") and `entry.html`
+  ("Contact admin on WhatsApp", whose chat text names the chosen flat).
+- Records with `disabled: true` / `active: false` are ignored, and a
+  society-scoped admin is preferred over a master admin's number.
+- Nothing else from `admins` (email, uid, …) leaves the server, so Firestore
+  rules can keep denying direct client reads of the collection.
+
 ## Login failures in the guard and admin portals
 
 **This is not caused by the backend.** Both portals sign in directly against Firebase:

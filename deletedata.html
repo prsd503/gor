@@ -41,13 +41,15 @@
         </header>
 
         <section class="card" aria-label="Deletion request">
+            <p class="muted small" id="societyLabel" data-society="" style="margin: 0 0 12px;">Loading your society…</p>
             <label for="deleteOption">What to delete</label>
             <select id="deleteOption">
                 <option value="Specific Vehicle">Delete Specific Vehicle Data</option>
                 <option value="All Data">Delete All Society Data</option>
             </select>
             <label for="details">Vehicle number (if specific)</label>
-            <input type="text" id="details" placeholder="Enter Vehicle Number (if specific)">
+            <input type="text" id="details" placeholder="Enter Vehicle Number (if specific)" maxlength="40">
+            <p class="muted small">Your request opens WhatsApp with your society name, the request type and your admin email already filled in.</p>
             <div class="form-actions">
                 <button type="button" id="submitDeleteReq" class="btn-success">Submit request via WhatsApp</button>
             </div>

@@ -105,9 +105,12 @@ Merging the code does not deploy the Firebase backend.
 | `POST /api/gift-codes/redeem` | anyone | atomically spends the code on Share GIF; returns `consumed: true` |
 | `POST /api/gift-codes` | admin | mints a batch of codes |
 
-Buying a code is a WhatsApp chat with the team (`wa.me/919033406816`, the same
-number as the site's Contact links). The bouquet itself is never routed through
-WhatsApp.
+Buying a code is a WhatsApp chat with the team. The page reads the number from
+Firestore (`configs/owlwatcher.teamPhone`, served publicly by `GET /api/config`)
+so the team can change it without a redeploy; until that answer arrives, or if
+the request fails, the link falls back to the built-in
+`wa.me/919033406816` used by the site's Contact links. The bouquet itself is
+never routed through WhatsApp.
 
 The page offers two plain actions once the GIF is ready — **Download GIF** saves the file
 to the device, and **Share GIF** hands it to the OS share sheet (`navigator.share` with
@@ -130,3 +133,46 @@ admin/resident/guard use still needs society-level authorization work; see the
 Use trusted custom admin claims or explicit global staff `ADMIN_UIDS`. Old backend
 JWTs without the new authorization-version marker lose admin privileges; authorized
 staff must obtain a new session. No production users or claims are changed automatically.
+
+## Bulk vehicle import (admin portal)
+
+Admin → *Bulk vehicle management* accepts a CSV with the columns
+`VehicleNumber, FlatNumber/Name, ResidentType, MobileNumber, VehicleType`
+(the downloaded template uses this order; a header row in any order also works,
+as do quoted fields and CRLF line endings).
+
+Uploads go to `POST /api/vehicles/import` **for the signed-in admin's society**
+and are validated before anything is written:
+
+| Outcome | Meaning |
+| --- | --- |
+| Added | plate was not in this society |
+| Updated | plate existed and the row changes one of its details |
+| Duplicates skipped | identical to what is stored, or the same plate twice in the file |
+| Rejected | missing plate/flat, unknown flat, bad resident type, bad mobile, or a device-linked vehicle asked to move flat |
+
+The page lists every row with its outcome, so the admin sees exactly what
+changed and what was ignored. Re-uploading the same file changes nothing.
+
+*Bulk delete from CSV* and *Export all data* are master-login only; the import
+and template buttons stay available to every society admin. The delete flow
+reads the first column of the same file format, asks for confirmation, and
+posts the plates to `POST /api/vehicles/bulk-delete`. It then reports each plate
+as deleted, not found, or skipped, so a typo in the file is visible instead of
+silently ignored.
+
+
+
+## Master login controls
+
+The master account additionally sees *Bulk delete*, *Export all data*, the
+vehicle allowance limits (`max2Wheeler` / `max4Wheeler` per flat), the flat
+number list, and the per-society spin counts.
+
+* **Allowances** apply to every vehicle write, admin edits included. A flat at
+  its limit is refused with a message naming the allowance; raise the limit to
+  admit more. Societies that never set a limit keep 1 car / 2 bikes.
+* **Flat numbers** assigned under *🏠 Flat numbers* feed the add/edit vehicle
+  dropdown, so a vehicle can only be attached to a registered flat.
+* **Spin counts** sum the per-day `spinStats` documents: lifetime, today and
+  this month, plus the latest winner flat.

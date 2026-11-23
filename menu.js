@@ -47,6 +47,25 @@
     // turns on the press animations for buttons and links on iPhone/iPad. Android works without it.
     document.addEventListener('touchstart', function () {}, { passive: true });
 
+    // Show / hide a password field. Any button carrying data-pw-toggle="<input id>" flips the
+    // field between password and text and reports the state through aria-pressed, so the same
+    // markup works on the admin and guard sign-in cards.
+    function setPasswordVisible(button, visible) {
+        var field = document.getElementById(button.getAttribute('data-pw-toggle'));
+        if (!field) return;
+        field.type = visible ? 'text' : 'password';
+        button.setAttribute('aria-pressed', visible ? 'true' : 'false');
+        button.setAttribute('aria-label', visible ? 'Hide password' : 'Show password');
+        button.classList.toggle('is-on', visible);
+    }
+
+    document.addEventListener('click', function (event) {
+        var toggle = event.target.closest('[data-pw-toggle]');
+        if (!toggle) return;
+        event.preventDefault();
+        setPasswordVisible(toggle, toggle.getAttribute('aria-pressed') !== 'true');
+    });
+
     // Material-style ripple from the press point on buttons and tiles (mouse, touch and pen).
     // Styled by .ow-ripple in theme.css; skipped on the welcome overlay and calendar buttons.
     var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;

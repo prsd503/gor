@@ -12,7 +12,9 @@ let isMasterAdminUser = false;
 
 // --- UI & Global Helpers ---
 window.showModal = (msg, showConfirm = false) => {
-    document.getElementById('modalMessage').innerText = msg;
+    // textContent (not innerText) so the message is real text everywhere,
+    // including when the dialog is measured by non-browser renderers.
+    document.getElementById('modalMessage').textContent = msg;
     const confirmBtn = document.getElementById('confirmDeleteBtn');
     if (confirmBtn) confirmBtn.style.display = showConfirm ? 'inline-block' : 'none';
     document.getElementById('customModal').style.display = 'block';
@@ -124,9 +126,9 @@ async function fetchSocietySpins() {
         if (res.ok) {
             const data = await res.json();
             
-            const lifetime = data.totalSpins !== undefined ? data.totalSpins : (data.totalLifetimeSpins || 0);
-            const daily = data.totalDaySpins !== undefined ? data.totalDaySpins : 0;
-            const monthly = data.totalMonthSpins !== undefined ? data.totalMonthSpins : 0;
+            const lifetime = data.totalLifetimeSpins !== undefined ? data.totalLifetimeSpins : (data.totalSpins || 0);
+            const daily = data.totalDaySpins || 0;
+            const monthly = data.totalMonthSpins || 0;
             const winnerFlat = data.winnerFlat || "None yet"; // 👈 Pulls from backend response
             
             resultDiv.innerHTML = `
@@ -292,93 +294,218 @@ if (vehicleForm) {
 }
 
 // --- Vehicle Search Logic ---
+function escapeHtml(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function digitsOnly(value) {
+    return String(value == null ? '' : value).replace(/\D/g, '');
+}
+
+// Loads a registry record into the add/edit form so the admin can change it.
+window.editVehicle = (docId) => {
+    const record = registryCache.get(docId);
+    if (!record) return window.showModal("That record is no longer loaded. Search again.");
+    document.getElementById('vNum').value = record.vehicleNumber || '';
+    const flatField = document.getElementById('fNum');
+    flatField.value = record.flatNumber || '';
+    if (flatField.value && !societyFlats.includes(flatField.value)) {
+        // Keep a stored flat selectable so an edit never silently changes it.
+        renderFlatOptions([...societyFlats, flatField.value]);
+    }
+    document.getElementById('rType').value = record.residentType || '';
+    document.getElementById('vType').value = record.vehicleType || '2-Wheeler';
+    document.getElementById('mNum').value = digitsOnly(record.mobileNumber).slice(-10);
+    const form = document.getElementById('vNum');
+    if (form && typeof form.scrollIntoView === 'function') form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.getElementById('fNum')?.focus();
+    window.showModal(`Editing ${record.vehicleNumber}. Change the details and press "Save changes".`);
+};
+
+window.deleteVehicleDoc = async (docId) => {
+    const record = registryCache.get(docId);
+    const label = record ? record.vehicleNumber : 'this vehicle';
+    if (!window.confirm(`Delete ${label} from the society registry? This cannot be undone.`)) return;
+    try {
+        const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/${encodeURIComponent(docId)}`, { method: 'DELETE' });
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `Delete failed (${res.status})`);
+        }
+        registryCache.delete(docId);
+        renderVehicleResults([...registryCache.values()], `Updated: ${label} was deleted.`);
+    } catch (err) {
+        window.showModal("Failed to delete vehicle record: " + (err.message || err));
+    }
+};
+
+// `registryCache` keeps the last search results so Edit can fill the form.
+const registryCache = new Map();
+
+function renderVehicleResults(vehicles, emptyMessage) {
+    const resultsDiv = document.getElementById('admin-results');
+    if (!resultsDiv) return;
+    if (!vehicles.length) {
+        resultsDiv.innerHTML = `<p>${escapeHtml(emptyMessage || 'No vehicle found in this society.')}</p>`;
+        return;
+    }
+    resultsDiv.innerHTML = vehicles.map((data) => {
+        const mobile = digitsOnly(data.mobileNumber);
+        const call = mobile
+            ? `<a href="tel:${escapeHtml(mobile)}" style="color:#0066cc;text-decoration:none;">${escapeHtml(mobile)}</a>`
+            : 'N/A';
+        const deviceNote = data.deviceId
+            ? '<div style="color:#8a6d3b;">Device-linked: the flat cannot be changed here.</div>'
+            : '';
+        return `
+            <div class="vehicle-result" data-vehicle-id="${escapeHtml(data.id)}" style="background:#f4ece0; padding:10px; margin-top:8px; border-radius:8px; font-family: sans-serif; font-size: 0.95rem;">
+                <b>Vehicle:</b> ${escapeHtml(data.vehicleNumber)}<br>
+                <b>Vehicle Type:</b> ${escapeHtml(data.vehicleType || 'N/A')}<br>
+                <b>Flat/Name:</b> ${escapeHtml(data.flatNumber || 'N/A')}<br>
+                <b>Resident Type:</b> ${escapeHtml(data.residentType || 'N/A')}<br>
+                <b>Mobile:</b> ${call}
+                ${deviceNote}
+                <div style="margin-top:8px; display:flex; gap:8px;">
+                    <button type="button" data-action="edit" data-id="${escapeHtml(data.id)}" style="background:#6d4c33; color:#fff; border:none; border-radius:4px; font-size:0.9rem; padding:5px 12px; cursor:pointer;">Edit</button>
+                    <button type="button" data-action="delete" data-id="${escapeHtml(data.id)}" style="background:#d32f2f; color:white; border: none; border-radius: 4px; font-size:0.9rem; padding:5px 10px; cursor: pointer;">Delete</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    resultsDiv.querySelectorAll('button[data-action]').forEach(button => {
+        button.addEventListener('click', () => {
+            const id = button.dataset.id;
+            if (button.dataset.action === 'edit') window.editVehicle(id);
+            else window.deleteVehicleDoc(id);
+        });
+    });
+}
+
 document.getElementById('adminSearchBtn')?.addEventListener('click', async () => {
     const searchVal = document.getElementById('adminSearch').value.trim().toUpperCase();
     const resultsDiv = document.getElementById('admin-results');
     if (!searchVal) return window.showModal("Please enter a vehicle number to search.");
-
+    if (!assignedSociety) return window.showModal("Your admin account is not assigned to a society yet.");
     resultsDiv.innerHTML = "Searching...";
+    registryCache.clear();
     try {
         const res = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(searchVal)}`);
-        const vehicles = await res.json();
-        
-        if (vehicles.length === 0) {
-            resultsDiv.innerHTML = "<p>No vehicle found.</p>";
-            return;
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `Search failed (${res.status})`);
         }
-
-        window.deleteVehicleDoc = async (docId) => {
-            try {
-                await authenticatedFetch(`${API_BASE_URL}/vehicles/${docId}`, { method: 'DELETE' });
-                window.showModal("Vehicle deleted from registry.");
-                document.getElementById('admin-results').innerHTML = "";
-            } catch (err) {
-                window.showModal("Failed to delete vehicle record.");
-            }
-        };
-
-        resultsDiv.innerHTML = "";
-        vehicles.forEach((data) => {
-            resultsDiv.innerHTML += `
-                <div style="background:#f4ece0; padding:10px; margin-top:5px; border-radius:8px; font-family: sans-serif; font-size: 0.95rem;">
-                    <b>Vehicle:</b> ${data.vehicleNumber}<br>
-                    <b>Vehicle Type:</b> ${data.vehicleType}<br>
-                    <b>Flat/Name:</b> ${data.flatNumber}<br>
-                    <b>Resident Type:</b> ${data.residentType || 'N/A'}<br>
-                    <b>Call:</b> <a href="tel:${data.mobileNumber}" style="color: #0066cc; text-decoration: none;">${data.mobileNumber}</a><br><br>
-                    <button onclick="window.deleteVehicleDoc('${data.id}')" style="background:#d32f2f; color: white; border: none; border-radius: 4px; font-size:0.9rem; padding:5px 10px; cursor: pointer;">Delete</button>
-                </div>
-            `;
-        });
+        const vehicles = await res.json();
+        (Array.isArray(vehicles) ? vehicles : []).forEach(vehicle => registryCache.set(vehicle.id, vehicle));
+        renderVehicleResults([...registryCache.values()], `No vehicle ${searchVal} is registered in ${assignedSociety}.`);
     } catch (err) {
-        window.showModal("Error searching vehicle data.");
+        resultsDiv.innerHTML = "";
+        window.showModal("Error searching vehicle data: " + (err.message || err));
     }
 });
 
+document.getElementById('adminSearch')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        document.getElementById('adminSearchBtn')?.click();
+    }
+});
+
+// Add / edit vehicle. The plate decides: if that number already exists in the
+// assigned society the existing Firestore document is updated, otherwise a new
+// one is created. The record id is never taken from the form, so an admin can
+// never overwrite a vehicle in another society by pasting an id.
 document.getElementById('saveBtn')?.addEventListener('click', async () => {
-    const vNum = document.getElementById('vNum').value.trim().toUpperCase();
-    const fNum = document.getElementById('fNum').value.trim();
+    const vNum = document.getElementById('vNum').value.trim().toUpperCase().replace(/\s+/g, ' ');
+    let fNum = document.getElementById('fNum').value.trim();
     const rType = document.getElementById('rType').value;
-    const mNum = document.getElementById('mNum').value.trim();
+    const mNum = digitsOnly(document.getElementById('mNum').value).slice(-10);
     const vType = document.getElementById('vType').value;
 
+    if (!assignedSociety) return window.showModal("Your admin account is not assigned to a society yet.");
     if (!vNum || !fNum) return window.showModal("Vehicle number and Flat number/Name are required.");
+    if (!/^[A-Z0-9 -]{1,20}$/.test(vNum)) return window.showModal("Vehicle number may contain only letters, digits, spaces and hyphens.");
+    if (mNum && mNum.length !== 10) return window.showModal("Mobile number must be 10 digits (or left blank).");
+    // The flat must be one the society has registered; the dropdown lists them,
+    // and this catches a typed value that does not match any of them. The stored
+    // casing wins, so "b2-201" is saved as the society's "B2-201".
+    if (societyFlats.length) {
+        const normalise = value => String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+        const match = societyFlats.find(flat => normalise(flat) === normalise(fNum));
+        if (!match) {
+            return window.showModal(`${fNum} is not a registered flat in ${assignedSociety}. Pick a flat from the list.`);
+        }
+        fNum = match;
+        document.getElementById('fNum').value = match;
+    }
 
+    const saveBtn = document.getElementById('saveBtn');
+    if (saveBtn) saveBtn.disabled = true;
     try {
-        const res = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(vNum)}`);
-        const vehicles = await res.json();
+        // Is this plate already in this society's registry?
+        const lookup = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(vNum)}`);
+        if (!lookup.ok) {
+            const body = await lookup.json().catch(() => ({}));
+            throw new Error(body.error || `Lookup failed (${lookup.status})`);
+        }
+        const found = await lookup.json();
+        const existing = (Array.isArray(found) ? found : []).find(vehicle =>
+            String(vehicle.vehicleNumber || '').trim().toUpperCase() === vNum) || null;
 
-        const existingId = vehicles.length > 0 ? vehicles[0].id : null;
-
-        await authenticatedFetch(`${API_BASE_URL}/vehicles`, {
+        const res = await authenticatedFetch(`${API_BASE_URL}/vehicles`, {
             method: 'POST',
             body: JSON.stringify({
-                id: existingId,
+                id: existing ? existing.id : null,
                 vehicleNumber: vNum,
                 flatNumber: fNum,
-                residentType: rType,
+                residentType: rType || 'Resident',
                 mobileNumber: mNum,
                 vehicleType: vType,
                 societyName: assignedSociety
             })
         });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            if (body.code === 'vehicle-limit-reached') {
+                // The API message already names the allowance and where to raise it.
+                const limitError = new Error(body.error);
+                limitError.isAllowance = true;
+                throw limitError;
+            }
+            throw new Error(body.error || `Save failed (${res.status})`);
+        }
 
-        if (existingId) {
-            window.showModal("Vehicle details updated successfully!");
+        window.showModal(existing
+            ? `${vNum} already existed in ${assignedSociety}, so its record was updated.`
+            : `${vNum} was added to the ${assignedSociety} registry.`);
+
+        // Keep the search results in step with the save.
+        if (existing) {
+            registryCache.set(existing.id, { ...existing, vehicleNumber: vNum, flatNumber: fNum, residentType: rType || 'Resident', mobileNumber: mNum, vehicleType: vType });
         } else {
-            window.showModal("Vehicle saved to registry successfully!");
+            registryCache.clear();
         }
 
         document.getElementById('vNum').value = "";
         document.getElementById('fNum').value = "";
         document.getElementById('rType').value = "";
         document.getElementById('mNum').value = "";
+        if (existing) renderVehicleResults([...registryCache.values()]);
+        loadSocietyFlats();
     } catch (err) {
-        window.showModal("Failed to save vehicle.");
+        const message = String(err.message || err);
+        window.showModal(err.isAllowance ? message : "Failed to save vehicle: " + message);
         console.error(err);
+    } finally {
+        if (saveBtn) saveBtn.disabled = false;
     }
 });
 
+// The time pickers inherit theme.css, so they must use theme variables. A
+// hardcoded white background with the page's light text (dark mode) made the
+// selected time invisible against the card.
 function buildTimeDropdownHTML(idPrefix) {
     let hourOptions = '<option value="">HH</option>';
     for (let i = 1; i <= 12; i++) {
@@ -389,11 +516,11 @@ function buildTimeDropdownHTML(idPrefix) {
     let minOptions = '<option value="00">00</option><option value="15">15</option><option value="30">30</option><option value="45">45</option>';
 
     return `
-        <div style="display: flex; gap: 5px; align-items: center; display: inline-flex;">
-            <select id="${idPrefix}Hour" style="padding: 6px; border-radius: 6px; border: 1px solid #d7ccc8; background: #fff;">${hourOptions}</select>
-            <span>:</span>
-            <select id="${idPrefix}Min" style="padding: 6px; border-radius: 6px; border: 1px solid #d7ccc8; background: #fff;">${minOptions}</select>
-            <select id="${idPrefix}AmPm" style="padding: 6px; border-radius: 6px; border: 1px solid #d7ccc8; background: #fff;">
+        <div class="time-picker">
+            <select id="${idPrefix}Hour" aria-label="${idPrefix === 'end' ? 'End' : 'Start'} hour">${hourOptions}</select>
+            <span class="time-sep" aria-hidden="true">:</span>
+            <select id="${idPrefix}Min" aria-label="${idPrefix === 'end' ? 'End' : 'Start'} minutes">${minOptions}</select>
+            <select id="${idPrefix}AmPm" aria-label="${idPrefix === 'end' ? 'End' : 'Start'} AM or PM">
                 <option value="AM">AM</option>
                 <option value="PM">PM</option>
             </select>
@@ -408,7 +535,9 @@ function getSelectedTimeString(idPrefix) {
 
     if (!hh) return null;
 
+    if (!/^[0-5]\d$/.test(mm || '')) return null;
     let hour24 = parseInt(hh, 10);
+    if (!Number.isInteger(hour24) || hour24 < 1 || hour24 > 12) return null;
     if (ap === "PM" && hour24 < 12) hour24 += 12;
     if (ap === "AM" && hour24 === 12) hour24 = 0;
 
@@ -417,9 +546,306 @@ function getSelectedTimeString(idPrefix) {
 }
 
 document.getElementById('downloadTemplateBtn')?.addEventListener('click', () => {
-    const csvContent = "VehicleNumber,FlatNumber/Name,ResidentType,MobileNumber,VehicleType\nKA01AB1234,101,Owner,9876543210,2W\n";
+    const csvContent = "VehicleNumber,FlatNumber/Name,ResidentType,MobileNumber,VehicleType\n" +
+        "GJ01AB1234,A1-101,Owner,9876543210,2-Wheeler\n" +
+        "GJ01CD5678,A1-101,Tenant,9812345678,4-Wheeler\n";
     window.downloadCSV(csvContent, "vehicle_template.csv");
 });
+
+// Bookings older than 7 days are removed automatically (server maintenance
+// job). The list mirrors that rule so an expired booking never appears as
+// "active" while waiting for the nightly clean-up.
+const BOOKING_RETENTION_DAYS = 7;
+
+function escapeText(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function formatBookingTime(iso) {
+    const datePart = String(iso || '').split('T')[1];
+    if (!datePart) return '';
+    const [hour, minute] = datePart.split(':');
+    const h = parseInt(hour, 10);
+    if (Number.isNaN(h)) return '';
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    return `${h % 12 || 12}:${minute} ${suffix}`;
+}
+
+function isExpiredBooking(booking, now = new Date()) {
+    const end = new Date(booking && booking.end ? booking.end : booking && booking.start);
+    if (Number.isNaN(end.getTime())) return false;
+    const cutoff = new Date(now.getTime() - BOOKING_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    return end < cutoff;
+}
+
+// Sorted soonest first and grouped by date, so the admin reads the schedule
+// the way it happens.
+function renderActiveBookings(bookings, facilityNames) {
+    const listContainer = document.getElementById('active-bookings-list');
+    if (!listContainer) return;
+    const upcoming = (Array.isArray(bookings) ? bookings : [])
+        .filter(booking => !isExpiredBooking(booking))
+        .sort((a, b) => String(a.start || '').localeCompare(String(b.start || '')));
+    if (!upcoming.length) {
+        listContainer.innerHTML = "<h4>Active bookings</h4><p class='small' style='color: var(--ow-muted);'>No active bookings found.</p>";
+        return;
+    }
+    listContainer.innerHTML = `<h4>Active bookings (${upcoming.length})</h4>` + upcoming.map(booking => {
+        const facilityName = facilityNames[booking.facilityId] || booking.facilityId || 'Facility';
+        const date = String(booking.start || '').split('T')[0];
+        const startTime = formatBookingTime(booking.start);
+        const endTime = formatBookingTime(booking.end);
+        return `
+            <div class="booking-item" data-booking-id="${escapeText(booking.id)}" style="background: var(--ow-surface-2); padding:10px; margin-top:8px; border-radius:8px; border: 1px solid var(--ow-border); font-size: 0.95rem;">
+                <div>
+                    <div class="booking-facility"><b>${escapeText(facilityName)}</b></div>
+                    <div class="booking-when">${escapeText(date)}${startTime ? ` · ${escapeText(startTime)}${endTime ? ' to ' + escapeText(endTime) : ''}` : ''}</div>
+                </div>
+                <button type="button" data-booking-delete="${escapeText(booking.id)}" class="btn-danger-soft btn-sm" style="background: var(--ow-danger); color: #fff; font-size:0.8rem; padding:6px 12px;">Delete</button>
+            </div>
+        `;
+    }).join('');
+
+    listContainer.querySelectorAll('[data-booking-delete]').forEach(button => {
+        button.addEventListener('click', () => window.deleteBooking(button.dataset.bookingDelete));
+    });
+}
+
+async function loadActiveBookings() {
+    if (!assignedSociety) return;
+    const listContainer = document.getElementById('active-bookings-list');
+    if (!listContainer) return;
+
+    listContainer.innerHTML = "<p class='small' style='color: var(--ow-muted);'>Loading bookings...</p>";
+
+    try {
+        const [fRes, bRes] = await Promise.all([
+            authenticatedFetch(`${API_BASE_URL}/facilities/${encodeURIComponent(assignedSociety)}`),
+            authenticatedFetch(`${API_BASE_URL}/bookings?society=${encodeURIComponent(assignedSociety)}`)
+        ]);
+        const facilityNames = fRes.ok ? await fRes.json() : {};
+        const bookings = bRes.ok ? await bRes.json() : [];
+        renderActiveBookings(bookings, facilityNames || {});
+    } catch (err) {
+        listContainer.innerHTML = "<p class='small' style='color: var(--ow-danger);'>Could not load bookings. Please refresh.</p>";
+        console.error(err);
+    }
+}
+
+// --- Bulk vehicle import ---------------------------------------------------
+// A small RFC-4180-ish CSV reader: quoted fields, escaped quotes, CRLF or LF
+// line endings, and an optional header row in any column order. The browser
+// parses the file; the API validates and writes it per society.
+function parseCsvText(text) {
+    const rows = [];
+    let row = [];
+    let field = '';
+    let quoted = false;
+    const source = String(text || '').replace(/^\uFEFF/, '');
+    for (let i = 0; i < source.length; i++) {
+        const char = source[i];
+        if (quoted) {
+            if (char === '"') {
+                if (source[i + 1] === '"') { field += '"'; i++; }
+                else quoted = false;
+            } else field += char;
+            continue;
+        }
+        if (char === '"') { quoted = true; continue; }
+        if (char === ',') { row.push(field); field = ''; continue; }
+        if (char === '\r') continue;
+        if (char === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
+        field += char;
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows.filter(cells => cells.some(cell => String(cell).trim() !== ''));
+}
+
+const IMPORT_COLUMNS = {
+    vehicleNumber: ['vehiclenumber', 'vehicle no', 'vehicle_no', 'plate', 'platenumber', 'registrationnumber', 'vehicle'],
+    flatNumber: ['flatnumber/name', 'flatnumber', 'flat no', 'flat_no', 'flat', 'flatname'],
+    residentType: ['residenttype', 'resident', 'occupancy'],
+    mobileNumber: ['mobilenumber', 'mobile', 'mobile no', 'phone', 'contact'],
+    vehicleType: ['vehicletype', 'vehicle type', 'wheeler', 'category']
+};
+
+function columnKey(header) {
+    const value = String(header == null ? '' : header).trim().toLowerCase().replace(/\s+/g, ' ');
+    for (const [key, aliases] of Object.entries(IMPORT_COLUMNS)) {
+        if (aliases.includes(value)) return key;
+    }
+    return null;
+}
+
+// Returns objects keyed by field name so the API never depends on column order.
+function parseVehicleCsv(text) {
+    const table = parseCsvText(text);
+    if (!table.length) return [];
+    const first = table[0].map(cell => String(cell).trim());
+    const mapped = first.map(columnKey);
+    const hasHeader = mapped.includes('vehicleNumber');
+    const columns = hasHeader ? mapped : ['vehicleNumber', 'flatNumber', 'residentType', 'mobileNumber', 'vehicleType'];
+    const dataRows = hasHeader ? table.slice(1) : table;
+    return dataRows.map(cells => {
+        const row = {};
+        columns.forEach((key, index) => {
+            if (!key) return;
+            row[key] = cells[index] === undefined ? '' : String(cells[index]).trim();
+        });
+        return row;
+    }).filter(row => Object.values(row).some(value => String(value).trim() !== ''));
+}
+
+function importHeadline(summary) {
+    const party = `Added ${summary.added || 0}, updated ${summary.updated || 0}, duplicates skipped ${summary.repeat || 0}, rejected ${summary.rejected || 0}`;
+    return `${summary.society ? summary.society + ': ' : ''}import complete. ${party} of ${summary.total || 0} row(s).`;
+}
+
+function renderImportReport(summary) {
+    const report = document.getElementById('import-report');
+    if (!report) return;
+    const changes = Array.isArray(summary.changes) ? summary.changes : [];
+    const errors = Array.isArray(summary.errors) ? summary.errors : [];
+    const chip = (cls, text) => `<span class="import-chip ${cls}">${escapeText(text)}</span>`;
+    const list = changes.slice(0, 200).map(change => {
+        const verb = change.action === 'added' ? 'Added' : change.action === 'updated' ? 'Updated' : 'Skipped (duplicate)';
+        return `<li><b>${escapeText(change.plate)}</b> — ${verb}${change.flat ? ` · flat ${escapeText(change.flat)}` : ''}${change.reason ? ` <span class="import-reason">(${escapeText(change.reason)})</span>` : ''}</li>`;
+    }).join('');
+    const errorList = errors.slice(0, 200).map(error =>
+        `<li><b>${escapeText(error.plate || `line ${error.line}`)}</b> <span class="import-reason">— ${escapeText(error.reason)}</span></li>`).join('');
+    report.innerHTML = `
+        <div class="import-summary">
+            ${chip('is-added', `Added ${summary.added || 0}`)}
+            ${chip('is-updated', `Updated ${summary.updated || 0}`)}
+            ${chip('is-repeat', `Duplicates skipped ${summary.repeat || 0}`)}
+            ${chip('is-rejected', `Rejected ${summary.rejected || 0}`)}
+            ${chip('', `Rows ${summary.total || 0}`)}
+        </div>
+        ${summary.truncated ? '<p class="small" style="color: var(--ow-danger);">Only the first 2000 rows were imported.</p>' : ''}
+        ${changes.length ? `<h4>Per-vehicle result</h4><ul class="import-list">${list}</ul>` : ''}
+        ${errors.length ? `<h4>Rejected rows</h4><ul class="import-list">${errorList}</ul>` : ''}
+    `;
+}
+
+// FileReader rather than File.text(): the older WebView inside the native app
+// has no File.text(), and the reader works everywhere.
+function readFileText(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = event => resolve(String(event.target.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('The file could not be read.'));
+        reader.readAsText(file);
+    });
+}
+
+// The search results are rebuilt after an import so the admin sees new data.
+function clearVehicleSearchCache() {
+    registryCache.clear();
+}
+
+async function refreshVehicleSearchResults() {
+    const input = document.getElementById('adminSearch');
+    if (input && input.value.trim()) document.getElementById('adminSearchBtn')?.click();
+}
+
+// Plate list from an uploaded CSV: every cell of the first column (the plate
+// column in both the template and an exported registry export), ignoring a
+// header row and blanks.
+function parseVehiclePlateCsv(text) {
+    const table = parseCsvText(text);
+    const plates = [];
+    const seen = new Set();
+    table.forEach(cells => {
+        const value = String((cells && cells[0]) || '').trim().toUpperCase().replace(/\s+/g, ' ');
+        if (!value || /^VEHICLENUMBER$|^VEHICLE$|^PLATE$|^VEHICLE NO$/.test(value)) return;
+        if (seen.has(value)) return;
+        seen.add(value);
+        plates.push(value);
+    });
+    return plates;
+}
+
+function bulkDeleteHeadline(summary) {
+    return `${summary.society ? summary.society + ': ' : ''}bulk delete complete. Deleted ${summary.deleted || 0} of ${summary.requested || 0} vehicle(s)`
+        + `, not found ${summary.notFound || 0}`
+        + (summary.skipped ? `, skipped ${summary.skipped}` : '')
+        + (summary.failed ? `, failed ${summary.failed}` : '') + '.';
+}
+
+function renderBulkDeleteReport(summary) {
+    const report = document.getElementById('bulk-delete-report');
+    if (!report) return;
+    const rows = Array.isArray(summary.plates) ? summary.plates : [];
+    const chip = (cls, text) => `<span class="delete-chip ${cls}">${escapeText(text)}</span>`;
+    const list = rows.map(row => `<li><b>${escapeText(row.plate)}</b> — ${escapeText(row.action === 'deleted' ? 'Deleted' : row.action === 'notFound' ? 'Not found' : 'Skipped')}${row.reason ? ` <span class="import-reason">(${escapeText(row.reason)})</span>` : ''}</li>`).join('');
+    report.innerHTML = `
+        <div class="import-summary">
+            ${chip('is-deleted', `Deleted ${summary.deleted || 0}`)}
+            ${chip('is-missing', `Not found ${summary.notFound || 0}`)}
+            ${summary.skipped ? chip('', `Skipped ${summary.skipped}`) : ''}
+            ${summary.failed ? chip('is-deleted', `Failed ${summary.failed}`) : ''}
+            ${chip('', `Rows ${summary.requested || 0}`)}
+        </div>
+        ${summary.truncated ? '<p class="small" style="color: var(--ow-danger);">Only the first 2000 plates were processed.</p>' : ''}
+        ${rows.length ? `<h4>Per-vehicle result</h4><ul class="import-list">${list}</ul>` : ''}
+    `;
+}
+
+// Exposed for the page's own handlers and for tests.
+window.OwAdminBookings = {
+    renderActiveBookings, loadActiveBookings, isExpiredBooking,
+    formatBookingTime, BOOKING_RETENTION_DAYS
+};
+window.OwAdminVehicles = {
+    parseCsvText, parseVehicleCsv, renderImportReport, importHeadline,
+    parseVehiclePlateCsv, renderBulkDeleteReport, bulkDeleteHeadline
+};
+
+// Bulk delete and Export all data are master-login tools. Everything marked
+// data-master-only starts hidden (inline style) and is revealed only for the
+// master account, so a society admin never sees them even for a moment.
+function applyMasterOnlyVisibility(isMaster) {
+    document.querySelectorAll('[data-master-only]').forEach(element => {
+        element.style.display = isMaster ? '' : 'none';
+    });
+    const masterOnlySection = document.getElementById('bulk-section');
+    if (masterOnlySection) masterOnlySection.style.display = isMaster ? 'block' : 'none';
+}
+window.OwAdminMasterTools = { applyMasterOnlyVisibility };
+
+// Flat numbers for the add/edit form come from the society, not free text: the
+// field is a combobox backed by societies/:id/flats (a datalist keeps it usable
+// as a dropdown on desktop and as a typeahead in the app's WebView).
+let societyFlats = [];
+
+function renderFlatOptions(flats) {
+    societyFlats = Array.isArray(flats) ? flats.filter(Boolean) : [];
+    const list = document.getElementById('flatNumberOptions');
+    if (!list) return;
+    list.innerHTML = societyFlats.map(flat => `<option value="${escapeHtml(flat)}"></option>`).join('');
+    const hint = document.getElementById('fNumHint');
+    if (hint) {
+        hint.textContent = societyFlats.length
+            ? `Choose from ${societyFlats.length} registered flat number(s) in this society.`
+            : 'No flat numbers are registered for this society yet.';
+    }
+}
+
+async function loadSocietyFlats() {
+    if (!assignedSociety) return;
+    try {
+        const res = await authenticatedFetch(`${API_BASE_URL}/societies/${encodeURIComponent(assignedSociety)}/flats`);
+        if (!res.ok) throw new Error(`Flat list failed (${res.status})`);
+        const data = await res.json();
+        renderFlatOptions(data.flats);
+    } catch (err) {
+        console.error("Failed to load society flat numbers:", err);
+    }
+}
+
+window.OwAdminFlats = { loadSocietyFlats, renderFlatOptions, flats: () => [...societyFlats] };
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -429,12 +855,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await authenticatedFetch(`${API_BASE_URL}/societies/${assignedSociety}`);
             if (res.ok) {
                 const data = await res.json();
-                if (document.getElementById('max4WheelerInput')) {
-                    document.getElementById('max4WheelerInput').value = data.max4Wheeler !== undefined ? data.max4Wheeler : 1;
-                }
-                if (document.getElementById('max2WheelerInput')) {
-                    document.getElementById('max2WheelerInput').value = data.max2Wheeler !== undefined ? data.max2Wheeler : 2;
-                }
+                const max4 = document.getElementById('max4WheelerInput');
+                const max2 = document.getElementById('max2WheelerInput');
+                if (max4) max4.value = Number.isInteger(data.max4Wheeler) ? data.max4Wheeler : '';
+                if (max2) max2.value = Number.isInteger(data.max2Wheeler) ? data.max2Wheeler : '';
             }
         } catch (err) {
             console.error("Failed to load society limits:", err);
@@ -515,6 +939,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (typeof loadNoticeData === 'function') loadNoticeData();
             if (typeof loadFacilitiesDropdown === 'function') loadFacilitiesDropdown();
             if (typeof loadActiveBookings === 'function') loadActiveBookings();
+            if (typeof loadSocietyLimits === 'function') loadSocietyLimits();
+            if (typeof loadSocietyFlats === 'function') loadSocietyFlats();
 
             let resultsContainer = document.getElementById('master-society-data');
             if (!resultsContainer) {
@@ -589,12 +1015,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const timeContainer = document.getElementById('bookingTimeContainer');
     if (timeContainer) {
         timeContainer.innerHTML = `
-            <div style="margin-bottom: 10px;">
-                <label style="display: block; font-size: 0.9rem; margin-bottom: 3px;">Start Time:</label>
+            <div class="time-field">
+                <label for="startHour">Start time</label>
                 ${buildTimeDropdownHTML('start')}
             </div>
-            <div>
-                <label style="display: block; font-size: 0.9rem; margin-bottom: 3px;">End Time:</label>
+            <div class="time-field">
+                <label for="endHour">End time</label>
                 ${buildTimeDropdownHTML('end')}
             </div>
         `;
@@ -620,10 +1046,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     document.getElementById('search-section').style.display = 'block';
                     document.getElementById('data-section').style.display = 'block';
 
+                    applyMasterOnlyVisibility(isMasterAdminUser);
                     if (isMasterAdminUser) {
                         localStorage.setItem("isAdminMaster", "true");
-                        const bulkSection = document.getElementById('bulk-section');
-                        if (bulkSection) bulkSection.style.display = 'block';
 
                         const masterPanel = document.getElementById('master-admin-panel');
                         if (masterPanel) {
@@ -641,6 +1066,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         loadNoticeData();
                         loadFacilitiesDropdown();
                         loadActiveBookings();
+                        loadSocietyFlats();
                     } else {
                         console.warn("Admin profile loaded, but no society assigned.");
                     }
@@ -766,48 +1192,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    async function loadActiveBookings() {
-        if (!assignedSociety) return;
-        const listContainer = document.getElementById('active-bookings-list');
-        if (!listContainer) return;
-
-        listContainer.innerHTML = "<p style='font-size: 0.9rem;'>Loading bookings...</p>";
-
-        try {
-            const fRes = await authenticatedFetch(`${API_BASE_URL}/facilities/${assignedSociety}`);
-            const facilityNames = fRes.ok ? await fRes.json() : {};
-
-            const bRes = await authenticatedFetch(`${API_BASE_URL}/bookings?society=${encodeURIComponent(assignedSociety)}`);
-            const bookings = bRes.ok ? await bRes.json() : [];
-
-            if (bookings.length === 0) {
-                listContainer.innerHTML = "<p style='font-size: 0.9rem; color: #777;'>No active bookings found.</p>";
-                return;
-            }
-
-            listContainer.innerHTML = "<h4>Active Bookings:</h4>";
-            bookings.forEach((data) => {
-                const facilityName = facilityNames[data.facilityId] || data.facilityId;
-                
-                const startTimeFormatted = data.start ? data.start.replace('T', ' ') : '';
-                const endTimeFormatted = data.end ? data.end.split('T')[1] : '';
-
-                listContainer.innerHTML += `
-                    <div style="background:#f4ece0; padding:10px; margin-top:8px; border-radius:8px; font-size: 0.95rem; display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <b>${facilityName}</b><br>
-                            <span style="font-size: 0.85rem; color: #555;">${startTimeFormatted} to ${endTimeFormatted}</span>
-                        </div>
-                        <button onclick="window.deleteBooking('${data.id}')" style="background:#d32f2f; font-size:0.8rem; padding:5px 10px; margin:0;">Delete</button>
-                    </div>
-                `;
-            });
-        } catch (err) {
-            listContainer.innerHTML = "<p style='font-size: 0.9rem; color: red;'>Error loading bookings.</p>";
-            console.error(err);
-        }
-    }
-        
     document.getElementById('bookFacilityBtn')?.addEventListener('click', async () => {
         const fId = document.getElementById('facilitySelect').value;
         const dateInput = document.getElementById('bookingDate');
@@ -827,82 +1211,78 @@ document.addEventListener('DOMContentLoaded', () => {
             return window.showModal("Bookings are only allowed from today up to 6 months in advance.");
         }
 
+        if (endT <= startT) return window.showModal("The end time must be after the start time.");
+
         try {
-            await authenticatedFetch(`${API_BASE_URL}/bookings`, {
+            const res = await authenticatedFetch(`${API_BASE_URL}/bookings`, {
                 method: 'POST',
                 body: JSON.stringify({
-                    society: assignedSociety, 
-                    facilityId: fId, 
-                    start: `${date}T${startT}:00`, 
+                    society: assignedSociety,
+                    facilityId: fId,
+                    start: `${date}T${startT}:00`,
                     end: `${date}T${endT}:00`
                 })
             });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `Booking failed (${res.status})`);
+            }
             window.showModal("Booking created successfully!");
-            loadActiveBookings(); 
+            loadActiveBookings();
         } catch (err) {
-            window.showModal("Failed to create booking.");
+            window.showModal("Failed to create booking: " + (err.message || err));
         }
     });
 
     window.deleteBooking = async (bookingDocId) => {
+        if (!bookingDocId) return;
+        if (!window.confirm("Delete this booking? This cannot be undone.")) return;
         try {
-            await authenticatedFetch(`${API_BASE_URL}/bookings/${bookingDocId}`, { method: 'DELETE' });
+            const res = await authenticatedFetch(`${API_BASE_URL}/bookings/${encodeURIComponent(bookingDocId)}`, { method: 'DELETE' });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `Delete failed (${res.status})`);
+            }
             window.showModal("Booking deleted.");
-            loadActiveBookings(); 
+            loadActiveBookings();
         } catch (err) {
-            window.showModal("Failed to delete booking.");
+            window.showModal("Failed to delete booking: " + (err.message || err));
         }
     };
 
-    document.getElementById('importBtn')?.addEventListener('click', () => {
+    document.getElementById('importBtn')?.addEventListener('click', async () => {
         const file = document.getElementById('excelInput').files[0];
-        if (!file) return window.showModal("Select CSV.");
+        if (!file) return window.showModal("Choose the CSV file to import.");
+        if (!assignedSociety) return window.showModal("Your admin account is not assigned to a society yet.");
 
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            try {
-                const rows = e.target.result.split('\n').slice(1);
-                let addedCount = 0;
-                let skippedCount = 0;
+        const button = document.getElementById('importBtn');
+        if (button) button.disabled = true;
+        const report = document.getElementById('import-report');
+        if (report) report.innerHTML = "<p class='small' style='color: var(--ow-muted);'>Reading and importing…</p>";
 
-                for (const row of rows) {
-                    const c = row.split(',');
-                    if (c.length >= 2 && c[0].trim()) {
-                        const vNum = c[0].trim().toUpperCase();
-                        const fNum = c[1].trim();
-                        const rType = c[2] ? c[2].trim() : "Owner";
-                        const mNum = c[3] ? c[3].trim() : "";
-                        const vType = c[4] ? c[4].trim() : "2-Wheeler";
+        try {
+            const text = await readFileText(file);
+            const rows = parseVehicleCsv(text);
+            if (!rows.length) throw new Error("No vehicle rows found. The first line should be the header row.");
 
-                        const checkRes = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(vNum)}`);
-                        const existing = await checkRes.json();
+            clearVehicleSearchCache();
+            const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/import`, {
+                method: 'POST',
+                body: JSON.stringify({ society: assignedSociety, rows })
+            });
+            const summary = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(summary.error || `Import failed (${res.status})`);
 
-                        if (existing.length === 0) {
-                            await authenticatedFetch(`${API_BASE_URL}/vehicles`, {
-                                method: 'POST',
-                                body: JSON.stringify({
-                                    vehicleNumber: vNum,
-                                    flatNumber: fNum,
-                                    residentType: rType,
-                                    mobileNumber: mNum,
-                                    vehicleType: vType,
-                                    societyName: assignedSociety
-                                })
-                            });
-                            addedCount++;
-                        } else {
-                            skippedCount++;
-                        }
-                    }
-                }
-
-                window.showModal(`Import complete! Added: ${addedCount}, Omitted (already exists): ${skippedCount}`);
-            } catch (err) {
-                console.error("Bulk Import Error:", err);
-                window.showModal("Import failed: " + (err.message || err));
-            }
-        };
-        reader.readAsText(file);
+            renderImportReport(summary);
+            window.showModal(importHeadline(summary));
+            // Registry changed: refresh whatever the admin is looking at.
+            if (registryCache.size) refreshVehicleSearchResults();
+        } catch (err) {
+            if (report) report.innerHTML = "";
+            window.showModal("Import failed: " + (err.message || err));
+        } finally {
+            if (button) button.disabled = false;
+        }
     });
 
     document.getElementById('approveAdBtn')?.addEventListener('click', async () => {
@@ -933,46 +1313,52 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('bulkDeleteBtn')?.addEventListener('click', () => {
+    // --- Bulk delete from a CSV ---------------------------------------------
+    // The confirm button used to call window.confirmDelete, which nothing set
+    // unless this handler ran first, so the dialog's Confirm did nothing. Both
+    // entry points (the danger-zone button and the one under the CSV picker)
+    // now share one flow: confirm, post the plates once, then report.
+    async function runBulkVehicleDelete() {
         const file = document.getElementById('excelInput').files[0];
-        if (!file) return window.showModal("Please select a CSV file containing vehicles to delete.");
+        if (!file) return window.showModal("Choose the CSV file listing the vehicles to delete.");
+        if (!assignedSociety) return window.showModal("Your admin account is not assigned to a society yet.");
+        if (!window.confirm(`Delete every vehicle listed in "${file.name}" from ${assignedSociety}? This cannot be undone.`)) return;
 
-        window.showModal("Are you sure you want to delete the vehicles listed in the uploaded CSV? This cannot be undone.", true);
-        window.confirmDelete = async () => {
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                try {
-                    const rows = e.target.result.split('\n').slice(1);
-                    let deleteCount = 0;
-                    let notFoundCount = 0;
+        const button = document.getElementById('bulkDeleteTopBtn');
+        const report = document.getElementById('bulk-delete-report');
+        if (button) button.disabled = true;
+        if (report) report.innerHTML = "<p class='small' style='color: var(--ow-muted);'>Deleting the listed vehicles…</p>";
 
-                    for (const row of rows) {
-                        const c = row.split(',');
-                        if (c.length >= 1 && c[0].trim()) {
-                            const vNum = c[0].trim().toUpperCase();
-                            const res = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(vNum)}`);
-                            const vehicles = await res.json();
+        try {
+            const text = await readFileText(file);
+            const plates = parseVehiclePlateCsv(text);
+            if (!plates.length) throw new Error("No vehicle numbers found in the file.");
 
-                            if (vehicles.length > 0) {
-                                for (const v of vehicles) {
-                                    await authenticatedFetch(`${API_BASE_URL}/vehicles/${v.id}`, { method: 'DELETE' });
-                                    deleteCount++;
-                                }
-                            } else {
-                                notFoundCount++;
-                            }
-                        }
-                    }
+            const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/bulk-delete`, {
+                method: 'POST',
+                body: JSON.stringify({ society: assignedSociety, plates })
+            });
+            const summary = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(summary.error || `Bulk delete failed (${res.status})`);
 
-                    window.showModal(`Targeted Bulk Delete complete! Deleted: ${deleteCount}, Not Found: ${notFoundCount}`);
-                    window.closeModal();
-                    if (document.getElementById('admin-results')) document.getElementById('admin-results').innerHTML = "";
-                } catch (err) {
-                    console.error("Bulk Delete Error:", err);
-                    window.showModal("Bulk delete failed: " + (err.message || err));
-                }
-            };
-            reader.readAsText(file);
-        };
-    });
+            renderBulkDeleteReport(summary);
+            window.showModal(bulkDeleteHeadline(summary));
+            // The registry changed under any open search results.
+            const results = document.getElementById('admin-results');
+            if (results && registryCache.size) {
+                registryCache.clear();
+                if (document.getElementById('adminSearch').value.trim()) document.getElementById('adminSearchBtn')?.click();
+            }
+        } catch (err) {
+            if (report) report.innerHTML = "";
+            window.showModal("Bulk delete failed: " + (err.message || err));
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
+    document.getElementById('bulkDeleteTopBtn')?.addEventListener('click', runBulkVehicleDelete);
+    // The master-only danger-zone button keeps its original id and behaviour.
+    document.getElementById('bulkDeleteBtn')?.addEventListener('click', runBulkVehicleDelete);
+
 });

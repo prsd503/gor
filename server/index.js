@@ -56,6 +56,8 @@ const { createQuotaGuard } = require('./lib/quota-guard');
 const { readLimits, normalizeAction, normalizeSource } = require('./lib/quota-policy');
 const { createMonitoringUsageFetcher } = require('./lib/gcp-monitoring');
 const { createDbLayer } = require('./lib/db-layer');
+const { createVehicleImport } = require('./lib/vehicle-import');
+const { createVehicleBulkDelete } = require('./lib/vehicle-bulk-delete');
 const { createLocalStore, createFieldValue } = require('./lib/local-store');
 const { createMaintenance } = require('./lib/maintenance');
 
@@ -296,6 +298,8 @@ const requireAdminForSociety = identifier => authorization.requireSociety(['admi
 const requireStaffForSociety = identifier => authorization.requireSociety(['admin', 'guard'], identifier);
 
 const giftCodes = createGiftCodeService({ db, FieldValue });
+const vehicleImport = createVehicleImport({ db, FieldValue });
+const vehicleBulkDelete = createVehicleBulkDelete({ db });
 const maintenance = createMaintenance({ db, FieldValue, logger: console, timeZone: process.env.CRON_TIMEZONE, beforeRun: async () => {
     await quota.refresh();
     return !quota.isDraining();
@@ -391,6 +395,19 @@ async function getVehiclesForSociety(society, fresh = false) {
     return collectVehicleSnapshots(snapshots, society);
 }
 
+// Vehicle types accepted by the admin registry. The resident flow stays limited
+// to 2/4-wheelers, but the admin form has always offered 3-Wheeler, so the
+// registry must accept it rather than reject a valid admin edit.
+const VEHICLE_TYPES = ['2-Wheeler', '3-Wheeler', '4-Wheeler'];
+
+function normalizeVehicleType(value, fallback = '2-Wheeler') {
+    let vehicleType = String(value == null ? '' : value).trim();
+    if (/^2\s*-?\s*w(heeler)?$/i.test(vehicleType)) return '2-Wheeler';
+    if (/^3\s*-?\s*w(heeler)?$/i.test(vehicleType)) return '3-Wheeler';
+    if (/^4\s*-?\s*w(heeler)?$/i.test(vehicleType)) return '4-Wheeler';
+    return VEHICLE_TYPES.includes(vehicleType) ? vehicleType : fallback;
+}
+
 function lookupVariants(value) {
     const raw = String(value == null ? '' : value).trim();
     return [...new Set([raw, raw.toLowerCase(), raw.toUpperCase()].filter(Boolean))];
@@ -446,6 +463,56 @@ function recordMatchesSociety(data, docId, society) {
     const aliases = new Set(society.aliases.map(normalizeAuthValue));
     return aliases.has(normalizeAuthValue(docId)) ||
         [data && data.society, data && data.societyName].some(value => aliases.has(normalizeAuthValue(value)));
+}
+
+// Public contact projection: the WhatsApp number a resident should message to
+// reach the society administrator. This is published on purpose (it is the same
+// number the admin wants residents to call) and never exposes anything else from
+// the Firestore `admins` documents.
+function publicWhatsAppNumber(value) {
+    const digits = String(value == null ? '' : value).replace(/\D/g, '').slice(0, 15);
+    return digits.length >= 10 ? digits : null;
+}
+
+// A society's administrator record(s), looked up in `admins`. Records are keyed
+// by admin email and identify their society with `societyId`, `society` or
+// `societyName`; older documents may only store the display name.
+async function findSocietyAdminRecords(society) {
+    // `in` is case-sensitive, so both the document id and the display name are
+    // queried as written; duplicates are removed by exact value only.
+    const requested = [...new Set([society.id, society.name, ...society.aliases]
+        .map(alias => String(alias == null ? '' : alias).trim())
+        .filter(Boolean))].slice(0, 30);
+    const fields = ['societyId', 'societyName', 'society'];
+    const snapshots = await Promise.all(fields.map(field =>
+        db.collection('admins').where(field, 'in', requested).get().catch(() => null)));
+    const found = new Map();
+    for (const snapshot of snapshots) {
+        if (!snapshot) continue;
+        snapshot.forEach(doc => {
+            const data = doc.data() || {};
+            if (data.disabled === true || data.active === false) return;
+            if (!recordMatchesSociety(data, doc.id, society)) return;
+            found.set(doc.id, doc);
+        });
+    }
+    return [...found.values()];
+}
+
+function adminContactFor(records) {
+    const contacts = records.map(doc => {
+        const data = doc.data() || {};
+        return {
+            id: doc.id,
+            isMaster: data.isMaster === true,
+            phone: publicWhatsAppNumber(data.phone || data.whatsapp || data.whatsappNumber || data.mobile)
+        };
+    }).filter(contact => contact.phone);
+    if (!contacts.length) return null;
+    // A society-scoped administrator is the right first contact; the master
+    // account is only the fallback when it is the one that stores a number.
+    const chosen = contacts.find(contact => !contact.isMaster) || contacts[0];
+    return { phone: chosen.phone };
 }
 
 async function getSocietyDocument(collectionName, society) {
@@ -650,6 +717,19 @@ app.get('/api/admins', requireStaff, async (req, res) => {
             isMaster: membership.role === 'master'
         });
     } catch (_) { return res.status(503).json({ error: 'Authorization could not be verified.' }); }
+});
+
+// The signed-in administrator's own society, for pages such as the data
+// deletion request that need to name it. Works for any staff member (admin or
+// guard) and never reveals another member's society.
+app.get('/api/admins/me', requireStaff, async (req, res) => {
+    const membership = req.membership;
+    return res.set('Cache-Control', 'private, no-store').json({
+        email: membership.email,
+        society: membership.societyName || '',
+        societyId: membership.societyId || null,
+        isMaster: membership.role === 'master'
+    });
 });
 
 app.get('/api/admins/verify-society', requireStaff, async (req, res) => {
@@ -924,6 +1004,24 @@ app.get('/api/facilities/:societyIdentifier', async (req, res) => {
     } catch (_) { return res.status(503).json({ error: 'Facilities could not be loaded.' }); }
 });
 
+// The facility calendar's "contact the admin" button. Public on purpose: the
+// page is a guest/resident-facing calendar, and the only field returned is the
+// WhatsApp number of the society's administrator, projected from `admins`.
+app.get('/api/societies/:societyIdentifier/admin-contact', async (req, res) => {
+    try {
+        const society = await authorization.resolveSociety(req.params.societyIdentifier);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const records = await findSocietyAdminRecords(society);
+
+        const contact = adminContactFor(records);
+        return res.set('Cache-Control', 'public, max-age=60').json({
+            societyId: society.id,
+            society: society.name,
+            phone: contact ? contact.phone : null
+        });
+    } catch (_) { return res.status(503).json({ error: 'Admin contact could not be loaded.' }); }
+});
+
 app.get('/api/bookings', async (req, res) => {
     try {
         const requested = requestedSociety(req);
@@ -983,6 +1081,35 @@ app.get('/api/societies/:societyIdentifier/active-guard', async (req, res) => {
             activeGuardPhone: society.data.activeGuardPhone || null
         });
     } catch (_) { return res.status(503).json({ error: 'Society could not be loaded.' }); }
+});
+
+// Flat numbers registered for one society, used by the admin add/edit vehicle
+// form so a plate can only be attached to a real flat. Admin of that society
+// (or the master login) only.
+app.get('/api/societies/:societyIdentifier/flats', requireAdminForSociety(req => req.params.societyIdentifier), async (req, res) => {
+    try {
+        const society = req.authorizedSociety;
+        const flats = [...new Set(publicSociety(society).flatList.map(flat => String(flat).trim()).filter(Boolean))]
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+        const vehicles = await getVehiclesForSociety(society, true);
+        const counts = {};
+        for (const doc of vehicles) {
+            const data = doc.data() || {};
+            const flat = String(data.flatNumber || '').trim();
+            if (!flat) continue;
+            const entry = counts[flat] || (counts[flat] = { '2-Wheeler': 0, '4-Wheeler': 0, other: 0 });
+            if (data.vehicleType === '2-Wheeler' || data.vehicleType === '4-Wheeler') entry[data.vehicleType] += 1;
+            else entry.other += 1;
+        }
+        return res.set('Cache-Control', 'private, no-store').json({
+            societyId: society.id,
+            society: society.name,
+            flats,
+            max2Wheeler: Number.isInteger((society.data || {}).max2Wheeler) ? society.data.max2Wheeler : null,
+            max4Wheeler: Number.isInteger((society.data || {}).max4Wheeler) ? society.data.max4Wheeler : null,
+            counts
+        });
+    } catch (_) { return res.status(503).json({ error: 'Flat numbers could not be loaded.' }); }
 });
 
 app.get('/api/societies/:societyIdentifier', async (req, res) => {
@@ -1054,12 +1181,10 @@ app.post('/api/vehicles', async (req, res) => {
         }
         const requestedVehicles = vehiclesToProcess
             .filter(vehicle => vehicle && String(vehicle.vehicleNumber || '').trim())
-            .map(vehicle => {
-                let vehicleType = String(vehicle.vehicleType || '2-Wheeler').trim();
-                if (/^2w$/i.test(vehicleType)) vehicleType = '2-Wheeler';
-                if (/^4w$/i.test(vehicleType)) vehicleType = '4-Wheeler';
-                return { vehicleNumber: String(vehicle.vehicleNumber).trim().toUpperCase(), vehicleType };
-            });
+            .map(vehicle => ({
+                vehicleNumber: String(vehicle.vehicleNumber).trim().toUpperCase(),
+                vehicleType: normalizeVehicleType(vehicle.vehicleType)
+            }));
         if (!requestedVehicles.length) return res.status(400).json({ error: 'At least one vehicle number is required.' });
         if (requestedVehicles.length > 12) return res.status(400).json({ error: 'Too many vehicles in one request.' });
         if (docId && requestedVehicles.length !== 1) return res.status(400).json({ error: 'Exactly one vehicle is required when editing.' });
@@ -1080,8 +1205,9 @@ app.post('/api/vehicles', async (req, res) => {
             return res.status(400).json({ error: 'Resident type must be Owner or Tenant.' });
         }
         for (const vehicle of requestedVehicles) {
-            if (!['2-Wheeler', '4-Wheeler'].includes(vehicle.vehicleType)) {
-                return res.status(400).json({ error: 'Vehicle type must be 2-Wheeler or 4-Wheeler.' });
+            const allowedTypes = isResident ? ['2-Wheeler', '4-Wheeler'] : VEHICLE_TYPES;
+            if (!allowedTypes.includes(vehicle.vehicleType)) {
+                return res.status(400).json({ error: `Vehicle type must be ${allowedTypes.join(' or ')}.` });
             }
             if (isResident && !/^[A-Z0-9]{10}$/.test(vehicle.vehicleNumber)) {
                 return res.status(400).json({ error: 'Vehicle number must contain exactly 10 letters or digits.' });
@@ -1149,17 +1275,32 @@ app.post('/api/vehicles', async (req, res) => {
                 if (duplicate) fail(409, 'This vehicle number is already registered in this society.');
             }
 
-            if (isResident) {
-                const counts = { '2-Wheeler': 0, '4-Wheeler': 0 };
-                for (const row of rows) {
-                    if (normalizeAuthValue(row.data.flatNumber) === normalizeAuthValue(flatNumber) &&
-                        Object.hasOwn(counts, row.data.vehicleType)) counts[row.data.vehicleType] += 1;
-                }
-                const limit = type => Number.isInteger(societyData[type]) && societyData[type] >= 0 ? societyData[type] : 0;
+            // Per-flat allowance from societies/:id, applied to admin edits as well
+            // as resident registrations. A society that has never set a limit keeps
+            // the historical defaults (1 four-wheeler, 2 two-wheelers); a configured
+            // 0 is deliberate and still blocks every new vehicle of that type.
+            const limit = type => Number.isInteger(societyData[type]) && societyData[type] >= 0
+                ? societyData[type]
+                : (type === 'max4Wheeler' ? 1 : 2);
+            const counts = { '2-Wheeler': 0, '4-Wheeler': 0 };
+            for (const row of rows) {
+                if (normalizeAuthValue(row.data.flatNumber) === normalizeAuthValue(flatNumber) &&
+                    Object.hasOwn(counts, row.data.vehicleType)) counts[row.data.vehicleType] += 1;
+            }
+            // An edit that leaves the type/vehicle/plate unchanged must never be
+            // blocked by a flat that is already at its allowance.
+            const keepsExistingSlot = Boolean(oldData) && requestedVehicles.length === 1 &&
+                oldData.vehicleType === requestedVehicles[0].vehicleType &&
+                normalizeAuthValue(oldData.flatNumber) === normalizeAuthValue(flatNumber) &&
+                String(oldData.vehicleNumber || '').toUpperCase() === requestedVehicles[0].vehicleNumber;
+            if (!keepsExistingSlot) {
                 for (const vehicle of requestedVehicles) {
+                    if (!Object.hasOwn(counts, vehicle.vehicleType)) continue;
                     counts[vehicle.vehicleType] += 1;
                     const max = limit(vehicle.vehicleType === '2-Wheeler' ? 'max2Wheeler' : 'max4Wheeler');
-                    if (counts[vehicle.vehicleType] > max) fail(409, `Vehicle limit reached for this flat (${vehicle.vehicleType}).`);
+                    if (counts[vehicle.vehicleType] > max) {
+                        fail(409, `This flat already has ${max} ${vehicle.vehicleType}(s), the allowance in ${society.name}. Increase the limit under vehicle allowance limits first.`, 'vehicle-limit-reached');
+                    }
                 }
             }
 
@@ -1201,6 +1342,39 @@ app.post('/api/vehicles', async (req, res) => {
         if (err && Number.isInteger(err.status)) return res.status(err.status).json({ error: err.message, code: err.code });
         console.error('Vehicle API Error:', err);
         return res.status(500).json({ error: 'Could not register the vehicle.' });
+    }
+});
+
+// Bulk import for one society. Rows are validated first; existing plates are
+// updated only when something changed, identical rows are reported as repeats,
+// and nothing is written for rows that fail validation. The response is the
+// per-row report the admin portal shows.
+app.post('/api/vehicles/import', requireAdminForSociety(req => requestedSociety(req)), async (req, res) => {
+    try {
+        const rows = req.body && req.body.rows;
+        if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows must be an array of vehicle records.' });
+        if (!rows.length) return res.status(400).json({ error: 'The uploaded file has no vehicle rows.' });
+        const summary = await vehicleImport.run(req.authorizedSociety, rows);
+        return res.set('Cache-Control', 'no-store').json({ success: true, society: req.authorizedSociety.name, ...summary });
+    } catch (err) {
+        console.error('Vehicle import error:', err);
+        return res.status(500).json({ error: 'Could not import the vehicle file.' });
+    }
+});
+
+// Bulk delete for one society: plates from an uploaded CSV. Only this
+// society's documents can match, and the response reports per plate whether it
+// was deleted or not found. Admin (including master) only.
+app.post('/api/vehicles/bulk-delete', requireAdminForSociety(req => requestedSociety(req)), async (req, res) => {
+    try {
+        const plates = req.body && req.body.plates;
+        if (!Array.isArray(plates)) return res.status(400).json({ error: 'plates must be an array of vehicle numbers.' });
+        if (!plates.length) return res.status(400).json({ error: 'The uploaded file has no vehicle numbers.' });
+        const summary = await vehicleBulkDelete.run(req.authorizedSociety, plates);
+        return res.set('Cache-Control', 'no-store').json({ success: true, society: req.authorizedSociety.name, ...summary });
+    } catch (err) {
+        console.error('Vehicle bulk delete error:', err);
+        return res.status(500).json({ error: 'Could not delete the vehicles in that file.' });
     }
 });
 
@@ -1335,6 +1509,10 @@ app.get('/api/contest/winners', async (req, res) => {
     } catch (_) { return res.status(503).json({ error: 'Contest results could not be loaded.' }); }
 });
 
+// Master login: society spin counts. Spin documents are keyed
+// `<society>_<date>`, so the lifetime/month totals come from every document for
+// that society rather than from today's one - which is what made "Total
+// Lifetime Spins" and "Spins This Month" wrong (they showed today's count and 0).
 app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
     try {
         const requested = String(req.query.societyName || req.query.society || '').trim();
@@ -1342,18 +1520,43 @@ app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
         const society = await authorization.resolveSociety(requested);
         if (!society) return res.status(404).json({ error: 'Society not found.' });
         const today = utcDate();
-        const statDoc = await db.collection('spinStats').doc(`${normalizeAuthValue(society.name)}_${today}`).get();
-        const data = statDoc.exists ? statDoc.data() || {} : {};
+        const prefix = `${normalizeAuthValue(society.name)}_`;
+        let stats = [];
+        try {
+            const snapshot = await db.collection('spinStats')
+                .where('societyId', '==', society.id).get();
+            stats = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() || {} }));
+        } catch (_) { stats = []; }
+        const belongs = entry => entry.data.societyId === society.id ||
+            String(entry.id).startsWith(prefix) ||
+            normalizeAuthValue(entry.data.societyName) === normalizeAuthValue(society.name);
+        const dayOf = entry => String(entry.data.date || String(entry.id).slice(prefix.length) || '');
+        let lifetime = 0;
+        let todaySpins = 0;
+        let monthSpins = 0;
+        const month = today.slice(0, 7);
+        for (const entry of stats) {
+            if (!belongs(entry)) continue;
+            const count = Number(entry.data.spinCount) || 0;
+            const date = dayOf(entry);
+            lifetime += count;
+            if (date === today) todaySpins = Math.max(todaySpins, count);
+            if (date.slice(0, 7) === month) monthSpins += count;
+        }
         const snapshot = await db.collection('winners').where('societyId', '==', society.id).get();
-        const winners = snapshot.docs.map(doc => doc.data() || []).sort((a, b) => {
+        const winners = snapshot.docs.map(doc => doc.data() || {}).sort((a, b) => {
             const time = value => value && typeof value.toMillis === 'function' ? value.toMillis() : new Date(value || 0).getTime();
             return time(b.createdAt) - time(a.createdAt);
         });
         const winnerFlat = winners.length ? (winners[0].flatNumber || winners[0].winnerFlatnumber || 'None yet') : 'None yet';
-        const spinCount = Number(data.spinCount) || 0;
-        return res.json({
-            societyName: society.name, totalSpins: spinCount, totalDaySpins: spinCount,
-            totalMonthSpins: 0, winnerFlat
+        return res.set('Cache-Control', 'no-store').json({
+            societyName: society.name,
+            totalSpins: lifetime,
+            totalLifetimeSpins: lifetime,
+            totalDaySpins: todaySpins,
+            totalMonthSpins: monthSpins,
+            daysRecorded: stats.filter(belongs).length,
+            winnerFlat
         });
     } catch (_) { return res.status(503).json({ error: 'Spin statistics could not be loaded.' }); }
 });
@@ -1479,8 +1682,8 @@ app.post('/api/bookings', requireAdminForSociety(req => requestedSociety(req)), 
         }
         const startDate = new Date(start);
         const endDate = new Date(end || start);
-        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate < startDate) {
-            return res.status(400).json({ error: 'Invalid booking date range.' });
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate <= startDate) {
+            return res.status(400).json({ error: 'Invalid booking date range: the end time must be after the start time.' });
         }
         const society = req.authorizedSociety;
         await db.collection('bookings').add({
