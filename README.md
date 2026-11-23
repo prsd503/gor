@@ -133,3 +133,23 @@ admin/resident/guard use still needs society-level authorization work; see the
 Use trusted custom admin claims or explicit global staff `ADMIN_UIDS`. Old backend
 JWTs without the new authorization-version marker lose admin privileges; authorized
 staff must obtain a new session. No production users or claims are changed automatically.
+
+## Bulk vehicle import (admin portal)
+
+Admin → *Bulk vehicle management* accepts a CSV with the columns
+`VehicleNumber, FlatNumber/Name, ResidentType, MobileNumber, VehicleType`
+(the downloaded template uses this order; a header row in any order also works,
+as do quoted fields and CRLF line endings).
+
+Uploads go to `POST /api/vehicles/import` **for the signed-in admin's society**
+and are validated before anything is written:
+
+| Outcome | Meaning |
+| --- | --- |
+| Added | plate was not in this society |
+| Updated | plate existed and the row changes one of its details |
+| Duplicates skipped | identical to what is stored, or the same plate twice in the file |
+| Rejected | missing plate/flat, unknown flat, bad resident type, bad mobile, or a device-linked vehicle asked to move flat |
+
+The page lists every row with its outcome, so the admin sees exactly what
+changed and what was ignored. Re-uploading the same file changes nothing.

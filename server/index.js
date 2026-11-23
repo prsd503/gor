@@ -56,6 +56,7 @@ const { createQuotaGuard } = require('./lib/quota-guard');
 const { readLimits, normalizeAction, normalizeSource } = require('./lib/quota-policy');
 const { createMonitoringUsageFetcher } = require('./lib/gcp-monitoring');
 const { createDbLayer } = require('./lib/db-layer');
+const { createVehicleImport } = require('./lib/vehicle-import');
 const { createLocalStore, createFieldValue } = require('./lib/local-store');
 const { createMaintenance } = require('./lib/maintenance');
 
@@ -296,6 +297,7 @@ const requireAdminForSociety = identifier => authorization.requireSociety(['admi
 const requireStaffForSociety = identifier => authorization.requireSociety(['admin', 'guard'], identifier);
 
 const giftCodes = createGiftCodeService({ db, FieldValue });
+const vehicleImport = createVehicleImport({ db, FieldValue });
 const maintenance = createMaintenance({ db, FieldValue, logger: console, timeZone: process.env.CRON_TIMEZONE, beforeRun: async () => {
     await quota.refresh();
     return !quota.isDraining();
@@ -1294,6 +1296,23 @@ app.post('/api/vehicles', async (req, res) => {
         if (err && Number.isInteger(err.status)) return res.status(err.status).json({ error: err.message, code: err.code });
         console.error('Vehicle API Error:', err);
         return res.status(500).json({ error: 'Could not register the vehicle.' });
+    }
+});
+
+// Bulk import for one society. Rows are validated first; existing plates are
+// updated only when something changed, identical rows are reported as repeats,
+// and nothing is written for rows that fail validation. The response is the
+// per-row report the admin portal shows.
+app.post('/api/vehicles/import', requireAdminForSociety(req => requestedSociety(req)), async (req, res) => {
+    try {
+        const rows = req.body && req.body.rows;
+        if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows must be an array of vehicle records.' });
+        if (!rows.length) return res.status(400).json({ error: 'The uploaded file has no vehicle rows.' });
+        const summary = await vehicleImport.run(req.authorizedSociety, rows);
+        return res.set('Cache-Control', 'no-store').json({ success: true, society: req.authorizedSociety.name, ...summary });
+    } catch (err) {
+        console.error('Vehicle import error:', err);
+        return res.status(500).json({ error: 'Could not import the vehicle file.' });
     }
 });
 

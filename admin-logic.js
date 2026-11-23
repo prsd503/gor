@@ -519,7 +519,9 @@ function getSelectedTimeString(idPrefix) {
 }
 
 document.getElementById('downloadTemplateBtn')?.addEventListener('click', () => {
-    const csvContent = "VehicleNumber,FlatNumber/Name,ResidentType,MobileNumber,VehicleType\nKA01AB1234,101,Owner,9876543210,2W\n";
+    const csvContent = "VehicleNumber,FlatNumber/Name,ResidentType,MobileNumber,VehicleType\n" +
+        "GJ01AB1234,A1-101,Owner,9876543210,2-Wheeler\n" +
+        "GJ01CD5678,A1-101,Tenant,9812345678,4-Wheeler\n";
     window.downloadCSV(csvContent, "vehicle_template.csv");
 });
 
@@ -605,10 +607,129 @@ async function loadActiveBookings() {
     }
 }
 
+// --- Bulk vehicle import ---------------------------------------------------
+// A small RFC-4180-ish CSV reader: quoted fields, escaped quotes, CRLF or LF
+// line endings, and an optional header row in any column order. The browser
+// parses the file; the API validates and writes it per society.
+function parseCsvText(text) {
+    const rows = [];
+    let row = [];
+    let field = '';
+    let quoted = false;
+    const source = String(text || '').replace(/^\uFEFF/, '');
+    for (let i = 0; i < source.length; i++) {
+        const char = source[i];
+        if (quoted) {
+            if (char === '"') {
+                if (source[i + 1] === '"') { field += '"'; i++; }
+                else quoted = false;
+            } else field += char;
+            continue;
+        }
+        if (char === '"') { quoted = true; continue; }
+        if (char === ',') { row.push(field); field = ''; continue; }
+        if (char === '\r') continue;
+        if (char === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
+        field += char;
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows.filter(cells => cells.some(cell => String(cell).trim() !== ''));
+}
+
+const IMPORT_COLUMNS = {
+    vehicleNumber: ['vehiclenumber', 'vehicle no', 'vehicle_no', 'plate', 'platenumber', 'registrationnumber', 'vehicle'],
+    flatNumber: ['flatnumber/name', 'flatnumber', 'flat no', 'flat_no', 'flat', 'flatname'],
+    residentType: ['residenttype', 'resident', 'occupancy'],
+    mobileNumber: ['mobilenumber', 'mobile', 'mobile no', 'phone', 'contact'],
+    vehicleType: ['vehicletype', 'vehicle type', 'wheeler', 'category']
+};
+
+function columnKey(header) {
+    const value = String(header == null ? '' : header).trim().toLowerCase().replace(/\s+/g, ' ');
+    for (const [key, aliases] of Object.entries(IMPORT_COLUMNS)) {
+        if (aliases.includes(value)) return key;
+    }
+    return null;
+}
+
+// Returns objects keyed by field name so the API never depends on column order.
+function parseVehicleCsv(text) {
+    const table = parseCsvText(text);
+    if (!table.length) return [];
+    const first = table[0].map(cell => String(cell).trim());
+    const mapped = first.map(columnKey);
+    const hasHeader = mapped.includes('vehicleNumber');
+    const columns = hasHeader ? mapped : ['vehicleNumber', 'flatNumber', 'residentType', 'mobileNumber', 'vehicleType'];
+    const dataRows = hasHeader ? table.slice(1) : table;
+    return dataRows.map(cells => {
+        const row = {};
+        columns.forEach((key, index) => {
+            if (!key) return;
+            row[key] = cells[index] === undefined ? '' : String(cells[index]).trim();
+        });
+        return row;
+    }).filter(row => Object.values(row).some(value => String(value).trim() !== ''));
+}
+
+function importHeadline(summary) {
+    const party = `Added ${summary.added || 0}, updated ${summary.updated || 0}, duplicates skipped ${summary.repeat || 0}, rejected ${summary.rejected || 0}`;
+    return `${summary.society ? summary.society + ': ' : ''}import complete. ${party} of ${summary.total || 0} row(s).`;
+}
+
+function renderImportReport(summary) {
+    const report = document.getElementById('import-report');
+    if (!report) return;
+    const changes = Array.isArray(summary.changes) ? summary.changes : [];
+    const errors = Array.isArray(summary.errors) ? summary.errors : [];
+    const chip = (cls, text) => `<span class="import-chip ${cls}">${escapeText(text)}</span>`;
+    const list = changes.slice(0, 200).map(change => {
+        const verb = change.action === 'added' ? 'Added' : change.action === 'updated' ? 'Updated' : 'Skipped (duplicate)';
+        return `<li><b>${escapeText(change.plate)}</b> — ${verb}${change.flat ? ` · flat ${escapeText(change.flat)}` : ''}${change.reason ? ` <span class="import-reason">(${escapeText(change.reason)})</span>` : ''}</li>`;
+    }).join('');
+    const errorList = errors.slice(0, 200).map(error =>
+        `<li><b>${escapeText(error.plate || `line ${error.line}`)}</b> <span class="import-reason">— ${escapeText(error.reason)}</span></li>`).join('');
+    report.innerHTML = `
+        <div class="import-summary">
+            ${chip('is-added', `Added ${summary.added || 0}`)}
+            ${chip('is-updated', `Updated ${summary.updated || 0}`)}
+            ${chip('is-repeat', `Duplicates skipped ${summary.repeat || 0}`)}
+            ${chip('is-rejected', `Rejected ${summary.rejected || 0}`)}
+            ${chip('', `Rows ${summary.total || 0}`)}
+        </div>
+        ${summary.truncated ? '<p class="small" style="color: var(--ow-danger);">Only the first 2000 rows were imported.</p>' : ''}
+        ${changes.length ? `<h4>Per-vehicle result</h4><ul class="import-list">${list}</ul>` : ''}
+        ${errors.length ? `<h4>Rejected rows</h4><ul class="import-list">${errorList}</ul>` : ''}
+    `;
+}
+
+// FileReader rather than File.text(): the older WebView inside the native app
+// has no File.text(), and the reader works everywhere.
+function readFileText(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = event => resolve(String(event.target.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('The file could not be read.'));
+        reader.readAsText(file);
+    });
+}
+
+// The search results are rebuilt after an import so the admin sees new data.
+function clearVehicleSearchCache() {
+    registryCache.clear();
+}
+
+async function refreshVehicleSearchResults() {
+    const input = document.getElementById('adminSearch');
+    if (input && input.value.trim()) document.getElementById('adminSearchBtn')?.click();
+}
+
 // Exposed for the page's own handlers and for tests.
 window.OwAdminBookings = {
     renderActiveBookings, loadActiveBookings, isExpiredBooking,
     formatBookingTime, BOOKING_RETENTION_DAYS
+};
+window.OwAdminVehicles = {
+    parseCsvText, parseVehicleCsv, renderImportReport, importHeadline
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1014,55 +1135,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    document.getElementById('importBtn')?.addEventListener('click', () => {
+    document.getElementById('importBtn')?.addEventListener('click', async () => {
         const file = document.getElementById('excelInput').files[0];
-        if (!file) return window.showModal("Select CSV.");
+        if (!file) return window.showModal("Choose the CSV file to import.");
+        if (!assignedSociety) return window.showModal("Your admin account is not assigned to a society yet.");
 
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            try {
-                const rows = e.target.result.split('\n').slice(1);
-                let addedCount = 0;
-                let skippedCount = 0;
+        const button = document.getElementById('importBtn');
+        if (button) button.disabled = true;
+        const report = document.getElementById('import-report');
+        if (report) report.innerHTML = "<p class='small' style='color: var(--ow-muted);'>Reading and importing…</p>";
 
-                for (const row of rows) {
-                    const c = row.split(',');
-                    if (c.length >= 2 && c[0].trim()) {
-                        const vNum = c[0].trim().toUpperCase();
-                        const fNum = c[1].trim();
-                        const rType = c[2] ? c[2].trim() : "Owner";
-                        const mNum = c[3] ? c[3].trim() : "";
-                        const vType = c[4] ? c[4].trim() : "2-Wheeler";
+        try {
+            const text = await readFileText(file);
+            const rows = parseVehicleCsv(text);
+            if (!rows.length) throw new Error("No vehicle rows found. The first line should be the header row.");
 
-                        const checkRes = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(vNum)}`);
-                        const existing = await checkRes.json();
+            clearVehicleSearchCache();
+            const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/import`, {
+                method: 'POST',
+                body: JSON.stringify({ society: assignedSociety, rows })
+            });
+            const summary = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(summary.error || `Import failed (${res.status})`);
 
-                        if (existing.length === 0) {
-                            await authenticatedFetch(`${API_BASE_URL}/vehicles`, {
-                                method: 'POST',
-                                body: JSON.stringify({
-                                    vehicleNumber: vNum,
-                                    flatNumber: fNum,
-                                    residentType: rType,
-                                    mobileNumber: mNum,
-                                    vehicleType: vType,
-                                    societyName: assignedSociety
-                                })
-                            });
-                            addedCount++;
-                        } else {
-                            skippedCount++;
-                        }
-                    }
-                }
-
-                window.showModal(`Import complete! Added: ${addedCount}, Omitted (already exists): ${skippedCount}`);
-            } catch (err) {
-                console.error("Bulk Import Error:", err);
-                window.showModal("Import failed: " + (err.message || err));
-            }
-        };
-        reader.readAsText(file);
+            renderImportReport(summary);
+            window.showModal(importHeadline(summary));
+            // Registry changed: refresh whatever the admin is looking at.
+            if (registryCache.size) refreshVehicleSearchResults();
+        } catch (err) {
+            if (report) report.innerHTML = "";
+            window.showModal("Import failed: " + (err.message || err));
+        } finally {
+            if (button) button.disabled = false;
+        }
     });
 
     document.getElementById('approveAdBtn')?.addEventListener('click', async () => {

@@ -122,6 +122,21 @@ Without query parameters it returns the full normalized policy. Invalid platform
 
 `update-popup.js` now calls this endpoint first and falls back to the direct Firestore read if the API is unreachable, so the popup keeps working during an API outage.
 
+## Bulk vehicle import (admin portal)
+
+```
+POST /api/vehicles/import      (admin token, society-scoped)
+{ "society": "Aangan", "rows": [{ "vehicleNumber", "flatNumber", "residentType", "mobileNumber", "vehicleType" }] }
+```
+
+Validates the whole file first, then writes in batches of 400. Existing plates
+are updated only when a field actually changes; identical rows and repeated
+plates in the same file are counted as `repeat`; rows with an unknown flat, a
+missing plate, a bad resident type/mobile, or a device-linked vehicle asked to
+change flat are counted as `rejected` with a reason. The response is the report
+the admin portal renders: `{ total, added, updated, repeat, rejected, changes[], errors[] }`.
+Up to 2000 rows per request.
+
 ## Facility bookings (admin portal)
 
 - `GET /api/bookings?society=<society>` returns `{ id, facilityId, start, end }`
