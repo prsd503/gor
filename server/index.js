@@ -408,6 +408,62 @@ function normalizeVehicleType(value, fallback = '2-Wheeler') {
     return VEHICLE_TYPES.includes(vehicleType) ? vehicleType : fallback;
 }
 
+// Normalises every accepted vehicle payload shape into [{ vehicleNumber, vehicleType }].
+//   { vehicleNumber, vehicleType }            one vehicle
+//   { vehicles: [{ vehicleNumber, ... }] }    array of objects
+//   { vehicles: ['GJ01AB1234', ...] }         array of plates
+//   { vehicles: '["GJ01AB1234"]' }            JSON or comma-separated string
+// Object keys may also be plate / vehicle_no / number / regNumber, and an entry
+// may itself be a bare string. Without this, an array of plates or of `plate`
+// objects was filtered away and the caller was told no vehicle number was sent.
+function parseVehiclePayload(body) {
+    const fieldNames = ['vehicleNumber', 'vehicle_no', 'vehicleNo', 'plate', 'number', 'regNumber'];
+    const toEntry = value => {
+        if (typeof value === 'string' || typeof value === 'number') {
+            return String(value).trim() === '' ? null : { vehicleNumber: String(value), vehicleType: '2-Wheeler' };
+        }
+        if (!value || typeof value !== 'object') return null;
+        const key = fieldNames.find(name => String(value[name] == null ? '' : value[name]).trim());
+        if (!key) return null;
+        return { vehicleNumber: String(value[key]), vehicleType: value.vehicleType || value.type || '2-Wheeler' };
+    };
+    const fromList = list => list.map(toEntry).filter(Boolean);
+
+    let raw = body && body.vehicles;
+    if (typeof raw === 'string') {
+        const text = raw.trim();
+        if (!text) raw = [];
+        else {
+            try {
+                const parsed = JSON.parse(text);
+                raw = Array.isArray(parsed) ? parsed : [parsed];
+            } catch (_) {
+                raw = text.split(',').map(part => part.trim()).filter(Boolean);
+            }
+        }
+    }
+    if (raw && !Array.isArray(raw) && typeof raw === 'object') raw = [raw];
+    let entries = Array.isArray(raw) ? fromList(raw) : [];
+
+    // Single-vehicle fields on the body itself, used when `vehicles` is absent.
+    if (!entries.length && body) {
+        const single = toEntry(body);
+        if (single) entries = [single];
+    }
+
+    const seen = new Set();
+    return entries
+        .map(entry => ({
+            vehicleNumber: String(entry.vehicleNumber).trim().toUpperCase(),
+            vehicleType: normalizeVehicleType(entry.vehicleType)
+        }))
+        .filter(vehicle => {
+            if (!vehicle.vehicleNumber || seen.has(vehicle.vehicleNumber)) return false;
+            seen.add(vehicle.vehicleNumber);
+            return true;
+        });
+}
+
 function lookupVariants(value) {
     const raw = String(value == null ? '' : value).trim();
     return [...new Set([raw, raw.toLowerCase(), raw.toUpperCase()].filter(Boolean))];
@@ -1245,25 +1301,16 @@ app.post('/api/vehicles', async (req, res) => {
         if (docId && !staff) {
             return res.status(403).json({ error: 'Editing a vehicle requires a society administrator.', code: 'role-forbidden' });
         }
-        if (docId && (body.vehicles && (Array.isArray(body.vehicles) ? body.vehicles.length : 1) !== 1)) {
+        if (docId && parseVehiclePayload(body).length !== 1) {
+            // Editing writes one document, so exactly one plate must be supplied in
+            // whatever shape the caller used (object, array or JSON string).
             return res.status(400).json({ error: 'Exactly one vehicle is required when editing.' });
         }
 
-        let vehiclesToProcess = [];
-        if (Array.isArray(body.vehicles)) vehiclesToProcess = body.vehicles;
-        else if (typeof body.vehicles === 'string') {
-            try { vehiclesToProcess = JSON.parse(body.vehicles); } catch (_) { vehiclesToProcess = []; }
+        const requestedVehicles = parseVehiclePayload(body);
+        if (!requestedVehicles.length) {
+            return res.status(400).json({ error: 'At least one vehicle number is required.', code: 'vehicle-number-required' });
         }
-        if (vehiclesToProcess.length === 0 && body.vehicleNumber) {
-            vehiclesToProcess = [{ vehicleNumber: body.vehicleNumber, vehicleType: body.vehicleType || '2-Wheeler' }];
-        }
-        const requestedVehicles = vehiclesToProcess
-            .filter(vehicle => vehicle && String(vehicle.vehicleNumber || '').trim())
-            .map(vehicle => ({
-                vehicleNumber: String(vehicle.vehicleNumber).trim().toUpperCase(),
-                vehicleType: normalizeVehicleType(vehicle.vehicleType)
-            }));
-        if (!requestedVehicles.length) return res.status(400).json({ error: 'At least one vehicle number is required.' });
         if (requestedVehicles.length > 12) return res.status(400).json({ error: 'Too many vehicles in one request.' });
         if (docId && requestedVehicles.length !== 1) return res.status(400).json({ error: 'Exactly one vehicle is required when editing.' });
 

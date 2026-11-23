@@ -115,6 +115,17 @@
             return { ...NG_HEADERS };
         }
 
+        // The submit button only appears once a plate is actually typed, so a form
+        // with no vehicle fields (no allowance left) cannot be submitted by pressing
+        // Enter in the mobile-number box.
+        function syncSubmitState() {
+            const submitBtn = document.getElementById('submitBtn');
+            if (!submitBtn) return;
+            const inputs = [...document.querySelectorAll('.dynamic-vehicle-input')];
+            const typed = inputs.some(input => input.value.trim().length > 0);
+            submitBtn.style.display = inputs.length && typed ? 'inline-block' : 'none';
+        }
+
         const modal = document.getElementById("resultModal");
         function showModal(msg) {
             document.getElementById("modalMessage").innerHTML = msg;
@@ -274,8 +285,14 @@
                             return;
                         }
 
-                        const max2W = currentSocietyData ? (currentSocietyData.max2Wheeler || 0) : 0;
-                        const max4W = currentSocietyData ? (currentSocietyData.max4Wheeler || 0) : 0;
+                        // A society that has never configured limits gets the server's
+                        // defaults (1 four-wheeler, 2 two-wheelers). Falling back to 0
+                        // produced no input fields at all, and submitting that empty
+                        // form said "fill at least one vehicle number".
+                        const max2W = currentSocietyData && Number.isInteger(currentSocietyData.max2Wheeler)
+                            ? currentSocietyData.max2Wheeler : 2;
+                        const max4W = currentSocietyData && Number.isInteger(currentSocietyData.max4Wheeler)
+                            ? currentSocietyData.max4Wheeler : 1;
                         const totalAllowed = max2W + max4W;
 
                         const registered2WCount = registrationSummary
@@ -331,7 +348,7 @@
                                 `;
                             }
 
-                            submitBtn.style.display = 'inline-block';
+                            // syncSubmitState() decides visibility once the fields exist.
                         } else {
                             restrictionNote.style.display = 'block';
                             restrictionNote.innerText = `✅ All allowed vehicles (${totalAllowed}/${totalAllowed}) have been filled for this flat.`;
@@ -344,8 +361,10 @@
                         document.querySelectorAll('.dynamic-vehicle-input').forEach(input => {
                             input.addEventListener("input", (event) => {
                                 event.target.value = event.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10);
+                                syncSubmitState();
                             });
                         });
+                        syncSubmitState();
 
                     } catch (err) {
                         console.error("Error loading flat vehicle records:", err);
@@ -368,29 +387,26 @@
                     }
 
                     let vehiclesToSubmit = [];
-                    let isValid = true;
+                    const shortNumbers = [];
 
                     vehicleInputs.forEach(input => {
                         const val = input.value.trim();
-                        if (val) {
-                            if (val.length !== 10) {
-                                isValid = false;
-                            } else {
-                                vehiclesToSubmit.push({
-                                    vehicleNumber: val,
-                                    vehicleType: input.dataset.type
-                                });
-                            }
-                        }
+                        if (!val) return;                       // blank boxes are optional
+                        if (val.length !== 10) shortNumbers.push(val);
+                        else vehiclesToSubmit.push({ vehicleNumber: val, vehicleType: input.dataset.type });
                     });
 
-                    if (!isValid) {
-                        showModal("⚠️ Any entered vehicle number must be exactly 10 characters long.");
+                    if (shortNumbers.length) {
+                        showModal(`⚠️ ${shortNumbers.map(v => `<b>${v}</b>`).join(', ')} ${shortNumbers.length > 1 ? 'are' : 'is'} not a valid vehicle number. Enter the full 10 characters, e.g. GJ01AB1234.`);
                         return;
                     }
 
-                    if (vehiclesToSubmit.length === 0) {
-                        showModal("⚠️ Please fill at least one vehicle number.");
+                    if (!vehiclesToSubmit.length) {
+                        // Nothing typed: say why, rather than implying an entry was lost.
+                        const fieldCount = document.querySelectorAll('.dynamic-vehicle-input').length;
+                        showModal(fieldCount === 0
+                            ? "⚠️ This flat has no vehicle allowance left, so there is nothing to add. Ask your society admin to raise the limit for your flat."
+                            : "⚠️ Please enter at least one vehicle number before submitting.");
                         return;
                     }
 
@@ -436,7 +452,11 @@
                             setTimeout(() => window.location.reload(), 1500);
                         } else {
                             const errData = await response.json();
-                            showModal(`❌ Error: ${errData.error || errData.message || 'Submission failed'}`);
+                            if (errData.code === 'vehicle-number-required') {
+                                showModal("⚠️ Please enter at least one vehicle number before submitting.");
+                            } else {
+                                showModal(`❌ Error: ${errData.error || errData.message || 'Submission failed'}`);
+                            }
                             submitBtn.disabled = false;
                             submitBtn.innerText = "Submit Entry";
                         }
