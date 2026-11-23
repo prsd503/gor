@@ -122,6 +122,20 @@ Without query parameters it returns the full normalized policy. Invalid platform
 
 `update-popup.js` now calls this endpoint first and falls back to the direct Firestore read if the API is unreachable, so the popup keeps working during an API outage.
 
+## Facility bookings (admin portal)
+
+- `GET /api/bookings?society=<society>` returns `{ id, facilityId, start, end }`
+  for the society; the admin portal joins `facilityId` with
+  `GET /api/facilities/:society` to show the facility name, date and start/end
+  times, sorted soonest first, each with a delete action.
+- `POST /api/bookings` rejects a range where the end is not after the start
+  (`400 Invalid booking date range`), and bookings may only be made from today
+  up to 6 months ahead.
+- `DELETE /api/bookings/:id` is limited to admins of that booking's society.
+- Bookings older than **7 days** are deleted automatically by the scheduled
+  maintenance job; the admin list hides them in the same window so an expired
+  booking never appears as active before the clean-up runs.
+
 ## Vehicle registry (admin portal)
 
 `GET /api/vehicles?societyName=<society>&vehicleNumber=<plate>` with a staff token

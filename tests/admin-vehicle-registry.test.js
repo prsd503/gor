@@ -60,7 +60,10 @@ function loadAdmin(t, { society = 'Aangan', vehicles = [], searchResult } = {}) 
         var Filesystem = {}; var Directory = {}; var Encoding = {}; var Share = { share: async () => {} };
         ${source}
     `);
-    t.after(() => dom.window.close());
+    t.after(async () => {
+        await new Promise(resolve => setTimeout(resolve, 60));
+        dom.window.close();
+    });
     const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
     return { window, doc: window.document, calls, settle };
 }
@@ -136,7 +139,7 @@ test('saving an existing plate updates that document, saving a new plate adds on
     assert.equal(updated.vehicleNumber, 'GJ06PA6591');
     assert.equal(updated.residentType, 'Owner');
     assert.equal(updated.societyName, 'Aangan', 'never written to another society');
-    assert.match(view.doc.getElementById('modalMessage').innerText, /updated/);
+    assert.match(view.doc.getElementById('modalMessage').textContent, /updated/);
 
     // New plate: create a document instead.
     view.window.__lastVehicleWrite = null;
@@ -150,7 +153,7 @@ test('saving an existing plate updates that document, saving a new plate adds on
     const created = view.window.__lastVehicleWrite;
     assert.equal(created.id, null, 'no id means the API creates a new record');
     assert.equal(created.vehicleNumber, 'GJ01AB1234');
-    assert.match(view.doc.getElementById('modalMessage').innerText, /added to the Aangan registry/);
+    assert.match(view.doc.getElementById('modalMessage').textContent, /added to the Aangan registry/);
 });
 
 test('the save form rejects bad input before writing', async (t) => {
@@ -160,7 +163,7 @@ test('the save form rejects bad input before writing', async (t) => {
     view.doc.getElementById('saveBtn').click();
     await view.settle();
     assert.equal(view.window.__lastVehicleWrite, undefined, 'nothing is written without a flat');
-    assert.match(view.doc.getElementById('modalMessage').innerText, /required/i);
+    assert.match(view.doc.getElementById('modalMessage').textContent, /required/i);
 });
 
 test('the admin vehicle form offers the vehicle types the API accepts', () => {

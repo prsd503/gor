@@ -11,6 +11,27 @@
     <style>
         /* Admin page specifics (shared components live in theme.css) */
         #admin-results, #active-bookings-list { text-align: left; margin-top: 12px; }
+        /* Booking time pickers: use theme variables so the value stays readable
+           in both light and dark mode (a fixed white background hid the light
+           dark-mode text). */
+        .time-field { margin: 0 0 12px; }
+        .time-picker { display: flex; gap: 6px; align-items: center; }
+        .time-picker select {
+            flex: 1 1 0;
+            min-width: 0;
+            width: auto;
+            margin: 0;
+            background-color: var(--ow-surface);
+            color: var(--ow-text);
+            border-color: var(--ow-border-strong);
+        }
+        .time-picker select option { background-color: var(--ow-surface); color: var(--ow-text); }
+        .time-sep { flex: none; color: var(--ow-muted); font-weight: 700; }
+        .booking-item { display: flex; gap: 10px; justify-content: space-between; align-items: flex-start; }
+        .booking-item .booking-when { font-size: 0.85rem; color: var(--ow-muted); }
+        .booking-item .booking-facility { color: var(--ow-text); }
+        .booking-item button { flex: none; margin: 0; }
+        #active-bookings-list h4 { margin: 0 0 4px; }
         #spinStatsResult:empty { display: none; }
         #spinStatsResult { margin-top: 12px; line-height: 1.8; }
         #bulk-section { margin-top: 12px; }

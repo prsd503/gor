@@ -12,7 +12,9 @@ let isMasterAdminUser = false;
 
 // --- UI & Global Helpers ---
 window.showModal = (msg, showConfirm = false) => {
-    document.getElementById('modalMessage').innerText = msg;
+    // textContent (not innerText) so the message is real text everywhere,
+    // including when the dialog is measured by non-browser renderers.
+    document.getElementById('modalMessage').textContent = msg;
     const confirmBtn = document.getElementById('confirmDeleteBtn');
     if (confirmBtn) confirmBtn.style.display = showConfirm ? 'inline-block' : 'none';
     document.getElementById('customModal').style.display = 'block';
@@ -474,6 +476,9 @@ document.getElementById('saveBtn')?.addEventListener('click', async () => {
     }
 });
 
+// The time pickers inherit theme.css, so they must use theme variables. A
+// hardcoded white background with the page's light text (dark mode) made the
+// selected time invisible against the card.
 function buildTimeDropdownHTML(idPrefix) {
     let hourOptions = '<option value="">HH</option>';
     for (let i = 1; i <= 12; i++) {
@@ -484,11 +489,11 @@ function buildTimeDropdownHTML(idPrefix) {
     let minOptions = '<option value="00">00</option><option value="15">15</option><option value="30">30</option><option value="45">45</option>';
 
     return `
-        <div style="display: flex; gap: 5px; align-items: center; display: inline-flex;">
-            <select id="${idPrefix}Hour" style="padding: 6px; border-radius: 6px; border: 1px solid #d7ccc8; background: #fff;">${hourOptions}</select>
-            <span>:</span>
-            <select id="${idPrefix}Min" style="padding: 6px; border-radius: 6px; border: 1px solid #d7ccc8; background: #fff;">${minOptions}</select>
-            <select id="${idPrefix}AmPm" style="padding: 6px; border-radius: 6px; border: 1px solid #d7ccc8; background: #fff;">
+        <div class="time-picker">
+            <select id="${idPrefix}Hour" aria-label="${idPrefix === 'end' ? 'End' : 'Start'} hour">${hourOptions}</select>
+            <span class="time-sep" aria-hidden="true">:</span>
+            <select id="${idPrefix}Min" aria-label="${idPrefix === 'end' ? 'End' : 'Start'} minutes">${minOptions}</select>
+            <select id="${idPrefix}AmPm" aria-label="${idPrefix === 'end' ? 'End' : 'Start'} AM or PM">
                 <option value="AM">AM</option>
                 <option value="PM">PM</option>
             </select>
@@ -503,7 +508,9 @@ function getSelectedTimeString(idPrefix) {
 
     if (!hh) return null;
 
+    if (!/^[0-5]\d$/.test(mm || '')) return null;
     let hour24 = parseInt(hh, 10);
+    if (!Number.isInteger(hour24) || hour24 < 1 || hour24 > 12) return null;
     if (ap === "PM" && hour24 < 12) hour24 += 12;
     if (ap === "AM" && hour24 === 12) hour24 = 0;
 
@@ -515,6 +522,94 @@ document.getElementById('downloadTemplateBtn')?.addEventListener('click', () => 
     const csvContent = "VehicleNumber,FlatNumber/Name,ResidentType,MobileNumber,VehicleType\nKA01AB1234,101,Owner,9876543210,2W\n";
     window.downloadCSV(csvContent, "vehicle_template.csv");
 });
+
+// Bookings older than 7 days are removed automatically (server maintenance
+// job). The list mirrors that rule so an expired booking never appears as
+// "active" while waiting for the nightly clean-up.
+const BOOKING_RETENTION_DAYS = 7;
+
+function escapeText(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function formatBookingTime(iso) {
+    const datePart = String(iso || '').split('T')[1];
+    if (!datePart) return '';
+    const [hour, minute] = datePart.split(':');
+    const h = parseInt(hour, 10);
+    if (Number.isNaN(h)) return '';
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    return `${h % 12 || 12}:${minute} ${suffix}`;
+}
+
+function isExpiredBooking(booking, now = new Date()) {
+    const end = new Date(booking && booking.end ? booking.end : booking && booking.start);
+    if (Number.isNaN(end.getTime())) return false;
+    const cutoff = new Date(now.getTime() - BOOKING_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    return end < cutoff;
+}
+
+// Sorted soonest first and grouped by date, so the admin reads the schedule
+// the way it happens.
+function renderActiveBookings(bookings, facilityNames) {
+    const listContainer = document.getElementById('active-bookings-list');
+    if (!listContainer) return;
+    const upcoming = (Array.isArray(bookings) ? bookings : [])
+        .filter(booking => !isExpiredBooking(booking))
+        .sort((a, b) => String(a.start || '').localeCompare(String(b.start || '')));
+    if (!upcoming.length) {
+        listContainer.innerHTML = "<h4>Active bookings</h4><p class='small' style='color: var(--ow-muted);'>No active bookings found.</p>";
+        return;
+    }
+    listContainer.innerHTML = `<h4>Active bookings (${upcoming.length})</h4>` + upcoming.map(booking => {
+        const facilityName = facilityNames[booking.facilityId] || booking.facilityId || 'Facility';
+        const date = String(booking.start || '').split('T')[0];
+        const startTime = formatBookingTime(booking.start);
+        const endTime = formatBookingTime(booking.end);
+        return `
+            <div class="booking-item" data-booking-id="${escapeText(booking.id)}" style="background: var(--ow-surface-2); padding:10px; margin-top:8px; border-radius:8px; border: 1px solid var(--ow-border); font-size: 0.95rem;">
+                <div>
+                    <div class="booking-facility"><b>${escapeText(facilityName)}</b></div>
+                    <div class="booking-when">${escapeText(date)}${startTime ? ` · ${escapeText(startTime)}${endTime ? ' to ' + escapeText(endTime) : ''}` : ''}</div>
+                </div>
+                <button type="button" data-booking-delete="${escapeText(booking.id)}" class="btn-danger-soft btn-sm" style="background: var(--ow-danger); color: #fff; font-size:0.8rem; padding:6px 12px;">Delete</button>
+            </div>
+        `;
+    }).join('');
+
+    listContainer.querySelectorAll('[data-booking-delete]').forEach(button => {
+        button.addEventListener('click', () => window.deleteBooking(button.dataset.bookingDelete));
+    });
+}
+
+async function loadActiveBookings() {
+    if (!assignedSociety) return;
+    const listContainer = document.getElementById('active-bookings-list');
+    if (!listContainer) return;
+
+    listContainer.innerHTML = "<p class='small' style='color: var(--ow-muted);'>Loading bookings...</p>";
+
+    try {
+        const [fRes, bRes] = await Promise.all([
+            authenticatedFetch(`${API_BASE_URL}/facilities/${encodeURIComponent(assignedSociety)}`),
+            authenticatedFetch(`${API_BASE_URL}/bookings?society=${encodeURIComponent(assignedSociety)}`)
+        ]);
+        const facilityNames = fRes.ok ? await fRes.json() : {};
+        const bookings = bRes.ok ? await bRes.json() : [];
+        renderActiveBookings(bookings, facilityNames || {});
+    } catch (err) {
+        listContainer.innerHTML = "<p class='small' style='color: var(--ow-danger);'>Could not load bookings. Please refresh.</p>";
+        console.error(err);
+    }
+}
+
+// Exposed for the page's own handlers and for tests.
+window.OwAdminBookings = {
+    renderActiveBookings, loadActiveBookings, isExpiredBooking,
+    formatBookingTime, BOOKING_RETENTION_DAYS
+};
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -684,12 +779,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const timeContainer = document.getElementById('bookingTimeContainer');
     if (timeContainer) {
         timeContainer.innerHTML = `
-            <div style="margin-bottom: 10px;">
-                <label style="display: block; font-size: 0.9rem; margin-bottom: 3px;">Start Time:</label>
+            <div class="time-field">
+                <label for="startHour">Start time</label>
                 ${buildTimeDropdownHTML('start')}
             </div>
-            <div>
-                <label style="display: block; font-size: 0.9rem; margin-bottom: 3px;">End Time:</label>
+            <div class="time-field">
+                <label for="endHour">End time</label>
                 ${buildTimeDropdownHTML('end')}
             </div>
         `;
@@ -861,48 +956,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    async function loadActiveBookings() {
-        if (!assignedSociety) return;
-        const listContainer = document.getElementById('active-bookings-list');
-        if (!listContainer) return;
-
-        listContainer.innerHTML = "<p style='font-size: 0.9rem;'>Loading bookings...</p>";
-
-        try {
-            const fRes = await authenticatedFetch(`${API_BASE_URL}/facilities/${assignedSociety}`);
-            const facilityNames = fRes.ok ? await fRes.json() : {};
-
-            const bRes = await authenticatedFetch(`${API_BASE_URL}/bookings?society=${encodeURIComponent(assignedSociety)}`);
-            const bookings = bRes.ok ? await bRes.json() : [];
-
-            if (bookings.length === 0) {
-                listContainer.innerHTML = "<p style='font-size: 0.9rem; color: #777;'>No active bookings found.</p>";
-                return;
-            }
-
-            listContainer.innerHTML = "<h4>Active Bookings:</h4>";
-            bookings.forEach((data) => {
-                const facilityName = facilityNames[data.facilityId] || data.facilityId;
-                
-                const startTimeFormatted = data.start ? data.start.replace('T', ' ') : '';
-                const endTimeFormatted = data.end ? data.end.split('T')[1] : '';
-
-                listContainer.innerHTML += `
-                    <div style="background:#f4ece0; padding:10px; margin-top:8px; border-radius:8px; font-size: 0.95rem; display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <b>${facilityName}</b><br>
-                            <span style="font-size: 0.85rem; color: #555;">${startTimeFormatted} to ${endTimeFormatted}</span>
-                        </div>
-                        <button onclick="window.deleteBooking('${data.id}')" style="background:#d32f2f; font-size:0.8rem; padding:5px 10px; margin:0;">Delete</button>
-                    </div>
-                `;
-            });
-        } catch (err) {
-            listContainer.innerHTML = "<p style='font-size: 0.9rem; color: red;'>Error loading bookings.</p>";
-            console.error(err);
-        }
-    }
-        
     document.getElementById('bookFacilityBtn')?.addEventListener('click', async () => {
         const fId = document.getElementById('facilitySelect').value;
         const dateInput = document.getElementById('bookingDate');
@@ -922,30 +975,42 @@ document.addEventListener('DOMContentLoaded', () => {
             return window.showModal("Bookings are only allowed from today up to 6 months in advance.");
         }
 
+        if (endT <= startT) return window.showModal("The end time must be after the start time.");
+
         try {
-            await authenticatedFetch(`${API_BASE_URL}/bookings`, {
+            const res = await authenticatedFetch(`${API_BASE_URL}/bookings`, {
                 method: 'POST',
                 body: JSON.stringify({
-                    society: assignedSociety, 
-                    facilityId: fId, 
-                    start: `${date}T${startT}:00`, 
+                    society: assignedSociety,
+                    facilityId: fId,
+                    start: `${date}T${startT}:00`,
                     end: `${date}T${endT}:00`
                 })
             });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `Booking failed (${res.status})`);
+            }
             window.showModal("Booking created successfully!");
-            loadActiveBookings(); 
+            loadActiveBookings();
         } catch (err) {
-            window.showModal("Failed to create booking.");
+            window.showModal("Failed to create booking: " + (err.message || err));
         }
     });
 
     window.deleteBooking = async (bookingDocId) => {
+        if (!bookingDocId) return;
+        if (!window.confirm("Delete this booking? This cannot be undone.")) return;
         try {
-            await authenticatedFetch(`${API_BASE_URL}/bookings/${bookingDocId}`, { method: 'DELETE' });
+            const res = await authenticatedFetch(`${API_BASE_URL}/bookings/${encodeURIComponent(bookingDocId)}`, { method: 'DELETE' });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `Delete failed (${res.status})`);
+            }
             window.showModal("Booking deleted.");
-            loadActiveBookings(); 
+            loadActiveBookings();
         } catch (err) {
-            window.showModal("Failed to delete booking.");
+            window.showModal("Failed to delete booking: " + (err.message || err));
         }
     };
 

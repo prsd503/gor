@@ -1572,8 +1572,8 @@ app.post('/api/bookings', requireAdminForSociety(req => requestedSociety(req)), 
         }
         const startDate = new Date(start);
         const endDate = new Date(end || start);
-        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate < startDate) {
-            return res.status(400).json({ error: 'Invalid booking date range.' });
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate <= startDate) {
+            return res.status(400).json({ error: 'Invalid booking date range: the end time must be after the start time.' });
         }
         const society = req.authorizedSociety;
         await db.collection('bookings').add({
