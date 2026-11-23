@@ -1309,7 +1309,27 @@ app.post('/api/vehicles', async (req, res) => {
 
         const requestedVehicles = parseVehiclePayload(body);
         if (!requestedVehicles.length) {
-            return res.status(400).json({ error: 'At least one vehicle number is required.', code: 'vehicle-number-required' });
+            // Distinguish "the body never arrived" from "you forgot a plate".
+            // express.json only parses JSON, text/plain and urlencoded bodies; a
+            // multipart form (or any other type) is left unparsed, so a plate the
+            // resident typed disappears and this handler used to answer "at least
+            // one vehicle number is required", contradicting them. Only a body we
+            // actually understand earns the plate message.
+            const contentType = String(req.headers['content-type'] || '').toLowerCase();
+            const parsedType = contentType.startsWith('application/json') ||
+                contentType.startsWith('text/plain') ||
+                contentType.startsWith('application/x-www-form-urlencoded');
+            if (!parsedType) {
+                return res.status(400).json({
+                    error: 'The vehicle details did not reach the server. Please retry.',
+                    code: 'unreadable-body'
+                });
+            }
+            return res.status(400).json({
+                error: 'At least one vehicle number is required.',
+                code: 'vehicle-number-required',
+                field: 'vehicles'
+            });
         }
         if (requestedVehicles.length > 12) return res.status(400).json({ error: 'Too many vehicles in one request.' });
         if (docId && requestedVehicles.length !== 1) return res.status(400).json({ error: 'Exactly one vehicle is required when editing.' });

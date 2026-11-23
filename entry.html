@@ -94,25 +94,49 @@
         const API_BASE_URL = (window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api');
         const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 
-        // Helper function to dynamically fetch a fresh short-lived auth token
+        // Helper function to dynamically fetch a fresh short-lived auth token.
+        //
+        // The API exchanges a Firebase ID token for its own short-lived JWT, so
+        // the request must carry `{ idToken }` whenever the host page can supply
+        // one (`window.OWL_GET_ID_TOKEN`, installed by a signed-in Firebase
+        // build). Without it the endpoint can only ever answer 400.
+        //
+        // A failed lookup must still return `Content-Type: application/json`:
+        // without it the browser labels the JSON string body `text/plain`, and
+        // an empty-looking body is what produced the misleading "at least one
+        // vehicle number is required" error even though a plate was typed.
+        function jsonHeaders(extra) {
+            return { 'Content-Type': 'application/json', ...NG_HEADERS, ...(extra || {}) };
+        }
+
         async function getAuthHeaders() {
+            // No ID token provider on this host page (a plain static build has no
+            // Firebase session): skip the exchange entirely. Calling it anyway
+            // only produced a 400 per request. The public resident endpoints
+            // accept an anonymous caller, so the flow still completes.
+            if (typeof window.OWL_GET_ID_TOKEN !== 'function') return jsonHeaders();
+
+            let idToken = null;
+            try {
+                idToken = await window.OWL_GET_ID_TOKEN();
+            } catch (err) {
+                console.error("Failed to read the Firebase ID token:", err);
+            }
             try {
                 const tokenRes = await fetch(`${API_BASE_URL}/auth/token`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...NG_HEADERS }
+                    headers: jsonHeaders(),
+                    body: JSON.stringify(idToken ? { idToken } : {})
                 });
                 const tokenData = await tokenRes.json();
                 if (tokenData && tokenData.token) {
-                    return {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${tokenData.token}`,
-                        ...NG_HEADERS
-                    };
+                    return jsonHeaders({ 'Authorization': `Bearer ${tokenData.token}` });
                 }
+                console.warn("Auth token unavailable:", tokenRes.status, tokenData && tokenData.error);
             } catch (err) {
                 console.error("Failed to acquire auth token:", err);
             }
-            return { ...NG_HEADERS };
+            return jsonHeaders();
         }
 
         // The submit button only appears once a plate is actually typed, so a form
@@ -451,9 +475,17 @@
                             showModal("✅ Vehicles registered successfully!");
                             setTimeout(() => window.location.reload(), 1500);
                         } else {
-                            const errData = await response.json();
+                            const errData = await response.json().catch(() => ({}));
+                            const typed = vehiclesToSubmit.map(v => `<b>${v.vehicleNumber}</b>`).join(', ');
                             if (errData.code === 'vehicle-number-required') {
-                                showModal("⚠️ Please enter at least one vehicle number before submitting.");
+                                // The page already checked this plate, so a plate error
+                                // from the server means the body never arrived intact —
+                                // say that instead of contradicting the resident.
+                                showModal(`❌ We could not send ${typed} to the society. Please check your connection and try again.`);
+                            } else if (errData.code === 'unreadable-body') {
+                                showModal(`❌ We could not send ${typed} to the society. Please refresh the page and try again.`);
+                            } else if (errData.code === 'auth-required' || response.status === 401) {
+                                showModal("❌ Could not verify this device with the society. Refresh the page and try again.");
                             } else {
                                 showModal(`❌ Error: ${errData.error || errData.message || 'Submission failed'}`);
                             }

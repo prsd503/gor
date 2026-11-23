@@ -60,6 +60,12 @@ async function startApi(t, societyDoc = { name: 'Aangan', flatList: ['A1-103'], 
             });
             return { status: res.status, body: await res.json().catch(() => null) };
         },
+        async raw(contentType, body) {
+            const res = await fetch(base + '/api/vehicles', {
+                method: 'POST', headers: { 'Content-Type': contentType }, body
+            });
+            return { status: res.status, body: await res.json().catch(() => null) };
+        },
         async plates() {
             const res = await fetch(`${base}/api/vehicles?societyName=Aangan&flatNumber=A1-103&deviceId=dev-1`);
             const body = await res.json();
@@ -113,7 +119,7 @@ test('a plate that is too short is rejected with a message, not a silent drop', 
 });
 
 // --- Page ---------------------------------------------------------------
-function loadEntry(t, societyDoc = { name: 'Aangan', flatList: ['A1-103'], max2Wheeler: 2, max4Wheeler: 1 }) {
+function loadEntry(t, societyDoc = { name: 'Aangan', flatList: ['A1-103'], max2Wheeler: 2, max4Wheeler: 1 }, options = {}) {
     const html = fs.readFileSync(path.join(root, 'entry.html'), 'utf8');
     const dom = new JSDOM(html, {
         url: 'https://owlwatcher.test/entry.html?societyId=Aangan',
@@ -122,19 +128,28 @@ function loadEntry(t, societyDoc = { name: 'Aangan', flatList: ['A1-103'], max2W
     });
     const { window } = dom;
     const posts = [];
+    const authCalls = [];
     window.OWL_API_BASE = 'https://api.test/api';
+    if (options.idToken) window.OWL_GET_ID_TOKEN = async () => options.idToken;
     // Minimal stand-in for the API so the page logic can be exercised exactly.
-    window.fetch = async (url, options = {}) => {
+    window.fetch = async (url, init = {}) => {
         const parsed = new URL(String(url), window.location.href);
         const json = body => ({ ok: true, status: 200, json: async () => body });
-        if (parsed.pathname.endsWith('/auth/token')) return json({ token: 't' });
+        if (parsed.pathname.endsWith('/auth/token')) {
+            authCalls.push({ headers: init.headers || {}, body: init.body });
+            return options.authRejects
+                ? { ok: false, status: 400, json: async () => ({ error: 'Firebase ID token is required' }) }
+                : json({ token: 't' });
+        }
         if (parsed.pathname.endsWith('/societies')) {
             return json([{ id: 'aangan', name: 'Aangan', flatList: societyDoc.flatList, ...societyDoc }]);
         }
         if (parsed.pathname.endsWith('/admin-contact')) return { ok: false, status: 404, json: async () => ({}) };
-        if (parsed.pathname.endsWith('/vehicles') && options.method === 'POST') {
-            posts.push(JSON.parse(options.body));
-            return { ok: false, status: 400, json: async () => ({ error: 'At least one vehicle number is required.', code: 'vehicle-number-required' }) };
+        if (parsed.pathname.endsWith('/vehicles') && init.method === 'POST') {
+            posts.push({ body: JSON.parse(init.body), headers: init.headers || {} });
+            const reply = options.postReply ||
+                { status: 400, body: { error: 'At least one vehicle number is required.', code: 'vehicle-number-required' } };
+            return { ok: reply.status >= 200 && reply.status < 300, status: reply.status, json: async () => reply.body };
         }
         if (parsed.pathname.endsWith('/vehicles')) return json([]);
         return json([]);
@@ -145,7 +160,7 @@ function loadEntry(t, societyDoc = { name: 'Aangan', flatList: ['A1-103'], max2W
         .map(source => source.replace(/^\s*import .*$/gm, ''));
     window.eval(inline.join('\n'));
     t.after(() => { window.close(); });
-    return { window, doc: window.document, posts };
+    return { window, doc: window.document, posts, authCalls };
 }
 
 async function chooseFlat(doc, flat = 'A1-103') {
@@ -171,7 +186,9 @@ test('a society with no configured allowance still offers the default fields', a
 });
 
 test('typing one plate submits it instead of asking for a vehicle number', async (t) => {
-    const { window, doc, posts } = loadEntry(t);
+    const { window, doc, posts } = loadEntry(t, undefined, {
+        postReply: { status: 200, body: { success: true } }
+    });
     await settle();
     await chooseFlat(doc);
     doc.getElementById('mobileNumber').value = '9000000000';
@@ -183,10 +200,8 @@ test('typing one plate submits it instead of asking for a vehicle number', async
     await settle(120);
 
     assert.equal(posts.length, 1, 'the form was submitted');
-    assert.deepEqual([...posts[0].vehicles].map(v => ({ ...v })), [{ vehicleNumber: 'GJ01AB1234', vehicleType: '2-Wheeler' }]);
-    // The stub answers 400/vehicle-number-required; the page must reframe it
-    // rather than showing a bare server error.
-    assert.match(doc.getElementById('modalMessage').textContent, /enter at least one vehicle number/i);
+    assert.deepEqual([...posts[0].body.vehicles].map(v => ({ ...v })), [{ vehicleNumber: 'GJ01AB1234', vehicleType: '2-Wheeler' }]);
+    assert.match(doc.getElementById('modalMessage').textContent, /registered successfully/i);
 });
 
 test('a half-typed plate names the plate instead of failing silently', async (t) => {
@@ -217,4 +232,139 @@ test('a flat with no allowance left explains itself and cannot submit', async (t
     await settle(80);
     assert.equal(posts.length, 0, 'an empty form is not posted');
     assert.match(doc.getElementById('modalMessage').textContent, /no vehicle allowance left/i);
+});
+
+// --- The 2026-11 production report -------------------------------------
+// On prsd503.github.io a typed plate still produced "At least one vehicle
+// number is required." DevTools showed `POST /api/auth/token` -> 400 and the
+// vehicle POST leaving without a Content-Type, so the plate never arrived in a
+// form the API could read. These three tests pin that down.
+
+test('a failed token lookup still posts the plate as JSON, with a Content-Type', async (t) => {
+    // An ID token provider that throws stands in for a Firebase session that has
+    // expired: the exchange fails, and the vehicle POST must still be JSON.
+    const { window, doc, posts, authCalls } = loadEntry(t, undefined, {
+        idToken: 'stale', authRejects: true
+    });
+    await settle();
+    await chooseFlat(doc);
+    doc.getElementById('mobileNumber').value = '9000000000';
+    doc.getElementById('residentTypeSelect').value = 'Owner';
+    const field = doc.querySelector('.dynamic-vehicle-input');
+    field.value = 'GJ01AB1234';
+    field.dispatchEvent(new window.Event('input'));
+    doc.getElementById('vehicleForm').dispatchEvent(new window.Event('submit'));
+    await settle(120);
+
+    assert.ok(authCalls.length >= 1, 'the token was requested');
+    for (const call of authCalls) {
+        assert.equal(call.headers['Content-Type'], 'application/json', 'every token call is JSON');
+    }
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].headers['Content-Type'], 'application/json',
+        'a failed token must not change the wire format of the vehicle POST');
+    assert.equal(posts[0].headers.Authorization, undefined, 'no token, no bearer header');
+    assert.deepEqual([...posts[0].body.vehicles], [{ vehicleNumber: 'GJ01AB1234', vehicleType: '2-Wheeler' }]);
+});
+
+test('a Firebase ID token is exchanged for an API token and sent as a bearer header', async (t) => {
+    const { window, doc, posts, authCalls } = loadEntry(t, undefined, { idToken: 'firebase-id-token' });
+    await settle();
+    await chooseFlat(doc);
+    doc.getElementById('mobileNumber').value = '9000000000';
+    doc.getElementById('residentTypeSelect').value = 'Owner';
+    const field = doc.querySelector('.dynamic-vehicle-input');
+    field.value = 'GJ01AB1234';
+    field.dispatchEvent(new window.Event('input'));
+    doc.getElementById('vehicleForm').dispatchEvent(new window.Event('submit'));
+    await settle(120);
+
+    assert.equal(JSON.parse(authCalls[0].body).idToken, 'firebase-id-token', 'the page sent an idToken');
+    assert.equal(posts[0].headers.Authorization, 'Bearer t');
+});
+
+test('a plate error for a plate the page sent names the plate instead of denying it', async (t) => {
+    // Default stub replies 400/vehicle-number-required. The page checked the
+    // field itself, so that answer means the body was lost in transit; it must
+    // not tell the resident to type a number they already typed.
+    const { window, doc } = loadEntry(t);
+    await settle();
+    await chooseFlat(doc);
+    doc.getElementById('mobileNumber').value = '9000000000';
+    doc.getElementById('residentTypeSelect').value = 'Owner';
+    const field = doc.querySelector('.dynamic-vehicle-input');
+    field.value = 'GJ01AB1234';
+    field.dispatchEvent(new window.Event('input'));
+    doc.getElementById('vehicleForm').dispatchEvent(new window.Event('submit'));
+    await settle(120);
+
+    const message = doc.getElementById('modalMessage').textContent;
+    assert.match(message, /GJ01AB1234/, 'the plate the resident typed is echoed back');
+    assert.match(message, /could not send|check your connection/i);
+    assert.doesNotMatch(message, /enter at least one vehicle number/i);
+});
+
+test('a plate sent as a multipart form is not answered with "no vehicle number"', async (t) => {
+    // A visitor form (or a client that cannot set JSON headers) posts multipart,
+    // which this server does not parse. The plate is missing from `req.body`, so
+    // the honest answer is "the details did not reach the server" — not a message
+    // accusing the resident of leaving the plate blank.
+    const api = await startApi(t);
+    const form = new FormData();
+    form.set('societyName', 'Aangan');
+    form.set('flatNumber', 'A1-103');
+    form.set('residentType', 'Owner');
+    form.set('mobileNumber', '9000000000');
+    form.set('deviceId', 'dev-1');
+    form.set('vehicles', JSON.stringify([{ vehicleNumber: 'GJ01MP1111', vehicleType: '2-Wheeler' }]));
+    const res = await fetch(api.base + '/api/vehicles', { method: 'POST', body: form });
+    const body = await res.json();
+    assert.equal(res.status, 400);
+    assert.equal(body.code, 'unreadable-body', JSON.stringify(body));
+    assert.doesNotMatch(body.error, /at least one vehicle number/i);
+});
+
+test('a JSON plate body is accepted even when the browser labels it text/plain', async (t) => {
+    // This is exactly what Safari sends once the page loses its Content-Type
+    // header: a JSON string in a text/plain body. It must still register.
+    const api = await startApi(t);
+    const payload = JSON.stringify({
+        societyName: 'Aangan', flatNumber: 'A1-103', residentType: 'Owner',
+        mobileNumber: '9000000000', deviceId: 'dev-1',
+        vehicles: [{ vehicleNumber: 'GJ01TP2222', vehicleType: '2-Wheeler' }]
+    });
+    const res = await fetch(api.base + '/api/vehicles', {
+        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: payload
+    });
+    assert.equal(res.status, 200, await res.text());
+    assert.deepEqual(await api.plates(), ['GJ01TP2222']);
+});
+
+test('a truly empty body is a plate error, not a transport error', async (t) => {
+    const api = await startApi(t);
+    const result = await api.raw('application/json', '');
+    assert.equal(result.status, 400);
+    assert.equal(result.body.code, 'vehicle-number-required');
+    assert.equal(result.body.field, 'vehicles');
+});
+
+test('a host page with no Firebase session does not call the token endpoint at all', async (t) => {
+    // Without an `OWL_GET_ID_TOKEN` provider the exchange can only answer 400,
+    // so the page must skip it and rely on the public resident endpoints.
+    const { window, doc, posts, authCalls } = loadEntry(t, undefined, {
+        postReply: { status: 200, body: { success: true } }
+    });
+    await settle();
+    await chooseFlat(doc);
+    assert.equal(authCalls.length, 0, 'flat lookup did not ask for a token');
+    doc.getElementById('mobileNumber').value = '9000000000';
+    doc.getElementById('residentTypeSelect').value = 'Owner';
+    const field = doc.querySelector('.dynamic-vehicle-input');
+    field.value = 'GJ01AB1234';
+    field.dispatchEvent(new window.Event('input'));
+    doc.getElementById('vehicleForm').dispatchEvent(new window.Event('submit'));
+    await settle(120);
+    assert.equal(authCalls.length, 0, 'submit did not ask for a token either');
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].headers['Content-Type'], 'application/json');
 });
