@@ -137,6 +137,33 @@ change flat are counted as `rejected` with a reason. The response is the report
 the admin portal renders: `{ total, added, updated, repeat, rejected, changes[], errors[] }`.
 Up to 2000 rows per request.
 
+## Sign-in eligibility (public)
+
+```
+POST /api/auth/staff-role   { "email": "name@example.com" }
+→ { "success": true, "role": "admin" | "master" | "guard" | null }
+```
+
+Answers which staff role an address holds, so the admin and guard sign-in pages
+can refuse a stranger **before** Firebase creates a session. Rules:
+
+- Reads Firestore `admins` then `guards`; disabled / inactive records never count,
+  and an address with ambiguous legacy admin records returns `null`.
+- `null` is also the answer for an unknown address and for an internal failure,
+  so the response cannot be used to tell "no account" from "lookup broke".
+- Rate-limited by the sign-in limiter (30 per 15 min per IP), `Cache-Control:
+  no-store`, and it grants nothing: `GET /api/admins` and `GET /api/guards` still
+  require a token, and the ID-token membership check after sign-in remains the
+  real gate.
+
+The pages use it as a pre-check only. Admin: `null` → *"This email is not
+registered as a society admin…"*, `guard` → *"This email is registered as a
+guard, not a society admin…"*. Guard: `null` → *"This email is not registered as
+a security guard…"*, `admin`/`master` → *"This email is registered as a society
+admin, not a guard…"*. A failed lookup says so instead of claiming the email is
+invalid, and a post-sign-in membership failure still signs the user out with the
+same message.
+
 ## Flat numbers for the vehicle form (admin portal)
 
 ```
