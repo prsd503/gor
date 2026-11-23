@@ -131,8 +131,11 @@ GET /api/admins/me        (staff token required)
 Returns the caller's own membership resolved from the Firestore `admins` /
 `guards` records: `{ email, society, societyId, isMaster }`. Pages that need the
 administrator's society (for example the data deletion request, which names it
-in the WhatsApp message) use this instead of trusting a URL parameter. The
-existing `GET /api/admins/:email` stays master-or-self only.
+in the WhatsApp message) or the full-account deletion request use this instead
+of trusting a URL parameter. The existing `GET /api/admins/:email` stays
+master-or-self only. Both deletion pages also read the Owl Watcher team number
+from `GET /api/config` (`configs/owlwatcher.teamPhone`) and keep a built-in
+number only as an offline fallback.
 
 ## Facility calendar admin contact
 
