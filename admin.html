@@ -32,7 +32,11 @@
         .booking-item .booking-facility { color: var(--ow-text); }
         .booking-item button { flex: none; margin: 0; }
         #active-bookings-list h4 { margin: 0 0 4px; }
-        #import-report:empty { display: none; }
+        #import-report:empty, #bulk-delete-report:empty { display: none; }
+        #bulk-delete-report { margin-top: 12px; text-align: left; }
+        .delete-chip { font-size: 0.85rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--ow-border); background: var(--ow-surface-2); color: var(--ow-text); }
+        .delete-chip.is-deleted { color: var(--ow-danger); border-color: var(--ow-danger); background: var(--ow-danger-soft); }
+        .delete-chip.is-missing { color: var(--ow-muted); }
         #import-report { margin-top: 12px; text-align: left; }
         .import-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
         .import-chip { font-size: 0.85rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--ow-border); background: var(--ow-surface-2); color: var(--ow-text); }
@@ -238,10 +242,12 @@
                 <div class="form-actions">
                     <button type="button" id="downloadTemplateBtn" class="btn-secondary">Download CSV template</button>
                     <button type="button" id="importBtn">Bulk import CSV file</button>
+                    <button type="button" id="bulkDeleteTopBtn" class="btn-danger-soft">Bulk delete from CSV</button>
                 </div>
                 <p class="note small">Columns: VehicleNumber, FlatNumber/Name, ResidentType, MobileNumber, VehicleType.
                     Existing plates are updated only when something changed; identical rows are skipped as duplicates.</p>
                 <div id="import-report" aria-live="polite"></div>
+                <div id="bulk-delete-report" aria-live="polite"></div>
                 <div id="bulk-section" style="display: none;">
                     <div class="form-actions">
                         <button type="button" id="bulkDeleteBtn" class="btn-danger-soft">Bulk delete</button>
@@ -289,7 +295,7 @@
             <p id="modalMessage"></p>
             <div class="dialog-actions">
                 <button type="button" class="btn-secondary" onclick="closeModal()">Close</button>
-                <button type="button" id="confirmDeleteBtn" class="btn-danger" onclick="window.confirmDelete()" style="display:none;">Confirm delete</button>
+                <button type="button" id="confirmDeleteBtn" class="btn-danger" onclick="window.runConfirmAction && window.runConfirmAction()" style="display:none;">Confirm delete</button>
             </div>
         </div>
     </div>

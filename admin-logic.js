@@ -723,13 +723,57 @@ async function refreshVehicleSearchResults() {
     if (input && input.value.trim()) document.getElementById('adminSearchBtn')?.click();
 }
 
+// Plate list from an uploaded CSV: every cell of the first column (the plate
+// column in both the template and an exported registry export), ignoring a
+// header row and blanks.
+function parseVehiclePlateCsv(text) {
+    const table = parseCsvText(text);
+    const plates = [];
+    const seen = new Set();
+    table.forEach(cells => {
+        const value = String((cells && cells[0]) || '').trim().toUpperCase().replace(/\s+/g, ' ');
+        if (!value || /^VEHICLENUMBER$|^VEHICLE$|^PLATE$|^VEHICLE NO$/.test(value)) return;
+        if (seen.has(value)) return;
+        seen.add(value);
+        plates.push(value);
+    });
+    return plates;
+}
+
+function bulkDeleteHeadline(summary) {
+    return `${summary.society ? summary.society + ': ' : ''}bulk delete complete. Deleted ${summary.deleted || 0} of ${summary.requested || 0} vehicle(s)`
+        + `, not found ${summary.notFound || 0}`
+        + (summary.skipped ? `, skipped ${summary.skipped}` : '')
+        + (summary.failed ? `, failed ${summary.failed}` : '') + '.';
+}
+
+function renderBulkDeleteReport(summary) {
+    const report = document.getElementById('bulk-delete-report');
+    if (!report) return;
+    const rows = Array.isArray(summary.plates) ? summary.plates : [];
+    const chip = (cls, text) => `<span class="delete-chip ${cls}">${escapeText(text)}</span>`;
+    const list = rows.map(row => `<li><b>${escapeText(row.plate)}</b> — ${escapeText(row.action === 'deleted' ? 'Deleted' : row.action === 'notFound' ? 'Not found' : 'Skipped')}${row.reason ? ` <span class="import-reason">(${escapeText(row.reason)})</span>` : ''}</li>`).join('');
+    report.innerHTML = `
+        <div class="import-summary">
+            ${chip('is-deleted', `Deleted ${summary.deleted || 0}`)}
+            ${chip('is-missing', `Not found ${summary.notFound || 0}`)}
+            ${summary.skipped ? chip('', `Skipped ${summary.skipped}`) : ''}
+            ${summary.failed ? chip('is-deleted', `Failed ${summary.failed}`) : ''}
+            ${chip('', `Rows ${summary.requested || 0}`)}
+        </div>
+        ${summary.truncated ? '<p class="small" style="color: var(--ow-danger);">Only the first 2000 plates were processed.</p>' : ''}
+        ${rows.length ? `<h4>Per-vehicle result</h4><ul class="import-list">${list}</ul>` : ''}
+    `;
+}
+
 // Exposed for the page's own handlers and for tests.
 window.OwAdminBookings = {
     renderActiveBookings, loadActiveBookings, isExpiredBooking,
     formatBookingTime, BOOKING_RETENTION_DAYS
 };
 window.OwAdminVehicles = {
-    parseCsvText, parseVehicleCsv, renderImportReport, importHeadline
+    parseCsvText, parseVehicleCsv, renderImportReport, importHeadline,
+    parseVehiclePlateCsv, renderBulkDeleteReport, bulkDeleteHeadline
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1198,46 +1242,52 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('bulkDeleteBtn')?.addEventListener('click', () => {
+    // --- Bulk delete from a CSV ---------------------------------------------
+    // The confirm button used to call window.confirmDelete, which nothing set
+    // unless this handler ran first, so the dialog's Confirm did nothing. Both
+    // entry points (the danger-zone button and the one under the CSV picker)
+    // now share one flow: confirm, post the plates once, then report.
+    async function runBulkVehicleDelete() {
         const file = document.getElementById('excelInput').files[0];
-        if (!file) return window.showModal("Please select a CSV file containing vehicles to delete.");
+        if (!file) return window.showModal("Choose the CSV file listing the vehicles to delete.");
+        if (!assignedSociety) return window.showModal("Your admin account is not assigned to a society yet.");
+        if (!window.confirm(`Delete every vehicle listed in "${file.name}" from ${assignedSociety}? This cannot be undone.`)) return;
 
-        window.showModal("Are you sure you want to delete the vehicles listed in the uploaded CSV? This cannot be undone.", true);
-        window.confirmDelete = async () => {
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                try {
-                    const rows = e.target.result.split('\n').slice(1);
-                    let deleteCount = 0;
-                    let notFoundCount = 0;
+        const button = document.getElementById('bulkDeleteTopBtn');
+        const report = document.getElementById('bulk-delete-report');
+        if (button) button.disabled = true;
+        if (report) report.innerHTML = "<p class='small' style='color: var(--ow-muted);'>Deleting the listed vehicles…</p>";
 
-                    for (const row of rows) {
-                        const c = row.split(',');
-                        if (c.length >= 1 && c[0].trim()) {
-                            const vNum = c[0].trim().toUpperCase();
-                            const res = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(vNum)}`);
-                            const vehicles = await res.json();
+        try {
+            const text = await readFileText(file);
+            const plates = parseVehiclePlateCsv(text);
+            if (!plates.length) throw new Error("No vehicle numbers found in the file.");
 
-                            if (vehicles.length > 0) {
-                                for (const v of vehicles) {
-                                    await authenticatedFetch(`${API_BASE_URL}/vehicles/${v.id}`, { method: 'DELETE' });
-                                    deleteCount++;
-                                }
-                            } else {
-                                notFoundCount++;
-                            }
-                        }
-                    }
+            const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/bulk-delete`, {
+                method: 'POST',
+                body: JSON.stringify({ society: assignedSociety, plates })
+            });
+            const summary = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(summary.error || `Bulk delete failed (${res.status})`);
 
-                    window.showModal(`Targeted Bulk Delete complete! Deleted: ${deleteCount}, Not Found: ${notFoundCount}`);
-                    window.closeModal();
-                    if (document.getElementById('admin-results')) document.getElementById('admin-results').innerHTML = "";
-                } catch (err) {
-                    console.error("Bulk Delete Error:", err);
-                    window.showModal("Bulk delete failed: " + (err.message || err));
-                }
-            };
-            reader.readAsText(file);
-        };
-    });
+            renderBulkDeleteReport(summary);
+            window.showModal(bulkDeleteHeadline(summary));
+            // The registry changed under any open search results.
+            const results = document.getElementById('admin-results');
+            if (results && registryCache.size) {
+                registryCache.clear();
+                if (document.getElementById('adminSearch').value.trim()) document.getElementById('adminSearchBtn')?.click();
+            }
+        } catch (err) {
+            if (report) report.innerHTML = "";
+            window.showModal("Bulk delete failed: " + (err.message || err));
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
+    document.getElementById('bulkDeleteTopBtn')?.addEventListener('click', runBulkVehicleDelete);
+    // The master-only danger-zone button keeps its original id and behaviour.
+    document.getElementById('bulkDeleteBtn')?.addEventListener('click', runBulkVehicleDelete);
+
 });

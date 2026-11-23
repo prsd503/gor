@@ -153,3 +153,9 @@ and are validated before anything is written:
 
 The page lists every row with its outcome, so the admin sees exactly what
 changed and what was ignored. Re-uploading the same file changes nothing.
+
+*Bulk delete from CSV* (available to every society admin, and in the master
+login's danger zone) reads the first column of the same file format, asks for
+confirmation, and posts the plates to `POST /api/vehicles/bulk-delete`. It then
+reports each plate as deleted, not found, or skipped, so a typo in the file is
+visible instead of silently ignored.

@@ -57,6 +57,7 @@ const { readLimits, normalizeAction, normalizeSource } = require('./lib/quota-po
 const { createMonitoringUsageFetcher } = require('./lib/gcp-monitoring');
 const { createDbLayer } = require('./lib/db-layer');
 const { createVehicleImport } = require('./lib/vehicle-import');
+const { createVehicleBulkDelete } = require('./lib/vehicle-bulk-delete');
 const { createLocalStore, createFieldValue } = require('./lib/local-store');
 const { createMaintenance } = require('./lib/maintenance');
 
@@ -298,6 +299,7 @@ const requireStaffForSociety = identifier => authorization.requireSociety(['admi
 
 const giftCodes = createGiftCodeService({ db, FieldValue });
 const vehicleImport = createVehicleImport({ db, FieldValue });
+const vehicleBulkDelete = createVehicleBulkDelete({ db });
 const maintenance = createMaintenance({ db, FieldValue, logger: console, timeZone: process.env.CRON_TIMEZONE, beforeRun: async () => {
     await quota.refresh();
     return !quota.isDraining();
@@ -1313,6 +1315,22 @@ app.post('/api/vehicles/import', requireAdminForSociety(req => requestedSociety(
     } catch (err) {
         console.error('Vehicle import error:', err);
         return res.status(500).json({ error: 'Could not import the vehicle file.' });
+    }
+});
+
+// Bulk delete for one society: plates from an uploaded CSV. Only this
+// society's documents can match, and the response reports per plate whether it
+// was deleted or not found. Admin (including master) only.
+app.post('/api/vehicles/bulk-delete', requireAdminForSociety(req => requestedSociety(req)), async (req, res) => {
+    try {
+        const plates = req.body && req.body.plates;
+        if (!Array.isArray(plates)) return res.status(400).json({ error: 'plates must be an array of vehicle numbers.' });
+        if (!plates.length) return res.status(400).json({ error: 'The uploaded file has no vehicle numbers.' });
+        const summary = await vehicleBulkDelete.run(req.authorizedSociety, plates);
+        return res.set('Cache-Control', 'no-store').json({ success: true, society: req.authorizedSociety.name, ...summary });
+    } catch (err) {
+        console.error('Vehicle bulk delete error:', err);
+        return res.status(500).json({ error: 'Could not delete the vehicles in that file.' });
     }
 });
 

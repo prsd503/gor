@@ -137,6 +137,20 @@ change flat are counted as `rejected` with a reason. The response is the report
 the admin portal renders: `{ total, added, updated, repeat, rejected, changes[], errors[] }`.
 Up to 2000 rows per request.
 
+## Bulk delete vehicles (admin portal)
+
+```
+POST /api/vehicles/bulk-delete      (admin token, society-scoped)
+{ "society": "Aangan", "plates": ["GJ01AB1234", "GJ01CD5678"] }
+```
+
+Deletes every listed plate that belongs to the caller's society, in batches of
+400 (with per-document fallback), and returns
+`{ total… requested, deleted, notFound, skipped, failed, plates[], missing[], errors[] }`.
+Plates in another society are never matched. The admin portal reads the first
+column of the uploaded CSV (its own template and export format), asks for
+confirmation, and lists each plate as deleted / not found / skipped.
+
 ## Facility bookings (admin portal)
 
 - `GET /api/bookings?society=<society>` returns `{ id, facilityId, start, end }`
