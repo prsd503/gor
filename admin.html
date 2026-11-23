@@ -49,6 +49,13 @@
         .import-list .import-reason { color: var(--ow-muted); }
         #spinStatsResult:empty { display: none; }
         #spinStatsResult { margin-top: 12px; line-height: 1.8; }
+        .spin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+        .spin-tile { padding: 10px 12px; border: 1px solid var(--ow-border); border-radius: var(--ow-radius); background: var(--ow-surface-2); }
+        .spin-tile .spin-label { display: block; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ow-muted); }
+        .spin-tile .spin-value { font-size: 1.25rem; font-weight: 800; color: var(--ow-text); }
+        .spin-winner { margin-top: 10px; padding: 10px 12px; border-radius: var(--ow-radius); background: var(--ow-primary-soft); color: var(--ow-on-highlight); font-weight: 700; }
+        .spin-note { margin: 8px 0 0; font-size: 0.82rem; color: var(--ow-muted); }
+        .spin-error { color: var(--ow-danger); font-weight: 600; }
         #bulk-section { margin-top: 12px; }
     </style>
     <meta name="color-scheme" content="light dark">
@@ -144,8 +151,12 @@
             <label for="adminSocietyQuery">Society name</label>
             <div class="input-row">
                 <input type="text" id="adminSocietyQuery" placeholder="Enter society name">
-                <button type="button" onclick="fetchSocietySpins()">Check spins</button>
+                <button type="button" id="checkSpinsBtn">Check spins</button>
             </div>
+            <div class="form-actions">
+                <button type="button" id="repairSpinsBtn" class="btn-secondary btn-sm">Repair spin data</button>
+            </div>
+            <p class="note small">Rewrites <b>societyId</b> onto older spin documents so the counts line up.</p>
             <div id="spinStatsResult" class="note"></div>
         </section>
 
@@ -353,46 +364,6 @@
 
         function closeModal() { document.getElementById('customModal').style.display='none'; }
 
-        // Global function for MasterAdmin spin query lookup with winner flat support
-        async function fetchSocietySpins() {
-            const societyName = document.getElementById('adminSocietyQuery').value.trim();
-            const resultDiv = document.getElementById('spinStatsResult');
-            
-            if (!societyName) {
-                resultDiv.innerText = "Please enter a society name.";
-                return;
-            }
-
-            resultDiv.innerHTML = "Fetching stats...";
-
-            try {
-                const res = await fetch(`${window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api'}/contest/spinstats?societyName=${encodeURIComponent(societyName)}`, {
-                    headers: { 'ngrok-skip-browser-warning': 'true' }
-                });
-                
-                if (res.ok) {
-                    const data = await res.json();
-                    
-                    const lifetime = data.totalLifetimeSpins !== undefined ? data.totalLifetimeSpins : (data.totalSpins || 0);
-                    const daily = data.totalDaySpins || 0;
-                    const monthly = data.totalMonthSpins || 0;
-                    const winnerFlat = data.winnerFlat || "None yet";
-                    
-                    resultDiv.innerHTML = `
-                        🏢 <b>Society:</b> ${data.societyName || societyName}<br>
-                        🏆 <b>Latest Winner Flat:</b> <span style="color:#2e7d32; font-weight:bold;">${winnerFlat}</span><br>
-                        ♾️ <b>Total Lifetime Spins:</b> <span style="color:#d32f2f;">${lifetime}</span><br>
-                        📅 <b>Spins Today:</b> <span style="color:#d32f2f;">${daily}</span><br>
-                        🗓️ <b>Spins This Month:</b> <span style="color:#d32f2f;">${monthly}</span>
-                    `;
-                } else {
-                    resultDiv.innerText = "Society data not found or invalid response.";
-                }
-            } catch (err) {
-                console.error("Spin Stats Error:", err);
-                resultDiv.innerText = "Error fetching statistics.";
-            }
-        }
     </script>
 
     <script type="module" src="admin-logic.js"></script>
