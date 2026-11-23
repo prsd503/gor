@@ -188,14 +188,33 @@ already-full flat.
 ## Society spin counts (master login)
 
 ```
-GET /api/contest/spinstats?societyName=Aangan   (master token)
-→ { societyName, totalSpins, totalLifetimeSpins, totalDaySpins, totalMonthSpins, daysRecorded, winnerFlat }
+GET  /api/contest/spinstats?societyName=Aangan      (master token)
+POST /api/contest/spinstats/backfill                (master token) { societyName }
 ```
 
-Spin documents are keyed `<society>_<YYYY-MM-DD>`, so the lifetime total sums
-every day for that society, the month total sums that calendar month, and the
-day total is today's count - all from the same document set the spin endpoint
-writes.
+`POST /api/contest/spin` writes one document per society per **UTC** day:
+
+```
+spinStats/aangan_2026-11-04 = { createdAt, date: "2026-11-04", societyName: "Aangan", spinCount: 1 }
+```
+
+Documents created before `societyId` was stamped carry only `date`,
+`societyName` and the `<societyLowercased>_<date>` document id. Because
+`GET …/spinstats` used `where('societyId', '==', id)`, those documents were never
+returned and the master page showed *"Society data not found or invalid
+response."* The read now tries the indexed query and then scans the collection,
+matching on `societyId`, **or** `societyName`, **or** the document id prefix, and
+takes the date from the `date` field or the id suffix. One document per date is
+counted (the largest `spinCount` wins if two collide).
+
+```
+→ { societyName, totalSpins, totalLifetimeSpins, totalDaySpins,
+    totalMonthSpins, daysRecorded, documentsMatched, lastSpinDate, winnerFlat }
+```
+
+`backfill` stamps the missing `societyId` onto every matching document (batches
+of 400, `merge: true`, safe to repeat) and returns `{ success, society, updated }`.
+The master page exposes it as **Repair spin data** next to **Check spins**.
 
 ## Bulk delete vehicles (admin portal)
 

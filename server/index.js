@@ -549,6 +549,66 @@ function utcDate(date = new Date()) {
     return date.toISOString().slice(0, 10);
 }
 
+// Spin statistics are read through a collection scan rather than a
+// `where('societyId', ...)` query: live documents predate that field, and a
+// Firestore equality filter drops documents that do not have it. A dedicated
+// query is tried first so the cost stays small when the index and field exist.
+async function readSpinStats(society) {
+    const collected = new Map();
+    const add = snapshot => snapshot.forEach(doc => {
+        if (!collected.has(doc.id)) collected.set(doc.id, { id: doc.id, data: doc.data() || {} });
+    });
+    try {
+        add(await db.collection('spinStats').where('societyId', '==', society.id).get({ fresh: true }));
+    } catch (_) { /* Missing field/index must not hide the scan below. */ }
+    try {
+        add(await db.collection('spinStats').get({ fresh: true }));
+    } catch (err) {
+        if (collected.size === 0) throw err;
+    }
+    return [...collected.values()];
+}
+
+async function latestWinnerFlat(society) {
+    try {
+        const snapshot = await db.collection('winners').where('societyId', '==', society.id).get();
+        const winners = snapshot.docs.map(doc => doc.data() || {}).sort((a, b) => {
+            const time = value => value && typeof value.toMillis === 'function' ? value.toMillis() : new Date(value || 0).getTime();
+            return time(b.createdAt) - time(a.createdAt);
+        });
+        return winners.length ? (winners[0].flatNumber || winners[0].winnerFlatnumber || 'None yet') : 'None yet';
+    } catch (_) {
+        return 'None yet';
+    }
+}
+
+// The spin endpoint stamps societyId on every new document. Older documents
+// (and the ones visible in the Firebase console today) carry only societyName
+// and the `<society>_<date>` id, which is why the master page could not find
+// them. Rewriting them makes the per-society query work and is safe to repeat.
+async function backfillSpinStatsSocietyIds(society) {
+    const names = new Set([society.id, society.name, ...society.aliases].map(normalizeAuthValue).filter(Boolean));
+    const entries = await readSpinStats(society);
+    const updates = entries.filter(entry => {
+        const data = entry.data || {};
+        if (data.societyId && String(data.societyId) === society.id) return false;
+        if (normalizeAuthValue(data.societyName) && names.has(normalizeAuthValue(data.societyName))) return true;
+        return [...names].some(name => String(entry.id).startsWith(`${name}_`));
+    });
+    for (let i = 0; i < updates.length; i += 400) {
+        const batch = db.batch();
+        for (const entry of updates.slice(i, i + 400)) {
+            batch.set(db.collection('spinStats').doc(entry.id), {
+                societyId: society.id,
+                societyName: entry.data.societyName || society.name,
+                updatedAt: FieldValue.serverTimestamp()
+            }, { merge: true });
+        }
+        await batch.commit();
+    }
+    return updates.length;
+}
+
 // --- APP VERSION POLICY ---
 // Read with the Admin SDK, which bypasses Firestore rules AND App Check enforcement.
 // This lets the update popup work even when native attestation is still misconfigured.
@@ -1527,56 +1587,93 @@ app.get('/api/contest/winners', async (req, res) => {
     } catch (_) { return res.status(503).json({ error: 'Contest results could not be loaded.' }); }
 });
 
-// Master login: society spin counts. Spin documents are keyed
-// `<society>_<date>`, so the lifetime/month totals come from every document for
-// that society rather than from today's one - which is what made "Total
-// Lifetime Spins" and "Spins This Month" wrong (they showed today's count and 0).
+// Master login: society spin counts.
+//
+// spinStats documents are keyed `<societyLowercased>_<YYYY-MM-DD>` and, in the
+// live database, hold only { createdAt, date, societyName, spinCount }. The
+// earlier version queried `where('societyId', '==', id)`, which silently skips
+// every document that has no societyId field - so a society with recorded spins
+// still reported nothing. The scan below falls back to the document id and the
+// societyName field, so both old and new documents are counted.
 app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
     try {
         const requested = String(req.query.societyName || req.query.society || '').trim();
         if (!requested) return res.status(400).json({ error: 'Society name is required.' });
         const society = await authorization.resolveSociety(requested);
         if (!society) return res.status(404).json({ error: 'Society not found.' });
+
         const today = utcDate();
-        const prefix = `${normalizeAuthValue(society.name)}_`;
-        let stats = [];
-        try {
-            const snapshot = await db.collection('spinStats')
-                .where('societyId', '==', society.id).get();
-            stats = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() || {} }));
-        } catch (_) { stats = []; }
-        const belongs = entry => entry.data.societyId === society.id ||
-            String(entry.id).startsWith(prefix) ||
-            normalizeAuthValue(entry.data.societyName) === normalizeAuthValue(society.name);
-        const dayOf = entry => String(entry.data.date || String(entry.id).slice(prefix.length) || '');
-        let lifetime = 0;
-        let todaySpins = 0;
-        let monthSpins = 0;
         const month = today.slice(0, 7);
-        for (const entry of stats) {
+        const names = new Set([society.id, society.name, ...society.aliases].map(normalizeAuthValue).filter(Boolean));
+        const prefix = `${normalizeAuthValue(society.name)}_`;
+
+        const entries = await readSpinStats(society);
+        const belongs = entry => {
+            const data = entry.data || {};
+            if (data.societyId && String(data.societyId) === society.id) return true;
+            if (normalizeAuthValue(data.societyName) && names.has(normalizeAuthValue(data.societyName))) return true;
+            return [...names].some(name => String(entry.id).startsWith(`${name}_`));
+        };
+        const dayOf = entry => {
+            const stored = entry.data && entry.data.date;
+            if (typeof stored === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(stored)) return stored;
+            const match = /(\d{4}-\d{2}-\d{2})$/.exec(String(entry.id));
+            return match ? match[1] : '';
+        };
+
+        // One document per day; a duplicate id for the same day would double
+        // count, so keep the largest count per date.
+        const perDay = new Map();
+        let matched = 0;
+        for (const entry of entries) {
             if (!belongs(entry)) continue;
-            const count = Number(entry.data.spinCount) || 0;
+            matched += 1;
             const date = dayOf(entry);
+            const count = Math.max(0, Number(entry.data && entry.data.spinCount) || 0);
+            if (!date) continue;
+            perDay.set(date, Math.max(perDay.get(date) || 0, count));
+        }
+        let lifetime = 0;
+        let monthSpins = 0;
+        for (const [date, count] of perDay) {
             lifetime += count;
-            if (date === today) todaySpins = Math.max(todaySpins, count);
             if (date.slice(0, 7) === month) monthSpins += count;
         }
-        const snapshot = await db.collection('winners').where('societyId', '==', society.id).get();
-        const winners = snapshot.docs.map(doc => doc.data() || {}).sort((a, b) => {
-            const time = value => value && typeof value.toMillis === 'function' ? value.toMillis() : new Date(value || 0).getTime();
-            return time(b.createdAt) - time(a.createdAt);
-        });
-        const winnerFlat = winners.length ? (winners[0].flatNumber || winners[0].winnerFlatnumber || 'None yet') : 'None yet';
+        const todaySpins = perDay.get(today) || 0;
+
+        const winnerFlat = await latestWinnerFlat(society);
         return res.set('Cache-Control', 'no-store').json({
             societyName: society.name,
             totalSpins: lifetime,
             totalLifetimeSpins: lifetime,
             totalDaySpins: todaySpins,
             totalMonthSpins: monthSpins,
-            daysRecorded: stats.filter(belongs).length,
+            daysRecorded: perDay.size,
+            documentsMatched: matched,
+            lastSpinDate: [...perDay.keys()].sort().pop() || null,
             winnerFlat
         });
-    } catch (_) { return res.status(503).json({ error: 'Spin statistics could not be loaded.' }); }
+    } catch (err) {
+        console.error('Spin stats error:', err);
+        return res.status(503).json({ error: 'Spin statistics could not be loaded.' });
+    }
+});
+
+// Master login: stamp `societyId` onto spinStats documents that predate the
+// field, so per-society queries (and the console) line up. Returns how many
+// documents were repaired; running it twice is harmless.
+app.post('/api/contest/spinstats/backfill', requireMaster, async (req, res) => {
+    try {
+        const requested = String((req.body && (req.body.societyName || req.body.society)) || '').trim();
+        if (!requested) return res.status(400).json({ error: 'Society name is required.' });
+        const society = await authorization.resolveSociety(requested);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const updated = await backfillSpinStatsSocietyIds(society);
+        return res.set('Cache-Control', 'no-store').json({ success: true, society: society.name, updated });
+    } catch (err) {
+        console.error('Spin stats backfill error:', err);
+        return res.status(503).json({ error: 'Spin data could not be repaired.' });
+    }
 });
 
 // --- ADMIN WRITES (require a verified admin identity) ---

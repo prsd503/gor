@@ -109,44 +109,107 @@ window.addEventListener("DOMContentLoaded", async () => {
 });
 
 
+// --- Master login: society spin counts ------------------------------------
+// The button used to be an inline onclick calling this (module-scoped, so never
+// on window) function - plus a second, unauthenticated copy inside admin.html.
+// Both are gone: the page binds #checkSpinsBtn and the request goes through
+// authenticatedFetch, which is the only thing that can satisfy requireMaster.
+async function loadSocietySpins(societyName) {
+    const res = await authenticatedFetch(`${API_BASE_URL}/contest/spinstats?societyName=${encodeURIComponent(societyName)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const error = new Error(data.error || `Request failed (${res.status})`);
+        error.status = res.status;
+        throw error;
+    }
+    return data;
+}
+
+function spinStatTile(label, value) {
+    return `<div class="spin-tile"><span class="spin-label">${label}</span><span class="spin-value">${escapeText(value)}</span></div>`;
+}
+
+function renderSpinStats(data, societyName) {
+    const resultDiv = document.getElementById('spinStatsResult');
+    if (!resultDiv) return;
+    const lifetime = data.totalLifetimeSpins !== undefined ? data.totalLifetimeSpins : (data.totalSpins || 0);
+    const lines = [
+        `<div><b>Society:</b> ${escapeText(data.societyName || societyName)}</div>`,
+        '<div class="spin-grid">',
+        spinStatTile('Lifetime spins', lifetime),
+        spinStatTile('Spins today', data.totalDaySpins || 0),
+        spinStatTile('This month', data.totalMonthSpins || 0),
+        spinStatTile('Days recorded', data.daysRecorded || 0),
+        '</div>',
+        `<div class="spin-winner">🏆 Latest winner flat: ${escapeText(data.winnerFlat || 'None yet')}</div>`
+    ];
+    if (!lifetime) {
+        lines.push('<p class="spin-note">No spins are recorded for this society yet. Spins appear here after a resident spins in the contest.</p>');
+    } else if (data.lastSpinDate) {
+        lines.push(`<p class="spin-note">Last spin recorded: ${escapeText(data.lastSpinDate)} (UTC days).</p>`);
+    }
+    resultDiv.innerHTML = lines.join('');
+}
+
 async function fetchSocietySpins() {
     const societyName = document.getElementById('adminSocietyQuery').value.trim();
     const resultDiv = document.getElementById('spinStatsResult');
-    
+    if (!resultDiv) return;
+
     if (!societyName) {
         resultDiv.innerText = "Please enter a society name.";
         return;
     }
 
     resultDiv.innerHTML = "Fetching stats...";
-
     try {
-        const res = await authenticatedFetch(`${window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api'}/contest/spinstats?societyName=${encodeURIComponent(societyName)}`);
-        
-        if (res.ok) {
-            const data = await res.json();
-            
-            const lifetime = data.totalLifetimeSpins !== undefined ? data.totalLifetimeSpins : (data.totalSpins || 0);
-            const daily = data.totalDaySpins || 0;
-            const monthly = data.totalMonthSpins || 0;
-            const winnerFlat = data.winnerFlat || "None yet"; // 👈 Pulls from backend response
-            
-            resultDiv.innerHTML = `
-                🏢 <b>Society:</b> ${data.societyName || societyName}<br>
-                🏆 <b>Latest Winner Flat:</b> <span style="color:#2e7d32; font-weight:bold;">${winnerFlat}</span><br>
-                ♾️ <b>Total Lifetime Spins:</b> <span style="color:#d32f2f;">${lifetime}</span><br>
-                📅 <b>Spins Today:</b> <span style="color:#d32f2f;">${daily}</span><br>
-                🗓️ <b>Spins This Month:</b> <span style="color:#d32f2f;">${monthly}</span>
-            `;
-        } else {
-            resultDiv.innerText = "Society data not found or invalid response.";
-        }
+        renderSpinStats(await loadSocietySpins(societyName), societyName);
     } catch (err) {
+        // Say what actually happened instead of the old catch-all message.
+        if (err.status === 401) {
+            resultDiv.innerHTML = '<span class="spin-error">Your session expired. Sign in again and retry.</span>';
+        } else if (err.status === 403) {
+            resultDiv.innerHTML = '<span class="spin-error">Only the master administrator can read society spin counts.</span>';
+        } else if (err.status === 404) {
+            resultDiv.innerHTML = `<span class="spin-error">No society named "${escapeText(societyName)}" was found. Check the spelling.</span>`;
+        } else if (err.status === 503) {
+            resultDiv.innerHTML = '<span class="spin-error">The server could not read spin data. Try again in a moment.</span>';
+        } else {
+            resultDiv.innerHTML = `<span class="spin-error">Could not load spin counts: ${escapeText(err.message || err)}</span>`;
+        }
         console.error("Spin Stats Error:", err);
-        resultDiv.innerText = "Error fetching statistics.";
     }
 }
 
+// Stamp societyId onto older spin documents so per-society queries line up.
+async function repairSpinData() {
+    const societyName = document.getElementById('adminSocietyQuery').value.trim() ||
+        (document.getElementById('masterSocietyInput') || {}).value || '';
+    const resultDiv = document.getElementById('spinStatsResult');
+    if (!societyName) return window.showModal("Enter the society name first, then repair its spin data.");
+    if (!window.confirm(`Rewrite the societyId on ${societyName}'s spin documents? This only adds the missing field.`)) return;
+    if (resultDiv) resultDiv.innerHTML = "Repairing spin data...";
+    try {
+        const res = await authenticatedFetch(`${API_BASE_URL}/contest/spinstats/backfill`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ societyName })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Repair failed (${res.status})`);
+        window.showModal(data.updated
+            ? `${data.society}: repaired ${data.updated} spin document(s). Reload the counts now.`
+            : `${data.society}: every spin document already had its societyId.`);
+        await fetchSocietySpins();
+    } catch (err) {
+        if (resultDiv) resultDiv.innerHTML = "";
+        window.showModal("Repair failed: " + (err.message || err));
+    }
+}
+
+window.fetchSocietySpins = fetchSocietySpins;
+window.repairSpinData = repairSpinData;
+window.OwAdminSpins = { loadSocietySpins, renderSpinStats, fetchSocietySpins, repairSpinData };
 
 
 // --- Security Guard Management Logic ---
@@ -875,6 +938,15 @@ async function loadSocietyFlats() {
 window.OwAdminFlats = { loadSocietyFlats, renderFlatOptions, flats: () => [...societyFlats] };
 
 document.addEventListener('DOMContentLoaded', () => {
+
+    document.getElementById('checkSpinsBtn')?.addEventListener('click', () => fetchSocietySpins());
+    document.getElementById('repairSpinsBtn')?.addEventListener('click', () => repairSpinData());
+    document.getElementById('adminSocietyQuery')?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            fetchSocietySpins();
+        }
+    });
 
     async function loadSocietyLimits() {
         if (!assignedSociety) return;
