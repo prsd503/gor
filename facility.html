@@ -164,8 +164,8 @@
 
         summaryContent.innerHTML = html;
 
-        if (societyAdminPhone) {
-            const formattedPhone = societyAdminPhone.replace(/\D/g, '');
+        const formattedPhone = String(societyAdminPhone || '').replace(/\D/g, '');
+        if (formattedPhone.length >= 10) {
             const msgText = bookings.length > 0 
                 ? `Hi, I have an inquiry regarding bookings on ${dateStr}.` 
                 : `Hi, I want to book a facility on ${dateStr}. Please assist.`;
@@ -205,10 +205,13 @@
                 facilityMap = await facRes.json();
             }
 
-            const adminRes = await fetch(`${API_BASE_URL}/admins?society=${encodeURIComponent(societyName)}`, { headers });
+            // The society administrator's WhatsApp number is read from the
+            // Firestore `admins` collection by the API, which returns only the
+            // number (never the admin's email or other record fields).
+            const adminRes = await fetch(`${API_BASE_URL}/societies/${encodeURIComponent(societyId)}/admin-contact`, { headers });
             if (adminRes.ok) {
-                const adminData = await adminRes.json();
-                societyAdminPhone = adminData.phone || "";
+                const adminData = await adminRes.json().catch(() => ({}));
+                societyAdminPhone = (adminData && adminData.phone) || "";
             }
         } catch (e) { 
             console.error("Error loading metadata from API:", e); 

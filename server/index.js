@@ -448,6 +448,56 @@ function recordMatchesSociety(data, docId, society) {
         [data && data.society, data && data.societyName].some(value => aliases.has(normalizeAuthValue(value)));
 }
 
+// Public contact projection: the WhatsApp number a resident should message to
+// reach the society administrator. This is published on purpose (it is the same
+// number the admin wants residents to call) and never exposes anything else from
+// the Firestore `admins` documents.
+function publicWhatsAppNumber(value) {
+    const digits = String(value == null ? '' : value).replace(/\D/g, '').slice(0, 15);
+    return digits.length >= 10 ? digits : null;
+}
+
+// A society's administrator record(s), looked up in `admins`. Records are keyed
+// by admin email and identify their society with `societyId`, `society` or
+// `societyName`; older documents may only store the display name.
+async function findSocietyAdminRecords(society) {
+    // `in` is case-sensitive, so both the document id and the display name are
+    // queried as written; duplicates are removed by exact value only.
+    const requested = [...new Set([society.id, society.name, ...society.aliases]
+        .map(alias => String(alias == null ? '' : alias).trim())
+        .filter(Boolean))].slice(0, 30);
+    const fields = ['societyId', 'societyName', 'society'];
+    const snapshots = await Promise.all(fields.map(field =>
+        db.collection('admins').where(field, 'in', requested).get().catch(() => null)));
+    const found = new Map();
+    for (const snapshot of snapshots) {
+        if (!snapshot) continue;
+        snapshot.forEach(doc => {
+            const data = doc.data() || {};
+            if (data.disabled === true || data.active === false) return;
+            if (!recordMatchesSociety(data, doc.id, society)) return;
+            found.set(doc.id, doc);
+        });
+    }
+    return [...found.values()];
+}
+
+function adminContactFor(records) {
+    const contacts = records.map(doc => {
+        const data = doc.data() || {};
+        return {
+            id: doc.id,
+            isMaster: data.isMaster === true,
+            phone: publicWhatsAppNumber(data.phone || data.whatsapp || data.whatsappNumber || data.mobile)
+        };
+    }).filter(contact => contact.phone);
+    if (!contacts.length) return null;
+    // A society-scoped administrator is the right first contact; the master
+    // account is only the fallback when it is the one that stores a number.
+    const chosen = contacts.find(contact => !contact.isMaster) || contacts[0];
+    return { phone: chosen.phone };
+}
+
 async function getSocietyDocument(collectionName, society) {
     const found = new Map();
     const names = [...new Set([society.id, ...society.aliases])].slice(0, 30);
@@ -922,6 +972,24 @@ app.get('/api/facilities/:societyIdentifier', async (req, res) => {
         }
         return res.set('Cache-Control', 'public, max-age=30').json(safe);
     } catch (_) { return res.status(503).json({ error: 'Facilities could not be loaded.' }); }
+});
+
+// The facility calendar's "contact the admin" button. Public on purpose: the
+// page is a guest/resident-facing calendar, and the only field returned is the
+// WhatsApp number of the society's administrator, projected from `admins`.
+app.get('/api/societies/:societyIdentifier/admin-contact', async (req, res) => {
+    try {
+        const society = await authorization.resolveSociety(req.params.societyIdentifier);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const records = await findSocietyAdminRecords(society);
+
+        const contact = adminContactFor(records);
+        return res.set('Cache-Control', 'public, max-age=60').json({
+            societyId: society.id,
+            society: society.name,
+            phone: contact ? contact.phone : null
+        });
+    } catch (_) { return res.status(503).json({ error: 'Admin contact could not be loaded.' }); }
 });
 
 app.get('/api/bookings', async (req, res) => {
