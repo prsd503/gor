@@ -72,7 +72,7 @@
         <!-- Informational Note with WhatsApp Contact Link -->
         <aside class="admin-note-box note">
             <p>⚠️ <b>Note:</b> If details need to be edited, kindly contact the society admin. If a tenant or owner has changed, kindly inform the society admin as well by clicking the contact button below.</p>
-            <a id="adminWhatsAppLink" href="https://wa.me/919033406816" target="_blank" class="btn btn-success btn-sm whatsapp-contact-btn">💬 Contact admin on WhatsApp</a>
+            <a id="adminWhatsAppLink" href="https://wa.me/919033406816" target="_blank" rel="noopener" data-society-phone="pending" class="btn btn-success btn-sm whatsapp-contact-btn">💬 Contact admin on WhatsApp</a>
         </aside>
     </main>
 
@@ -142,6 +142,50 @@
 
             let currentSocietyData = null;
 
+            // The society administrator's WhatsApp number lives on the admin's
+            // record in Firestore `admins`; the API returns only that number.
+            // The link keeps working with the built-in number until (or unless)
+            // the lookup answers. `societyId` may be a display name or an id,
+            // and both are accepted by the endpoint.
+            let adminPhone = '';
+
+            // The chat text names the flat, so it is rebuilt whenever the
+            // selection changes (the number itself comes from Firestore).
+            function applyAdminPhoneLink() {
+                const link = document.getElementById('adminWhatsAppLink');
+                if (!link || adminPhone.length < 10) return;
+                const flatSelectEl = document.getElementById('flatSelect');
+                const flat = flatSelectEl && flatSelectEl.value ? flatSelectEl.value : null;
+                const message = flat
+                    ? `Hi, I need help with the vehicle entry for Flat ${flat} in ${societyName}.`
+                    : `Hi, I need help with my vehicle entry in ${societyName}.`;
+                link.href = `https://wa.me/${adminPhone}?text=${encodeURIComponent(message)}`;
+            }
+
+            async function loadAdminContact() {
+                const link = document.getElementById('adminWhatsAppLink');
+                if (!link) return;
+                link.dataset.societyPhone = 'pending';
+                try {
+                    const res = await fetch(`${API_BASE_URL}/societies/${encodeURIComponent(societyName)}/admin-contact`, { headers: { ...NG_HEADERS } });
+                    if (!res.ok) throw new Error(`admin-contact ${res.status}`);
+                    const data = await res.json().catch(() => ({}));
+                    const digits = String((data && data.phone) || '').replace(/\D/g, '');
+                    if (digits.length < 10) throw new Error('no admin phone stored');
+                    adminPhone = digits;
+                    link.dataset.societyPhone = digits;
+                    link.dataset.adminPhone = digits;
+                    applyAdminPhoneLink();
+                } catch (err) {
+                    console.warn('Entry: using the fallback admin number.', err && err.message);
+                    link.dataset.societyPhone = 'fallback';
+                }
+            }
+
+            // Kick this off alongside the society lookup so the contact button
+            // already points at the right admin when the resident needs it.
+            const adminContactReady = loadAdminContact();
+
             try {
                 const headers = await getAuthHeaders();
                 const response = await fetch(`${API_BASE_URL}/societies`, { headers });
@@ -173,6 +217,10 @@
             const residentTypeSelect = document.getElementById('residentTypeSelect');
             const restrictionNote = document.getElementById('restrictionNote');
 
+            // The contact message names the flat, so refresh the link once a
+            // flat is chosen as well as on load.
+            await adminContactReady;
+
             mobileInput.addEventListener('input', (e) => {
                 e.target.value = e.target.value.replace(/[^0-9]/g, '').slice(0, 10);
             });
@@ -180,7 +228,8 @@
             if (flatSelect) {
                 flatSelect.addEventListener('change', async () => {
                     const selectedFlat = flatSelect.value;
-                    
+                    applyAdminPhoneLink();
+
                     dynamicContainer.innerHTML = '';
                     restrictionNote.style.display = 'none';
                     submitBtn.style.display = 'none';

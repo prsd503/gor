@@ -128,7 +128,8 @@ Without query parameters it returns the full normalized policy. Invalid platform
 GET /api/societies/:societyIdentifier/admin-contact
 ```
 
-Public read (the facility calendar is guest/resident-facing). It resolves the
+Public read (the facility calendar and the vehicle-entry page are
+guest-facing). It resolves the
 society the same way every other route does, then looks in the Firestore
 `admins` collection for a record whose `societyId`, `society` or `societyName`
 matches that society, and returns only the WhatsApp number:
@@ -140,6 +141,8 @@ matches that society, and returns only the WhatsApp number:
 - `phone` is normalised to digits (10–15, using `phone`, `whatsapp`,
   `whatsappNumber` or `mobile`) and is `null` when no active admin stored one;
   the page then shows "Admin contact not available."
+- Used by `facility.html` ("Contact Admin via WhatsApp") and `entry.html`
+  ("Contact admin on WhatsApp", whose chat text names the chosen flat).
 - Records with `disabled: true` / `active: false` are ignored, and a
   society-scoped admin is preferred over a master admin's number.
 - Nothing else from `admins` (email, uid, …) leaves the server, so Firestore
