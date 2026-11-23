@@ -64,9 +64,13 @@ test('unsafe Firebase configuration fails before app/Firebase initialization', (
 test('full website + API deployment selects only Hosting and the API Function, never Firestore Rules', () => {
     const config = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json')));
     assert.equal(config.hosting.public, '.firebase-public');
+    assert.deepEqual(config.hosting.rewrites, ['/api', '/api/**'].map(source => ({ source, function: { functionId: 'api', region: 'us-central1' } })));
     assert.equal(config.functions[0].source, 'server');
     assert.equal(config.functions[0].runtime, 'nodejs22');
     assert.equal(config.firestore, undefined);
+    const exampleEnv = fs.readFileSync(path.join(root, 'server/.env.firebase.example'), 'utf8');
+    assert.match(exampleEnv, /^ALLOWED_ORIGINS=.*https:\/\/finder-owl\.web\.app/m);
+    assert.match(exampleEnv, /^ALLOWED_ORIGINS=.*https:\/\/finder-owl\.firebaseapp\.com/m);
     const script = JSON.parse(fs.readFileSync(path.join(root, 'package.json'))).scripts['deploy:full'];
     assert.equal(script, 'node scripts/check-api-deploy.js && npx firebase-tools deploy --config firebase.json --project finder-owl --only functions:api,hosting');
     assert.doesNotMatch(script, /firestore:rules/);
