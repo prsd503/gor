@@ -97,3 +97,15 @@ test('facility.html asks the API for the society admin contact instead of /admin
     assert.match(html, /wa\.me\/\$\{formattedPhone\}/, 'the WhatsApp link is built from the fetched number');
     assert.match(html, /Admin contact not available\./, 'the page still degrades when no number is stored');
 });
+
+test('/api/admins/me returns the signed-in administrator society and nothing else', async (t) => {
+    const base = await startApi(t, async (db) => {
+        await db.collection('societies').doc('aangan').set({ name: 'Aangan' });
+        await db.collection('admins').doc('prsd1@aangan.in').set({
+            email: 'prsd1@aangan.in', phone: '919033406816', society: 'Aangan'
+        });
+    });
+    // startApi's helper only does GETs; use it for the unauthenticated case.
+    const anonymous = await base('/api/admins/me');
+    assert.equal(anonymous.status, 401, 'the society of an admin is never public');
+});

@@ -122,6 +122,18 @@ Without query parameters it returns the full normalized policy. Invalid platform
 
 `update-popup.js` now calls this endpoint first and falls back to the direct Firestore read if the API is unreachable, so the popup keeps working during an API outage.
 
+## Signed-in administrator profile
+
+```
+GET /api/admins/me        (staff token required)
+```
+
+Returns the caller's own membership resolved from the Firestore `admins` /
+`guards` records: `{ email, society, societyId, isMaster }`. Pages that need the
+administrator's society (for example the data deletion request, which names it
+in the WhatsApp message) use this instead of trusting a URL parameter. The
+existing `GET /api/admins/:email` stays master-or-self only.
+
 ## Facility calendar admin contact
 
 ```

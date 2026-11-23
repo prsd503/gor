@@ -702,6 +702,19 @@ app.get('/api/admins', requireStaff, async (req, res) => {
     } catch (_) { return res.status(503).json({ error: 'Authorization could not be verified.' }); }
 });
 
+// The signed-in administrator's own society, for pages such as the data
+// deletion request that need to name it. Works for any staff member (admin or
+// guard) and never reveals another member's society.
+app.get('/api/admins/me', requireStaff, async (req, res) => {
+    const membership = req.membership;
+    return res.set('Cache-Control', 'private, no-store').json({
+        email: membership.email,
+        society: membership.societyName || '',
+        societyId: membership.societyId || null,
+        isMaster: membership.role === 'master'
+    });
+});
+
 app.get('/api/admins/verify-society', requireStaff, async (req, res) => {
     try {
         const search = String(req.query.society || '').trim();
