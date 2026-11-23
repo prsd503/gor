@@ -75,7 +75,7 @@
         </div>
     </nav>
 
-    <main class="page stack">
+    <main class="page stack auth-page">
         <header class="page-header">
             <span class="eyebrow">Society administration</span>
             <h1 class="page-title">Admin portal</h1>
@@ -83,18 +83,44 @@
         </header>
 
         <!-- Login Section -->
-        <section class="card" id="login-section" aria-labelledby="adminLoginTitle">
-            <h2 id="adminLoginTitle">Sign in</h2>
+        <section class="card auth-card" id="login-section" aria-labelledby="adminLoginTitle">
+            <div class="auth-head">
+                <span class="auth-badge" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg>
+                </span>
+                <div class="auth-head-text">
+                    <span class="auth-eyebrow">Society administration</span>
+                    <h2 class="auth-title" id="adminLoginTitle">Admin sign in</h2>
+                    <p class="auth-sub">Manage vehicles, notices, guards and bookings.</p>
+                </div>
+            </div>
             <label for="email">Email</label>
-            <input type="email" id="email" placeholder="name@example.com" autocomplete="username">
+            <div class="field-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+                <input type="email" id="email" placeholder="name@example.com" autocomplete="username" inputmode="email">
+            </div>
             <label for="pass">Password</label>
-            <input type="password" id="pass" placeholder="Password" autocomplete="current-password">
-            <div class="form-actions">
-                <button type="button" id="loginBtn" class="btn-block">Login</button>
+            <div class="field-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                <input type="password" id="pass" placeholder="Password" autocomplete="current-password">
+                <button type="button" class="pw-toggle" data-pw-toggle="pass" aria-label="Show password" aria-pressed="false">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.5"/></svg>
+                </button>
             </div>
-            <div class="text-center">
+            <div class="auth-actions">
+                <button type="button" id="loginBtn" class="btn-block auth-submit">
+                    Sign in
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13"/><path d="m12 5 7 7-7 7"/></svg>
+                </button>
+            </div>
+            <div class="auth-foot">
                 <button type="button" id="forgotPasswordBtn" class="btn-ghost">Forgot password?</button>
+                <span class="auth-secure">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                    Secure sign-in
+                </span>
             </div>
+            <p class="auth-hint" id="loginHint">Use the email and password issued by the <span class="ow-brand">Owl Watcher</span> team.</p>
         </section>
 
         <!-- Master Admin Controls Panel -->
