@@ -391,6 +391,19 @@ async function getVehiclesForSociety(society, fresh = false) {
     return collectVehicleSnapshots(snapshots, society);
 }
 
+// Vehicle types accepted by the admin registry. The resident flow stays limited
+// to 2/4-wheelers, but the admin form has always offered 3-Wheeler, so the
+// registry must accept it rather than reject a valid admin edit.
+const VEHICLE_TYPES = ['2-Wheeler', '3-Wheeler', '4-Wheeler'];
+
+function normalizeVehicleType(value, fallback = '2-Wheeler') {
+    let vehicleType = String(value == null ? '' : value).trim();
+    if (/^2\s*-?\s*w(heeler)?$/i.test(vehicleType)) return '2-Wheeler';
+    if (/^3\s*-?\s*w(heeler)?$/i.test(vehicleType)) return '3-Wheeler';
+    if (/^4\s*-?\s*w(heeler)?$/i.test(vehicleType)) return '4-Wheeler';
+    return VEHICLE_TYPES.includes(vehicleType) ? vehicleType : fallback;
+}
+
 function lookupVariants(value) {
     const raw = String(value == null ? '' : value).trim();
     return [...new Set([raw, raw.toLowerCase(), raw.toUpperCase()].filter(Boolean))];
@@ -1135,12 +1148,10 @@ app.post('/api/vehicles', async (req, res) => {
         }
         const requestedVehicles = vehiclesToProcess
             .filter(vehicle => vehicle && String(vehicle.vehicleNumber || '').trim())
-            .map(vehicle => {
-                let vehicleType = String(vehicle.vehicleType || '2-Wheeler').trim();
-                if (/^2w$/i.test(vehicleType)) vehicleType = '2-Wheeler';
-                if (/^4w$/i.test(vehicleType)) vehicleType = '4-Wheeler';
-                return { vehicleNumber: String(vehicle.vehicleNumber).trim().toUpperCase(), vehicleType };
-            });
+            .map(vehicle => ({
+                vehicleNumber: String(vehicle.vehicleNumber).trim().toUpperCase(),
+                vehicleType: normalizeVehicleType(vehicle.vehicleType)
+            }));
         if (!requestedVehicles.length) return res.status(400).json({ error: 'At least one vehicle number is required.' });
         if (requestedVehicles.length > 12) return res.status(400).json({ error: 'Too many vehicles in one request.' });
         if (docId && requestedVehicles.length !== 1) return res.status(400).json({ error: 'Exactly one vehicle is required when editing.' });
@@ -1161,8 +1172,9 @@ app.post('/api/vehicles', async (req, res) => {
             return res.status(400).json({ error: 'Resident type must be Owner or Tenant.' });
         }
         for (const vehicle of requestedVehicles) {
-            if (!['2-Wheeler', '4-Wheeler'].includes(vehicle.vehicleType)) {
-                return res.status(400).json({ error: 'Vehicle type must be 2-Wheeler or 4-Wheeler.' });
+            const allowedTypes = isResident ? ['2-Wheeler', '4-Wheeler'] : VEHICLE_TYPES;
+            if (!allowedTypes.includes(vehicle.vehicleType)) {
+                return res.status(400).json({ error: `Vehicle type must be ${allowedTypes.join(' or ')}.` });
             }
             if (isResident && !/^[A-Z0-9]{10}$/.test(vehicle.vehicleNumber)) {
                 return res.status(400).json({ error: 'Vehicle number must contain exactly 10 letters or digits.' });

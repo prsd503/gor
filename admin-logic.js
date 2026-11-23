@@ -292,90 +292,185 @@ if (vehicleForm) {
 }
 
 // --- Vehicle Search Logic ---
+function escapeHtml(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function digitsOnly(value) {
+    return String(value == null ? '' : value).replace(/\D/g, '');
+}
+
+// Loads a registry record into the add/edit form so the admin can change it.
+window.editVehicle = (docId) => {
+    const record = registryCache.get(docId);
+    if (!record) return window.showModal("That record is no longer loaded. Search again.");
+    document.getElementById('vNum').value = record.vehicleNumber || '';
+    document.getElementById('fNum').value = record.flatNumber || '';
+    document.getElementById('rType').value = record.residentType || '';
+    document.getElementById('vType').value = record.vehicleType || '2-Wheeler';
+    document.getElementById('mNum').value = digitsOnly(record.mobileNumber).slice(-10);
+    const form = document.getElementById('vNum');
+    if (form && typeof form.scrollIntoView === 'function') form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.getElementById('fNum')?.focus();
+    window.showModal(`Editing ${record.vehicleNumber}. Change the details and press "Save changes".`);
+};
+
+window.deleteVehicleDoc = async (docId) => {
+    const record = registryCache.get(docId);
+    const label = record ? record.vehicleNumber : 'this vehicle';
+    if (!window.confirm(`Delete ${label} from the society registry? This cannot be undone.`)) return;
+    try {
+        const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/${encodeURIComponent(docId)}`, { method: 'DELETE' });
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `Delete failed (${res.status})`);
+        }
+        registryCache.delete(docId);
+        renderVehicleResults([...registryCache.values()], `Updated: ${label} was deleted.`);
+    } catch (err) {
+        window.showModal("Failed to delete vehicle record: " + (err.message || err));
+    }
+};
+
+// `registryCache` keeps the last search results so Edit can fill the form.
+const registryCache = new Map();
+
+function renderVehicleResults(vehicles, emptyMessage) {
+    const resultsDiv = document.getElementById('admin-results');
+    if (!resultsDiv) return;
+    if (!vehicles.length) {
+        resultsDiv.innerHTML = `<p>${escapeHtml(emptyMessage || 'No vehicle found in this society.')}</p>`;
+        return;
+    }
+    resultsDiv.innerHTML = vehicles.map((data) => {
+        const mobile = digitsOnly(data.mobileNumber);
+        const call = mobile
+            ? `<a href="tel:${escapeHtml(mobile)}" style="color:#0066cc;text-decoration:none;">${escapeHtml(mobile)}</a>`
+            : 'N/A';
+        const deviceNote = data.deviceId
+            ? '<div style="color:#8a6d3b;">Device-linked: the flat cannot be changed here.</div>'
+            : '';
+        return `
+            <div class="vehicle-result" data-vehicle-id="${escapeHtml(data.id)}" style="background:#f4ece0; padding:10px; margin-top:8px; border-radius:8px; font-family: sans-serif; font-size: 0.95rem;">
+                <b>Vehicle:</b> ${escapeHtml(data.vehicleNumber)}<br>
+                <b>Vehicle Type:</b> ${escapeHtml(data.vehicleType || 'N/A')}<br>
+                <b>Flat/Name:</b> ${escapeHtml(data.flatNumber || 'N/A')}<br>
+                <b>Resident Type:</b> ${escapeHtml(data.residentType || 'N/A')}<br>
+                <b>Mobile:</b> ${call}
+                ${deviceNote}
+                <div style="margin-top:8px; display:flex; gap:8px;">
+                    <button type="button" data-action="edit" data-id="${escapeHtml(data.id)}" style="background:#6d4c33; color:#fff; border:none; border-radius:4px; font-size:0.9rem; padding:5px 12px; cursor:pointer;">Edit</button>
+                    <button type="button" data-action="delete" data-id="${escapeHtml(data.id)}" style="background:#d32f2f; color:white; border: none; border-radius: 4px; font-size:0.9rem; padding:5px 10px; cursor: pointer;">Delete</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    resultsDiv.querySelectorAll('button[data-action]').forEach(button => {
+        button.addEventListener('click', () => {
+            const id = button.dataset.id;
+            if (button.dataset.action === 'edit') window.editVehicle(id);
+            else window.deleteVehicleDoc(id);
+        });
+    });
+}
+
 document.getElementById('adminSearchBtn')?.addEventListener('click', async () => {
     const searchVal = document.getElementById('adminSearch').value.trim().toUpperCase();
     const resultsDiv = document.getElementById('admin-results');
     if (!searchVal) return window.showModal("Please enter a vehicle number to search.");
-
+    if (!assignedSociety) return window.showModal("Your admin account is not assigned to a society yet.");
     resultsDiv.innerHTML = "Searching...";
+    registryCache.clear();
     try {
         const res = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(searchVal)}`);
-        const vehicles = await res.json();
-        
-        if (vehicles.length === 0) {
-            resultsDiv.innerHTML = "<p>No vehicle found.</p>";
-            return;
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `Search failed (${res.status})`);
         }
-
-        window.deleteVehicleDoc = async (docId) => {
-            try {
-                await authenticatedFetch(`${API_BASE_URL}/vehicles/${docId}`, { method: 'DELETE' });
-                window.showModal("Vehicle deleted from registry.");
-                document.getElementById('admin-results').innerHTML = "";
-            } catch (err) {
-                window.showModal("Failed to delete vehicle record.");
-            }
-        };
-
-        resultsDiv.innerHTML = "";
-        vehicles.forEach((data) => {
-            resultsDiv.innerHTML += `
-                <div style="background:#f4ece0; padding:10px; margin-top:5px; border-radius:8px; font-family: sans-serif; font-size: 0.95rem;">
-                    <b>Vehicle:</b> ${data.vehicleNumber}<br>
-                    <b>Vehicle Type:</b> ${data.vehicleType}<br>
-                    <b>Flat/Name:</b> ${data.flatNumber}<br>
-                    <b>Resident Type:</b> ${data.residentType || 'N/A'}<br>
-                    <b>Call:</b> <a href="tel:${data.mobileNumber}" style="color: #0066cc; text-decoration: none;">${data.mobileNumber}</a><br><br>
-                    <button onclick="window.deleteVehicleDoc('${data.id}')" style="background:#d32f2f; color: white; border: none; border-radius: 4px; font-size:0.9rem; padding:5px 10px; cursor: pointer;">Delete</button>
-                </div>
-            `;
-        });
+        const vehicles = await res.json();
+        (Array.isArray(vehicles) ? vehicles : []).forEach(vehicle => registryCache.set(vehicle.id, vehicle));
+        renderVehicleResults([...registryCache.values()], `No vehicle ${searchVal} is registered in ${assignedSociety}.`);
     } catch (err) {
-        window.showModal("Error searching vehicle data.");
+        resultsDiv.innerHTML = "";
+        window.showModal("Error searching vehicle data: " + (err.message || err));
     }
 });
 
+document.getElementById('adminSearch')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        document.getElementById('adminSearchBtn')?.click();
+    }
+});
+
+// Add / edit vehicle. The plate decides: if that number already exists in the
+// assigned society the existing Firestore document is updated, otherwise a new
+// one is created. The record id is never taken from the form, so an admin can
+// never overwrite a vehicle in another society by pasting an id.
 document.getElementById('saveBtn')?.addEventListener('click', async () => {
-    const vNum = document.getElementById('vNum').value.trim().toUpperCase();
+    const vNum = document.getElementById('vNum').value.trim().toUpperCase().replace(/\s+/g, ' ');
     const fNum = document.getElementById('fNum').value.trim();
     const rType = document.getElementById('rType').value;
-    const mNum = document.getElementById('mNum').value.trim();
+    const mNum = digitsOnly(document.getElementById('mNum').value).slice(-10);
     const vType = document.getElementById('vType').value;
 
+    if (!assignedSociety) return window.showModal("Your admin account is not assigned to a society yet.");
     if (!vNum || !fNum) return window.showModal("Vehicle number and Flat number/Name are required.");
+    if (!/^[A-Z0-9 -]{1,20}$/.test(vNum)) return window.showModal("Vehicle number may contain only letters, digits, spaces and hyphens.");
+    if (mNum && mNum.length !== 10) return window.showModal("Mobile number must be 10 digits (or left blank).");
 
+    const saveBtn = document.getElementById('saveBtn');
+    if (saveBtn) saveBtn.disabled = true;
     try {
-        const res = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(vNum)}`);
-        const vehicles = await res.json();
+        // Is this plate already in this society's registry?
+        const lookup = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(assignedSociety)}&vehicleNumber=${encodeURIComponent(vNum)}`);
+        if (!lookup.ok) {
+            const body = await lookup.json().catch(() => ({}));
+            throw new Error(body.error || `Lookup failed (${lookup.status})`);
+        }
+        const found = await lookup.json();
+        const existing = (Array.isArray(found) ? found : []).find(vehicle =>
+            String(vehicle.vehicleNumber || '').trim().toUpperCase() === vNum) || null;
 
-        const existingId = vehicles.length > 0 ? vehicles[0].id : null;
-
-        await authenticatedFetch(`${API_BASE_URL}/vehicles`, {
+        const res = await authenticatedFetch(`${API_BASE_URL}/vehicles`, {
             method: 'POST',
             body: JSON.stringify({
-                id: existingId,
+                id: existing ? existing.id : null,
                 vehicleNumber: vNum,
                 flatNumber: fNum,
-                residentType: rType,
+                residentType: rType || 'Resident',
                 mobileNumber: mNum,
                 vehicleType: vType,
                 societyName: assignedSociety
             })
         });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || `Save failed (${res.status})`);
 
-        if (existingId) {
-            window.showModal("Vehicle details updated successfully!");
+        window.showModal(existing
+            ? `${vNum} already existed in ${assignedSociety}, so its record was updated.`
+            : `${vNum} was added to the ${assignedSociety} registry.`);
+
+        // Keep the search results in step with the save.
+        if (existing) {
+            registryCache.set(existing.id, { ...existing, vehicleNumber: vNum, flatNumber: fNum, residentType: rType || 'Resident', mobileNumber: mNum, vehicleType: vType });
         } else {
-            window.showModal("Vehicle saved to registry successfully!");
+            registryCache.clear();
         }
 
         document.getElementById('vNum').value = "";
         document.getElementById('fNum').value = "";
         document.getElementById('rType').value = "";
         document.getElementById('mNum').value = "";
+        if (existing) renderVehicleResults([...registryCache.values()]);
     } catch (err) {
-        window.showModal("Failed to save vehicle.");
+        window.showModal("Failed to save vehicle: " + (err.message || err));
         console.error(err);
+    } finally {
+        if (saveBtn) saveBtn.disabled = false;
     }
 });
 

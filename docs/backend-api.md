@@ -122,6 +122,23 @@ Without query parameters it returns the full normalized policy. Invalid platform
 
 `update-popup.js` now calls this endpoint first and falls back to the direct Firestore read if the API is unreachable, so the popup keeps working during an API outage.
 
+## Vehicle registry (admin portal)
+
+`GET /api/vehicles?societyName=<society>&vehicleNumber=<plate>` with a staff token
+returns the society's matching records (`id`, `vehicleNumber`, `flatNumber`,
+`vehicleType`, `residentType`, `mobileNumber`, `deviceId`), which is what the
+admin portal renders with its edit/delete actions.
+
+`POST /api/vehicles` with a staff token is the add-or-edit write:
+
+- no `id` → a new document is created;
+- `id` → that document is updated, but only if it belongs to the caller's
+  society (guards are refused entirely).
+- Admin writes accept `2-Wheeler`, `3-Wheeler` and `4-Wheeler` (the resident
+  entry flow stays limited to 2/4-wheelers).
+- The flat must exist in the society's `flatList`, and a plate that already
+  exists in the society is rejected when creating a duplicate.
+
 ## Signed-in administrator profile
 
 ```
