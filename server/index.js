@@ -1125,6 +1125,24 @@ app.get('/api/societies/:societyIdentifier', async (req, res) => {
 });
 
 // --- PASSWORD RESET ---
+// Sign-in pre-check: is this address registered as a society admin or a guard?
+// Answers only the role, so the login pages can say "this email is not
+// registered as an admin/guard" before asking Firebase for a password. It
+// grants nothing - the ID-token membership check still runs after sign-in - and
+// the limiter keeps it from being used to enumerate addresses quickly.
+app.post('/api/auth/staff-role', authLimiter, async (req, res) => {
+    const generic = { success: true, role: null };
+    const email = normalizeAuthValue(req.body && req.body.email);
+    if (!email) return res.status(400).json({ error: 'email is required.' });
+    try {
+        const role = await authorization.lookupStaffRole(email);
+        return res.set('Cache-Control', 'no-store').json({ success: true, role });
+    } catch (_) {
+        // Never reveal whether a directory lookup failed or the address is absent.
+        return res.set('Cache-Control', 'no-store').json(generic);
+    }
+});
+
 app.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
     const generic = { success: true, message: 'If an account exists for that email, a password reset link will be sent.' };
     const email = normalizeAuthValue(req.body && req.body.email);

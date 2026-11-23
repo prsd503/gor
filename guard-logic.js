@@ -5,13 +5,50 @@ const API_BASE = (window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfu
 const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 let assignedSociety = "";
 
+// Only addresses registered in Firestore `guards` may use this portal, and only
+// for their own guard profile. Checked before Firebase auth (so no session is
+// created for a stranger) and again after sign-in through the API.
+const NOT_GUARD_MESSAGE = "This email is not registered as a security guard. Ask your society admin to add you as a guard, or sign in with your guard email.";
+const ADMIN_NOT_GUARD_MESSAGE = "This email is registered as a society admin, not a guard. Please use the Admin portal to sign in.";
+
+function isPlausibleEmail(value) {
+    const email = String(value || '').trim().toLowerCase();
+    return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// Returns 'admin' | 'master' | 'guard' | null. A failed lookup returns null so
+// the caller stays on the sign-in card instead of guessing.
+async function lookupStaffRole(email) {
+    const res = await authenticatedFetch(`${API_BASE}/auth/staff-role`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+    });
+    if (!res.ok) throw new Error(`Staff check failed (${res.status})`);
+    const data = await res.json().catch(() => ({}));
+    return data && data.role ? String(data.role) : null;
+}
+
+window.OwGuardAuth = { lookupStaffRole, isPlausibleEmail, NOT_GUARD_MESSAGE, ADMIN_NOT_GUARD_MESSAGE };
+
 window.closeModal = () => { document.getElementById('customModal').style.display = 'none'; };
 window.showModal = (msg) => {
-    document.getElementById('modalMessage').innerText = msg;
-    document.getElementById('customModal').style.display = 'flex'; 
+    // textContent, not innerText: the message must be real text in every
+    // renderer (jsdom, older WebViews), not only in browsers that lay out.
+    document.getElementById('modalMessage').textContent = msg;
+    document.getElementById('customModal').style.display = 'flex';
 };
 
 // Mobile menu toggle is handled by menu.js
+
+function setSignedOutView() {
+    const login = document.getElementById('login-section');
+    const portal = document.getElementById('portalSection');
+    const logout = document.getElementById('logoutBtn');
+    if (login) login.style.display = 'block';
+    if (portal) portal.style.display = 'none';
+    if (logout) logout.style.display = 'none';
+}
 
 async function initializeGuardPortal(email) {
     try {
@@ -23,9 +60,10 @@ async function initializeGuardPortal(email) {
         const res = await authenticatedFetch(`${API_BASE}/guards?email=${encodeURIComponent(email)}`);
         const guardsList = await res.json();
         
-        if (guardsList.length === 0) {
+        if (!Array.isArray(guardsList) || guardsList.length === 0) {
             await signOut(auth);
-            window.showModal("Not Registered as Security Guard");
+            setSignedOutView();
+            window.showModal(NOT_GUARD_MESSAGE);
             return;
         }
         
@@ -47,6 +85,9 @@ async function initializeGuardPortal(email) {
         document.getElementById('logoutBtn').style.display = 'block';
     } catch (e) { 
         console.error("Portal load error:", e);
+        // A guard-only 403/404 (e.g. an admin account) must not leave the portal
+        // open; fall back to the sign-in card.
+        setSignedOutView();
         window.showModal("Error loading portal profile data.");
     }
 }
@@ -55,9 +96,7 @@ onAuthStateChanged(auth, async (user) => {
     if (user) {
         await initializeGuardPortal(user.email);
     } else {
-        document.getElementById('login-section').style.display = 'block';
-        document.getElementById('portalSection').style.display = 'none';
-        document.getElementById('logoutBtn').style.display = 'none';
+        setSignedOutView();
     }
 });
 
@@ -75,6 +114,33 @@ document.getElementById('loginBtn')?.addEventListener('click', async () => {
         return;
     }
     
+    if (!isPlausibleEmail(email)) {
+        window.showModal("Please enter a valid email id.");
+        return;
+    }
+
+    // Is this address actually a guard? Checked before the password is sent, so
+    // an ordinary (or admin) account is turned away with a clear message instead
+    // of briefly signing in.
+    const loginBtn = document.getElementById('loginBtn');
+    if (loginBtn) loginBtn.disabled = true;
+    try {
+        const role = await lookupStaffRole(email);
+        if (role === 'admin' || role === 'master') {
+            window.showModal(ADMIN_NOT_GUARD_MESSAGE);
+            return;
+        }
+        if (role !== 'guard') {
+            window.showModal(NOT_GUARD_MESSAGE);
+            return;
+        }
+    } catch (e) {
+        window.showModal("Could not check whether this email is a guard. Check your connection and try again.");
+        return;
+    } finally {
+        if (loginBtn) loginBtn.disabled = false;
+    }
+
     try {
         console.log("Attempting guard login for:", email);
         await signInWithEmailAndPassword(auth, email, pass);

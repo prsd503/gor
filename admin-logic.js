@@ -815,6 +815,33 @@ function applyMasterOnlyVisibility(isMaster) {
 }
 window.OwAdminMasterTools = { applyMasterOnlyVisibility };
 
+// --- Sign-in eligibility --------------------------------------------------
+// Only addresses registered in Firestore `admins` may sign in here. The role is
+// checked before Firebase auth (so no session is created for a stranger) and the
+// token-backed membership check after sign-in remains the real gate.
+const NOT_ADMIN_MESSAGE = "This email is not registered as a society admin. Ask the Owl Watcher team to add it, or sign in with an admin email.";
+const GUARD_NOT_ADMIN_MESSAGE = "This email is registered as a guard, not a society admin. Please use the Guard portal to sign in.";
+
+function isPlausibleEmail(value) {
+    const email = String(value || '').trim().toLowerCase();
+    return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// Returns 'admin' | 'master' | 'guard' | null. 'null' also covers a failed
+// lookup, and the two callers treat it as "not an admin".
+async function lookupStaffRole(email) {
+    const res = await authenticatedFetch(`${API_BASE_URL}/auth/staff-role`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+    });
+    if (!res.ok) throw new Error(`Staff check failed (${res.status})`);
+    const data = await res.json().catch(() => ({}));
+    return data && data.role ? String(data.role) : null;
+}
+
+window.OwAdminAuth = { lookupStaffRole, isPlausibleEmail, NOT_ADMIN_MESSAGE, GUARD_NOT_ADMIN_MESSAGE };
+
 // Flat numbers for the add/edit form come from the society, not free text: the
 // field is a combobox backed by societies/:id/flats (a datalist keeps it usable
 // as a dropdown on desktop and as a typeahead in the app's WebView).
@@ -1071,7 +1098,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         console.warn("Admin profile loaded, but no society assigned.");
                     }
                 } else {
-                    window.showModal("Unauthorized access.");
+                    // Signed in, but this account holds no admin membership.
+                    window.showModal(NOT_ADMIN_MESSAGE);
                     signOut(auth);
                 }
             } catch (e) {
@@ -1094,8 +1122,35 @@ document.addEventListener('DOMContentLoaded', () => {
         const pass = passInput.value.trim();
 
         if (!email || !pass) {
-            window.showModal("Pls enter email id and password");
+            window.showModal("Please enter email id and password");
             return;
+        }
+
+        if (!isPlausibleEmail(email)) {
+            window.showModal("Please enter a valid email id.");
+            return;
+        }
+
+        // 1. Is this address actually a society admin? Checked before the password
+        //    is sent, so an ordinary Firebase account is turned away with a clear
+        //    message instead of briefly signing in.
+        const loginBtn = document.getElementById('loginBtn');
+        if (loginBtn) loginBtn.disabled = true;
+        try {
+            const role = await lookupStaffRole(email);
+            if (!role) {
+                window.showModal(NOT_ADMIN_MESSAGE);
+                return;
+            }
+            if (role === 'guard') {
+                window.showModal(GUARD_NOT_ADMIN_MESSAGE);
+                return;
+            }
+        } catch (e) {
+            window.showModal("Could not check whether this email is an admin. Check your connection and try again.");
+            return;
+        } finally {
+            if (loginBtn) loginBtn.disabled = false;
         }
 
         try {

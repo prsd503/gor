@@ -130,6 +130,45 @@ function createAuthorization(options) {
         return { role: 'guard', uid: user.uid, email, membershipId: record.id, societyId: society.id, societyName: society.name };
     }
 
+    // Which staff role does an address have? Used by the sign-in pages to reject
+    // a non-admin / non-guard email before the password is even attempted.
+    // This is look-up only: it proves nothing, and the token-backed
+    // resolveMembership() above stays the real gate after sign-in. Records that
+    // are disabled or inactive never count, and an email with ambiguous legacy
+    // admin records fails closed.
+    async function lookupStaffRole(rawEmail) {
+        const email = normalize(rawEmail);
+        if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+
+        const recordsFor = async collectionName => {
+            const found = new Map();
+            try {
+                const direct = await db.collection(collectionName).doc(email).get({ fresh: true });
+                if (direct.exists) found.set(direct.id, direct);
+            } catch (_) { /* Fall through to the email-field scan. */ }
+            if (found.size === 0) {
+                const snapshot = await db.collection(collectionName).get({ fresh: true });
+                snapshot.forEach(doc => {
+                    const data = doc.data() || {};
+                    if (normalize(data.email || doc.id) === email) found.set(doc.id, doc);
+                });
+            }
+            return [...found.values()].filter(doc => {
+                const data = doc.data() || {};
+                return data.disabled !== true && data.active !== false;
+            });
+        };
+
+        const admins = await recordsFor('admins');
+        const master = admins.find(doc => (doc.data() || {}).isMaster === true);
+        if (master) return 'master';
+        if (admins.length === 1) return 'admin';
+        if (admins.length > 1) return null;
+
+        const guards = await recordsFor('guards');
+        return guards.length === 1 ? 'guard' : null;
+    }
+
     function getMembership(req) {
         if (!req._membershipPromise) req._membershipPromise = resolveMembership(req.user);
         return req._membershipPromise;
@@ -182,7 +221,7 @@ function createAuthorization(options) {
         };
     }
 
-    return { resolveSociety, resolveMembership, requireStaff, requireMaster, requireSociety };
+    return { resolveSociety, resolveMembership, lookupStaffRole, requireStaff, requireMaster, requireSociety };
 }
 
 module.exports = { createAuthorization, normalize };
