@@ -23,37 +23,62 @@ The old Firestore Rules do not grant these API permissions: the Admin SDK bypass
 The **main website plus API Function** uses `firebase.json`:
 
 - Hosting stages the explicit website allowlist into `.firebase-public`.
+- Hosting rewrites `/api` and `/api/**` to `functions:api` in `us-central1`, so both the hosted website (`finder-owl.web.app`, `finder-owl.firebaseapp.com`) and the custom domain (`api.owlwatcher.tech/api/...`) work together.
 - Functions deploys `server/firebase.js` as `functions:api` in `us-central1`.
-- The website's `api-env.js` points to the Function URL.
+- The website's `api-env.js` points to the Function URL (`https://us-central1-finder-owl.cloudfunctions.net/api`), and `server/.env.firebase.example` includes `https://finder-owl.web.app` and `https://finder-owl.firebaseapp.com` in `ALLOWED_ORIGINS` so browser calls from Firebase Hosting pass CORS.
 - The config has no Firestore Rules section. `deploy:full` selects only `functions:api,hosting`.
 
 `firebase.api.json` is an API-only Hosting site with small landing/404 pages; it is not the full website.
 
-## Required setup before deployment
+## Step-by-step setup from the beginning
 
-1. Create `server/.env` privately from `server/.env.firebase.example`. Use a fresh random `JWT_SECRET`; do not send it in chat or commit the file. `API_RELEASE_PROFILE=full` is mandatory.
-2. Provision a dedicated runtime service account such as `owl-api-runtime@finder-owl.iam.gserviceaccount.com`. The current deployed account is **Datastore Viewer** and cannot perform Firestore writes. Review the minimum Firestore entity read/write IAM permissions, plus Monitoring Viewer. A predefined `roles/datastore.user` grant is write-capable but must be reviewed for scope; do not grant Owner or Editor. The local preflight validates the account name, not its live IAM bindings.
-3. Confirm the deployed membership data has verified-email and UID bindings, active admin/guard records, and canonical society IDs. Verify role scopes and master access against representative fixtures before production release.
-4. Run the Firestore Rules Emulator suite when the official Emulator JAR is available. The current sandbox could not download it, so this branch's Rule semantics are not Emulator-validated.
-5. Authenticate Firebase CLI in an authorized environment. Do not paste credentials, tokens, or filled `.env` contents into chat.
-
-## Local verification and deployment commands
-
-```sh
-npm test
-npm run check
-node scripts/check-api-deploy.js
-```
-
-The preflight is local-only. It does not prove the service account's IAM, Firebase authentication, production data compatibility, Monitoring access, or route behavior against live services.
-
-After those items are reviewed, the full website and API Function deployment command is:
-
-```sh
-npm run deploy:full
-```
-
-It targets `finder-owl` with `firebase.json` and selects Hosting plus `functions:api`; it does **not** deploy Firestore Rules. Do not use `npm run deploy:api:hosting` for the main website.
+1. **Google Cloud account & APIs (`finder-owl`)**
+   - Resolve any Google Cloud account verification banner in Cloud Console so services are not suspended.
+   - Confirm Blaze billing is active and **Cloud Monitoring API** (`monitoring.googleapis.com`) is enabled.
+   - Ensure Cloud Functions, Cloud Run, Cloud Build, Artifact Registry, Cloud Firestore, and Firebase Authentication are enabled (Firebase CLI will also prompt if any Functions v2 API is missing).
+2. **Create a dedicated runtime service account (IAM & Admin -> Service Accounts)**
+   - Create `owl-api-runtime` (`owl-api-runtime@finder-owl.iam.gserviceaccount.com`). The old `owl-api-readonly` account is **Datastore Viewer** only and cannot perform Firestore writes; the preflight rejects read-only account names.
+   - Grant minimum required roles: **Cloud Datastore User** (`roles/datastore.user`) for Firestore reads/writes and **Monitoring Viewer** (`roles/monitoring.viewer`) for the 80% quota guard. Do not grant Owner or Editor, and do **not** download a JSON key (Functions v2 uses ADC).
+   - Ensure your deployer user can act as `owl-api-runtime@finder-owl.iam.gserviceaccount.com` (`roles/iam.serviceAccountUser` on that service account if deployment reports a permission error).
+3. **Verify Firestore membership & society data**
+   - Confirm `admins` and `guards` records have verified emails (and matching `uid` if stored), are active/not disabled, and reference canonical `/societies/{societyId}` documents (or `name` / `legacyNames` / `aliases`).
+   - Confirm `admins.isMaster` is set only on true master administrators.
+4. **Prepare the local project on Node 22**
+   ```sh
+   node -v                                   # use Node 22
+   npm ci --ignore-scripts
+   npm --prefix server ci --ignore-scripts
+   cp .firebaserc.example .firebaserc
+   cp server/.env.firebase.example server/.env
+   chmod 600 server/.env
+   ```
+   - Generate a fresh random `JWT_SECRET` privately (`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`) and replace the placeholder in `server/.env`. Never commit or share `server/.env`.
+   - Keep `API_RELEASE_PROFILE=full`, `ENABLE_CRON=0`, `QUOTA_SOURCE=monitoring`, `QUOTA_ACTION=stop`, `API_RUNTIME_SERVICE_ACCOUNT=owl-api-runtime@finder-owl.iam.gserviceaccount.com`, and exact `ALLOWED_ORIGINS` (including `https://finder-owl.web.app` and `https://finder-owl.firebaseapp.com`).
+   - If you previously exported `ENV_FILE` for local MacBook testing, run `unset ENV_FILE`.
+5. **Run local tests and deploy preflight**
+   ```sh
+   npm test
+   npm run check
+   node scripts/check-api-deploy.js
+   ```
+   - When Java is installed locally, also run `npm run test:firestore-rules` to validate `firestore.rules` in the official Firestore Emulator.
+   - Note: `check-api-deploy.js` is local-only and does not verify live IAM bindings, Firebase authentication, Monitoring access, or production Firestore records.
+6. **Authenticate Firebase CLI and deploy full Hosting + API**
+   ```sh
+   npx firebase-tools login
+   npx firebase-tools projects:list
+   npm run deploy:full
+   ```
+   - `deploy:full` runs `scripts/check-api-deploy.js`, stages the website into `.firebase-public` via `scripts/prepare-hosting.js`, and deploys `functions:api,hosting` to `finder-owl` using `firebase.json`. It does **not** deploy Firestore Rules.
+7. **Verify the live deployment**
+   - Check `https://finder-owl.web.app/` and `https://api.owlwatcher.tech/api/health` (expect HTTP 200 with `"accessMode":"firebase-full"`).
+   - Check `https://us-central1-finder-owl.cloudfunctions.net/api/ads/global` and then `/api/quota` (confirm `source: "monitoring"`, `action: "stop"`, `monitoringUnavailable: false`, fresh `remoteCheckedAt`).
+   - Confirm `GET /api/admins` without a token returns `401`, and verify staff login, society-scoped actions, CORS from `https://finder-owl.web.app`, and gift-code validation.
+8. **Deploy hardened Firestore Rules separately (only after emulator + client verification)**
+   - After `npm run test:firestore-rules` passes and you confirm no live web/Android client relies on direct Firestore writes or unlisted document reads outside `app_config/appVersion`, `ads/Aangan`, and `settings/contact`:
+   ```sh
+   npx firebase-tools deploy --config firebase.rules.json --project finder-owl --only firestore:rules
+   ```
 
 ## Verification in this branch
 
