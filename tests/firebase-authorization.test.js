@@ -34,6 +34,7 @@ test('Firestore membership authorization is verified, society-scoped, revocable,
     await db.collection('societies').doc('aangan').set({
         name: 'Aangan', flatList: ['A-101', 'A-102', 'A-103'], max2Wheeler: 1, max4Wheeler: 1, spintodayNumber: 1
     });
+    await db.collection('societies').doc('open').set({ name: 'Open Society', flatList: [], max2Wheeler: 2, max4Wheeler: 1 });
     await db.collection('societies').doc('bloom').set({
         name: 'Bloom Society', flatList: ['B-101'], max2Wheeler: 2, max4Wheeler: 1, spintodayNumber: 5
     });
@@ -201,8 +202,12 @@ test('Firestore membership authorization is verified, society-scoped, revocable,
     assert.equal((await request('/api/contest/spin', 'POST', spinBody)).status, 409);
     const wrongFlat = await request('/api/contest/winner', 'POST', { ...spinBody, flatNumber: 'A-102' });
     assert.equal(wrongFlat.status, 403);
-    assert.equal((await request('/api/contest/winner', 'POST', spinBody)).status, 200);
+    const claimed = await request('/api/contest/winner', 'POST', spinBody);
+    assert.equal(claimed.status, 200);
+    assert.deepEqual(await claimed.json(), { success: true, societyName: 'Aangan', flatNumber: 'A-101' });
     assert.equal((await request('/api/contest/winner', 'POST', spinBody)).status, 409);
+    const recovered = await request('/api/contest/winner', 'POST', { ...spinBody, recover: true });
+    assert.deepEqual(await recovered.json(), { success: true, societyName: 'Aangan', flatNumber: 'A-101' });
 
     // Legacy rows without a device binding expose only registration counts until enrolled.
     await db.collection('vehicles').doc('legacy-unbound').set({
@@ -227,6 +232,50 @@ test('Firestore membership authorization is verified, society-scoped, revocable,
     assert.equal(linkedLegacyRows.length, 2);
     assert.equal(linkedLegacyRows.some(row => row.mobileNumber === '9123456789'), true);
 
+    // An unconfigured society accepts a typed flat/name in both resident and
+    // master-admin flows, persisting the entered name in the Firestore store.
+    const residentOpen = await request('/api/vehicles', 'POST', {
+        societyName: 'Open Society', flatNumber: 'Shanti Villa', residentType: 'Owner',
+        mobileNumber: '9876543210', deviceId: 'open-device',
+        vehicles: [{ vehicleNumber: 'GJ01OP1234', vehicleType: '2-Wheeler' }]
+    });
+    assert.equal(residentOpen.status, 200, await residentOpen.text());
+    const masterOpen = await request('/api/vehicles', 'POST', {
+        societyName: 'Open Society', flatNumber: 'Lake House', residentType: 'Owner',
+        mobileNumber: '9876543210', vehicleNumber: 'GJ01OP5678', vehicleType: '2-Wheeler'
+    }, tokens.master);
+    assert.equal(masterOpen.status, 200, await masterOpen.text());
+    const openVehicles = await db.collection('vehicles').where('societyId', '==', 'open').get();
+    assert.deepEqual(openVehicles.docs.map(doc => doc.data().flatNumber).sort(), ['Lake House', 'Shanti Villa']);
+    const wrongCaseDevice = await request('/api/vehicles', 'POST', {
+        societyName: 'Open Society', flatNumber: 'SHANTI VILLA', residentType: 'Owner',
+        mobileNumber: '9876543210', deviceId: 'other-device',
+        vehicles: [{ vehicleNumber: 'GJ01ZZ1234', vehicleType: '2-Wheeler' }]
+    });
+    assert.equal(wrongCaseDevice.status, 409, 'mixed case cannot bypass the flat device lock');
+    const otherSocietyAdmin = await request('/api/societies/open/flats', 'PATCH', { flatList: ['A-1'] }, tokens.adminA);
+    assert.equal(otherSocietyAdmin.status, 403);
+    // The cap is a master-only setting even for an admin in the same society.
+    assert.equal((await request('/api/societies/Aangan/vehicle-cap', 'PATCH', { maxTotalVehicles: 10 }, tokens.adminA)).status, 403);
+    assert.equal((await request('/api/societies/open/vehicle-cap', 'PATCH', { maxTotalVehicles: 2 }, tokens.master)).status, 200);
+    assert.equal((await db.collection('societies').doc('open').get()).data().maxTotalVehicles, 2);
+    const capped = await request('/api/vehicles', 'POST', {
+        societyName: 'Open Society', flatNumber: 'New Home', residentType: 'Owner', mobileNumber: '9876543210',
+        deviceId: 'new-device', vehicles: [{ vehicleNumber: 'GJ01XY9999', vehicleType: '2-Wheeler' }]
+    });
+    assert.equal(capped.status, 409);
+    assert.equal((await capped.json()).code, 'society-vehicle-limit-reached');
+    assert.equal((await request('/api/societies/open/vehicle-cap', 'PATCH', { maxTotalVehicles: null }, tokens.master)).status, 200);
+    const savedFlats = await request('/api/societies/open/flats', 'PATCH', { flatList: ['A-1', 'Lake House'] }, tokens.master);
+    assert.equal(savedFlats.status, 200);
+    assert.deepEqual((await db.collection('societies').doc('open').get()).data().flatList, ['A-1', 'Lake House']);
+    const denied = await request('/api/vehicles', 'POST', {
+        societyName: 'Open Society', flatNumber: 'Not Listed', residentType: 'Owner',
+        mobileNumber: '9876543210', deviceId: 'other-device',
+        vehicles: [{ vehicleNumber: 'GJ01ZZ1234', vehicleType: '2-Wheeler' }]
+    });
+    assert.equal(denied.status, 400, 'the configured list is enforced after saving');
+
     // A master flag cannot override disabled or inactive membership status.
     await db.collection('admins').doc('master@example.test').update({ disabled: true });
     assert.equal((await request('/api/config', 'POST', { teamPhone: '1111111111' }, tokens.master)).status, 403);
@@ -248,7 +297,7 @@ test('Firestore membership authorization is verified, society-scoped, revocable,
     const ambiguousFlat = await request('/api/vehicles?society=Aangan&flatNumber=A-101&deviceId=device-a');
     assert.equal((await ambiguousFlat.json())[0].flatNumber, 'A-103');
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = require('../server/lib/notices').istDate();
     const contestId = 'manual-winning-contest';
     const attemptId = crypto.createHash('sha256')
         .update(['aangan', today, 'device-a', contestId].join('\\0'))

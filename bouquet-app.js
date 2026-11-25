@@ -274,6 +274,7 @@
             tile.dataset.locked = String(!theme.free && !state.unlocked);
             tile.setAttribute('aria-pressed', String(state.theme === theme.id));
         });
+        if (el.themeChip) el.themeChip.textContent = themeById(state.theme).name;
     }
 
     function chooseTheme(id) {

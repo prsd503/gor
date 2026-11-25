@@ -61,7 +61,7 @@ test('unsafe Firebase configuration fails before app/Firebase initialization', (
     assert.throws(() => prepareFirebaseApi({ ...env(), API_RUNTIME_SERVICE_ACCOUNT: '' }));
 });
 
-test('full website + API deployment selects only Hosting and the API Function, never Firestore Rules', () => {
+test('full website + API deployment selects Hosting and notice functions, never Firestore Rules', () => {
     const config = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json')));
     assert.equal(config.hosting.public, '.firebase-public');
     assert.deepEqual(config.hosting.rewrites, ['/api', '/api/**'].map(source => ({ source, function: { functionId: 'api', region: 'us-central1' } })));
@@ -72,7 +72,7 @@ test('full website + API deployment selects only Hosting and the API Function, n
     assert.match(exampleEnv, /^ALLOWED_ORIGINS=.*https:\/\/finder-owl\.web\.app/m);
     assert.match(exampleEnv, /^ALLOWED_ORIGINS=.*https:\/\/finder-owl\.firebaseapp\.com/m);
     const script = JSON.parse(fs.readFileSync(path.join(root, 'package.json'))).scripts['deploy:full'];
-    assert.equal(script, 'node scripts/check-api-deploy.js && npx firebase-tools deploy --config firebase.json --project finder-owl --only functions:api,hosting');
+    assert.equal(script, 'node scripts/check-api-deploy.js && npx firebase-tools deploy --config firebase.json --project finder-owl --only functions:api,functions:noticeRollover,hosting');
     assert.doesNotMatch(script, /firestore:rules/);
 });
 
@@ -88,9 +88,9 @@ test('API-only Hosting publishes only landing/404 pages, pins API region, and le
     const original = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json')));
     assert.equal(original.hosting.public, '.firebase-public');
     const scripts = JSON.parse(fs.readFileSync(path.join(root, 'package.json'))).scripts;
-    assert.match(scripts['deploy:api:functions'], /check-api-deploy\.js && .*--config firebase\.api\.json --project finder-owl --only functions:api$/);
+    assert.match(scripts['deploy:api:functions'], /check-api-deploy\.js && .*--config firebase\.api\.json --project finder-owl --only functions:api,functions:noticeRollover$/);
     assert.match(scripts['deploy:api:hosting'], /check-api-deploy\.js && .*--config firebase\.api\.json --project finder-owl --only hosting$/);
-    assert.ok(!scripts['deploy:functions'].endsWith('--only functions'), 'generic command also selects API only');
+    assert.ok(!scripts['deploy:functions'].endsWith('--only functions'), 'generic command selects only intended functions');
 });
 
 function preflightFixture(t) {

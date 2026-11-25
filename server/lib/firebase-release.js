@@ -55,7 +55,7 @@ function prepareFirebaseApi(env) {
     }
 
     // Do not start process maintenance in an HTTP Function. Scheduled work is
-    // a separate release; login, gift-code and authenticated API routes are on.
+    // handled by the separate noticeRollover Function; authenticated API routes are on.
     env.ENABLE_CRON = '0';
     return { serviceAccount: account, origins, project, profile: 'firebase-full' };
 }

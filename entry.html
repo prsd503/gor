@@ -46,10 +46,12 @@
 
         <section class="card" aria-label="Vehicle entry form">
             <form id="vehicleForm">
-                <label for="flatSelect">Flat number / name</label>
-                <select id="flatSelect" class="sans-input" required>
+                <label id="flatLabel" for="flatSelect">Flat number / name</label>
+                <select id="flatSelect" class="sans-input" required disabled>
                     <option value="">Select Flat Number/Name</option>
                 </select>
+                <input type="text" id="flatInput" class="sans-input" placeholder="Enter flat number or name" maxlength="80" autocomplete="off" style="display:none;" disabled>
+                <p id="flatInputHint" class="note small" style="display:none;">Enter your flat number or name.</p>
 
                 <label for="residentTypeSelect">Resident type</label>
                 <select id="residentTypeSelect" class="sans-input" required>
@@ -184,13 +186,18 @@
             // and both are accepted by the endpoint.
             let adminPhone = '';
 
+            function selectedFlatNumber() {
+                const input = document.getElementById('flatInput');
+                const select = document.getElementById('flatSelect');
+                return (input && !input.disabled ? input.value : select.value).trim();
+            }
+
             // The chat text names the flat, so it is rebuilt whenever the
             // selection changes (the number itself comes from Firestore).
             function applyAdminPhoneLink() {
                 const link = document.getElementById('adminWhatsAppLink');
                 if (!link || adminPhone.length < 10) return;
-                const flatSelectEl = document.getElementById('flatSelect');
-                const flat = flatSelectEl && flatSelectEl.value ? flatSelectEl.value : null;
+                const flat = selectedFlatNumber() || null;
                 const message = flat
                     ? `Hi, I need help with the vehicle entry for Flat ${flat} in ${societyName}.`
                     : `Hi, I need help with my vehicle entry in ${societyName}.`;
@@ -232,20 +239,32 @@
                     );
                 }
                 
-                if (currentSocietyData && currentSocietyData.flatList) {
-                    const flatSelect = document.getElementById('flatSelect');
-                    if (flatSelect) {
-                        flatSelect.innerHTML = '<option value="">Select Flat Number/Name</option>';
-                        currentSocietyData.flatList.forEach(flat => {
-                            flatSelect.innerHTML += `<option value="${flat}">${flat}</option>`;
-                        });
-                    }
+                if (!response.ok || !currentSocietyData) throw new Error('Society data unavailable');
+                const flats = Array.isArray(currentSocietyData.flatList) ? currentSocietyData.flatList.filter(flat => typeof flat === 'string' && flat.trim()) : [];
+                const flatSelect = document.getElementById('flatSelect');
+                const flatInput = document.getElementById('flatInput');
+                if (flats.length) {
+                    flatSelect.replaceChildren(new Option('Select Flat Number/Name', ''));
+                    flats.forEach(flat => flatSelect.add(new Option(flat, flat)));
+                    flatSelect.disabled = false;
+                } else {
+                    flatSelect.disabled = true;
+                    flatSelect.required = false;
+                    flatSelect.style.display = 'none';
+                    flatInput.disabled = false;
+                    document.getElementById('flatLabel').htmlFor = 'flatInput';
+                    flatInput.required = true;
+                    flatInput.style.display = '';
+                    document.getElementById('flatInputHint').style.display = '';
                 }
             } catch (error) {
                 console.error("Error fetching society data from server:", error);
+                document.getElementById('flatInputHint').style.display = '';
+                document.getElementById('flatInputHint').textContent = 'Could not load society details. Please refresh and try again.';
             }
 
             const flatSelect = document.getElementById('flatSelect');
+            const flatInput = document.getElementById('flatInput');
             const dynamicContainer = document.getElementById('dynamicVehicleFields');
             const submitBtn = document.getElementById('submitBtn');
             const mobileInput = document.getElementById('mobileNumber');
@@ -260,9 +279,12 @@
                 e.target.value = e.target.value.replace(/[^0-9]/g, '').slice(0, 10);
             });
 
-            if (flatSelect) {
-                flatSelect.addEventListener('change', async () => {
-                    const selectedFlat = flatSelect.value;
+            let lookupGeneration = 0;
+            let flatLookupTimer;
+            function onFlatChanged(debounce) {
+                const generation = ++lookupGeneration;
+                clearTimeout(flatLookupTimer);
+                const selectedFlat = selectedFlatNumber();
                     applyAdminPhoneLink();
 
                     dynamicContainer.innerHTML = '';
@@ -273,22 +295,25 @@
 
                     if (!selectedFlat) return;
 
+                    const loadFlat = async () => {
                     try {
                         const headers = await getAuthHeaders();
                         const lookup = new URLSearchParams({ society: societyName, flatNumber: selectedFlat, deviceId });
                         const res = await fetch(`${API_BASE_URL}/vehicles?${lookup.toString()}`, { headers });
+                        if (!res.ok) throw new Error('Could not load flat vehicle records.');
                         const allVehiclesResponse = await res.json();
-                        
+                        if (generation !== lookupGeneration || selectedFlat !== selectedFlatNumber()) return;
+
                         const allVehicles = Array.isArray(allVehiclesResponse) ? allVehiclesResponse : [];
                         const registrationSummary = allVehicles.find(v => v && v.registrationSummary === true &&
-                            String(v.flatNumber).trim() === String(selectedFlat).trim());
+                            String(v.flatNumber).trim().toLowerCase() === selectedFlat.toLowerCase());
                         const existingVehicles = allVehicles.filter(v => v && v.registrationSummary !== true &&
-                            String(v.flatNumber).trim() === String(selectedFlat).trim());
+                            String(v.flatNumber).trim().toLowerCase() === selectedFlat.toLowerCase());
 
                         // 1. Device-to-Flat Lock Check (Global across society)
                         // Checks if this physical device is already tied to a DIFFERENT flat
                         const deviceLinkedRecord = allVehicles.find(v => v.deviceId === deviceId);
-                        if (deviceLinkedRecord && String(deviceLinkedRecord.flatNumber).trim() !== String(selectedFlat).trim()) {
+                        if (deviceLinkedRecord && String(deviceLinkedRecord.flatNumber).trim().toLowerCase() !== selectedFlat.toLowerCase()) {
                             restrictionNote.style.display = 'block';
                             restrictionNote.innerText = `⚠️ This device is already linked to Flat ${deviceLinkedRecord.flatNumber}. You are not allowed to register vehicles for other flats.`;
                             restrictionNote.style.color = '#d32f2f';
@@ -391,20 +416,32 @@
                         syncSubmitState();
 
                     } catch (err) {
+                        if (generation !== lookupGeneration) return;
                         console.error("Error loading flat vehicle records:", err);
+                        restrictionNote.textContent = 'Could not load vehicle details. Please try again.';
+                        restrictionNote.style.display = 'block';
                     }
-                });
+                    };
+                    if (debounce) flatLookupTimer = setTimeout(loadFlat, 350);
+                    else loadFlat();
             }
+            flatSelect.addEventListener('change', () => onFlatChanged(false));
+            flatInput.addEventListener('input', () => onFlatChanged(true));
+            flatInput.addEventListener('change', () => onFlatChanged(false));
 
             const vehicleForm = document.getElementById('vehicleForm');
             if (vehicleForm) {
                 vehicleForm.addEventListener('submit', async (e) => {
                     e.preventDefault();
-                    const flatNumber = flatSelect.value;
+                    const flatNumber = selectedFlatNumber();
                     const residentType = residentTypeSelect.value;
                     const mobileNumber = mobileInput.value.trim();
                     const vehicleInputs = document.querySelectorAll('.dynamic-vehicle-input');
 
+                    if (!flatNumber || flatNumber.length > 80) {
+                        showModal("⚠️ Enter a valid flat number or name.");
+                        return;
+                    }
                     if (mobileNumber.length !== 10) {
                         showModal("⚠️ Mobile number must be exactly 10 digits.");
                         return;

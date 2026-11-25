@@ -60,6 +60,9 @@ const { createVehicleImport } = require('./lib/vehicle-import');
 const { createVehicleBulkDelete } = require('./lib/vehicle-bulk-delete');
 const { createLocalStore, createFieldValue } = require('./lib/local-store');
 const { createMaintenance } = require('./lib/maintenance');
+const { istDate, noticeCycle, effectiveNotice } = require('./lib/notices');
+const { utcDate, attemptDates, isSameIstDay } = require('./lib/spin-dates');
+const { registrationLockId, totalVehicleLimit, MAX_VEHICLES } = require('./lib/vehicle-limit');
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -351,10 +354,15 @@ function requestedSociety(req) {
         body.societyId || body.societyName || body.society || null;
 }
 
+function configuredFlats(data) {
+    const list = Array.isArray(data.flatList) ? data.flatList : (Array.isArray(data.flats) ? data.flats : []);
+    return list.filter(flat => typeof flat === 'string' && flat.trim());
+}
+
 function publicSociety(society) {
     const data = society.data || {};
-    const flatList = Array.isArray(data.flatList) ? data.flatList : (Array.isArray(data.flats) ? data.flats : []);
-    const result = { id: society.id, name: society.name, flatList, flats: flatList };
+    const flatList = configuredFlats(data);
+    const result = { id: society.id, name: society.name, flatList, flats: flatList, maxTotalVehicles: totalVehicleLimit(data) };
     for (const field of ['max2Wheeler', 'max4Wheeler']) {
         if (Number.isInteger(data[field]) && data[field] >= 0) result[field] = data[field];
     }
@@ -599,10 +607,6 @@ function hashValue(value) {
 
 function contestAttemptDocumentId(societyId, date, deviceId, contestId) {
     return hashValue([societyId, date, deviceId, contestId].join('\\0'));
-}
-
-function utcDate(date = new Date()) {
-    return date.toISOString().slice(0, 10);
 }
 
 // Spin statistics are read through a collection scan rather than a
@@ -973,6 +977,11 @@ app.get('/api/vehicles', async (req, res) => {
         let docs;
         if (targetVehicle) {
             docs = await getVehiclesMatchingField(society, 'vehicleNumber', [targetVehicle], true);
+        } else if (targetFlat && !configuredFlats(society.data || {}).length) {
+            // Without a configured list, users can enter different casing for
+            // legacy flat names. Scan only this society and compare normalized
+            // names below so device locks and allowances cannot be bypassed.
+            docs = await getVehiclesForSociety(society, true);
         } else if (staff && targetFlat) {
             docs = await getVehiclesMatchingField(society, 'flatNumber', [targetFlat], true);
         } else if (staff) {
@@ -983,6 +992,10 @@ app.get('/api/vehicles', async (req, res) => {
                 getVehiclesMatchingField(society, 'deviceId', [deviceId], true)
             ]);
             docs = mergeVehicleDocuments([flatMatches, deviceMatches]);
+        }
+
+        if (staff && targetFlat && !targetVehicle) {
+            docs = docs.filter(doc => normalizeAuthValue((doc.data() || {}).flatNumber) === normalizeAuthValue(targetFlat));
         }
 
         // Public plate lookup is the guest flow; return only the fields shown by
@@ -1056,7 +1069,7 @@ app.get('/api/vehicles', async (req, res) => {
         const vehicles = docs.filter(doc => {
             const data = doc.data() || {};
             if (targetVehicle) return String(data.vehicleNumber || '').trim().toUpperCase() === targetVehicle;
-            if (targetFlat && String(data.flatNumber || '').trim() !== targetFlat) return false;
+            if (targetFlat && normalizeAuthValue(data.flatNumber) !== normalizeAuthValue(targetFlat)) return false;
             return true;
         }).map(doc => {
             const data = doc.data() || {};
@@ -1096,12 +1109,12 @@ app.get('/api/notices/:societyIdentifier', async (req, res) => {
         if (!society) return res.status(404).json({ error: 'Society not found.' });
         const noticeDoc = await getSocietyDocument('notices', society);
         if (!noticeDoc) return res.status(404).json({ error: 'Notice not found' });
-        const data = noticeDoc.data() || {};
+        const data = effectiveNotice(noticeDoc.data() || {});
         return res.set('Cache-Control', 'no-store').json({
             societyName: society.name,
-            date: data.date || '',
-            todayMessage: data.todayMessage || '',
-            tomorrowMessage: data.tomorrowMessage || ''
+            date: data.date,
+            todayMessage: data.todayMessage,
+            tomorrowMessage: data.tomorrowMessage
         });
     } catch (_) { return res.status(503).json({ error: 'Notice could not be loaded.' }); }
 });
@@ -1375,22 +1388,32 @@ app.post('/api/vehicles', async (req, res) => {
         const societyRef = db.collection('societies').doc(society.id);
         // A per-society lock document serializes resident registrations so two
         // concurrent query-based uniqueness/limit checks cannot both commit.
-        const registrationLockRef = db.collection('vehicleRegistrationLocks').doc(hashValue(society.id));
+        const registrationLockRef = db.collection('vehicleRegistrationLocks').doc(registrationLockId(society.id));
         const existingRef = docId ? db.collection('vehicles').doc(docId) : null;
         const newRefs = docId ? [] : requestedVehicles.map(() => db.collection('vehicles').doc());
 
         await db.runTransaction(async transaction => {
-            const [societySnap, existingVehicles, registrationLock] = await Promise.all([
-                transaction.get(societyRef),
-                getVehiclesForRegistration(transaction, society, flatNumber, isResident ? deviceId : '', numbers),
-                transaction.get(registrationLockRef)
+            const [societySnap, registrationLock] = await Promise.all([
+                transaction.get(societyRef), transaction.get(registrationLockRef)
             ]);
             if (!societySnap.exists) fail(404, 'Society not found.');
             const societyData = societySnap.data() || {};
-            const flatList = Array.isArray(societyData.flatList) ? societyData.flatList :
-                (Array.isArray(societyData.flats) ? societyData.flats : []);
+            const flatList = configuredFlats(societyData);
+            // Case-insensitive matching is essential for free-text names, even
+            // for older vehicles that do not have a normalized index field.
+            const totalLimit = totalVehicleLimit(societyData);
+            // A configured society-wide cap requires counting all vehicle
+            // documents, including legacy societyName-only records.
+            const allSocietyVehicles = (!flatList.length || (totalLimit !== null && !existingRef))
+                ? await collectVehicleSnapshots(await Promise.all(vehicleSocietyQueries(society).map(query => transaction.get(query))), society)
+                : null;
+            const existingVehicles = allSocietyVehicles || await getVehiclesForRegistration(transaction, society, flatNumber, isResident ? deviceId : '', numbers);
+            if (!existingRef && totalLimit !== null && allSocietyVehicles.length + requestedVehicles.length > totalLimit) {
+                const remaining = Math.max(0, totalLimit - allSocietyVehicles.length);
+                fail(409, `The society's total vehicle limit is ${totalLimit}; only ${remaining} more vehicle(s) can be added. Contact the master administrator.`, 'society-vehicle-limit-reached');
+            }
             const flatIsKnown = flatList.some(flat => normalizeAuthValue(flat) === normalizeAuthValue(flatNumber));
-            if ((isResident || flatList.length > 0) && !flatIsKnown) fail(400, 'Flat is not registered in this society.');
+            if (flatList.length > 0 && !flatIsKnown) fail(400, 'Flat is not registered in this society.');
 
             let oldDoc = null;
             let oldData = null;
@@ -1523,6 +1546,72 @@ app.post('/api/vehicles/bulk-delete', requireAdminForSociety(req => requestedSoc
     }
 });
 
+function contestInput(body) {
+    const deviceId = String(body.deviceId || '').trim();
+    const contestId = String(body.contestId || 'default').trim();
+    if (!deviceId || deviceId === 'unknown' || deviceId.length > 256 || !contestId || contestId.length > 2048) return null;
+    return { deviceId, contestId };
+}
+// Only the latest guest code is kept on the Guest document. Spin attempt
+// records contain no code and prevent duplicate daily spins.
+app.post('/api/contest/guest/spin', async (req, res) => {
+    try {
+        const input = contestInput(req.body || {});
+        if (!input) return res.status(400).json({ error: 'Valid device and contest are required.' });
+        const guestDoc = await db.collection('societies').doc('Guest').get({ fresh: true });
+        if (!guestDoc.exists) return res.status(503).json({ error: 'Guest contest is not configured.' });
+        const guest = { id: 'Guest', name: String((guestDoc.data() || {}).name || 'Guest') };
+        const today = istDate();
+        const statRef = db.collection('spinStats').doc(`${normalizeAuthValue(guest.name)}_ist_${today}`);
+        const attemptId = contestAttemptDocumentId(guest.id, today, input.deviceId, input.contestId);
+        const attemptRef = db.collection('contestAttempts').doc(attemptId);
+        const societyRef = db.collection('societies').doc(guest.id);
+        const deviceQuery = db.collection('vehicles').where('deviceId', '==', input.deviceId).limit(1);
+        for (let retry = 0; retry < 10; retry++) {
+            const code = String(crypto.randomInt(100000000, 1000000000));
+            try {
+                const result = await db.runTransaction(async tx => {
+                    const [societySnap, statSnap, attemptSnap, deviceSnap] = await Promise.all([
+                        tx.get(societyRef), tx.get(statRef), tx.get(attemptRef), tx.get(deviceQuery)
+                    ]);
+                    if (!societySnap.exists) { const err = new Error('Guest contest is not configured.'); err.status = 503; throw err; }
+                    if (!deviceSnap.empty) { const err = new Error('This device is registered. Please play for its society.'); err.status = 403; throw err; }
+                    if (attemptSnap.exists) {
+                        const old = attemptSnap.data() || {};
+                        const societyData = societySnap.data() || {};
+                        const winningCode = old.won === true && societyData.uniqueCodeAttemptId === attemptId ? String(societyData.uniqueCode || '') : null;
+                        return { spinCount: old.spinCount, won: old.won === true, winningCode, attemptId, alreadyPlayed: true };
+                    }
+                    const rawTarget = (societySnap.data() || {}).spintodayNumber;
+                    const target = rawTarget === null || rawTarget === undefined || rawTarget === '' ? null : Number(rawTarget);
+                    const next = (statSnap.exists ? Number((statSnap.data() || {}).spinCount) || 0 : 0) + 1;
+                    const won = Number.isFinite(target) && target > 0 && next === target;
+                    if (won && String((societySnap.data() || {}).uniqueCode || '') === code) { const err = new Error('Code collision'); err.code = 'guest-code-collision'; throw err; }
+                    const stamp = FieldValue.serverTimestamp();
+                    const stat = { societyId: guest.id, societyName: guest.name, spinCount: next, date: today, timeZone: 'Asia/Kolkata', updatedAt: stamp };
+                    if (!statSnap.exists) stat.createdAt = stamp;
+                    tx.set(statRef, stat, { merge: true });
+                    tx.set(attemptRef, { societyId: guest.id, contestIdHash: hashValue(input.contestId), deviceIdHash: hashValue(input.deviceId),
+                        date: today, timeZone: 'Asia/Kolkata', spinCount: next, won, createdAt: stamp });
+                    if (won) {
+                        tx.set(societyRef, { uniqueCode: code, uniqueCodeAttemptId: attemptId, updatedAt: stamp }, { merge: true });
+                    }
+                    return { spinCount: next, won, winningCode: won ? code : null, attemptId, alreadyPlayed: false };
+                });
+                return res.set('Cache-Control', 'no-store').json({ success: true, ...result });
+            } catch (err) {
+                if (err.code === 'guest-code-collision') continue;
+                throw err;
+            }
+        }
+        return res.status(503).json({ error: 'Could not allocate a winning code. Please retry.' });
+    } catch (err) {
+        if (err && Number.isInteger(err.status)) return res.status(err.status).json({ error: err.message });
+        console.error('Guest spin failed:', err);
+        return res.status(500).json({ error: 'Could not complete the guest spin.' });
+    }
+});
+
 app.post('/api/contest/spin', async (req, res) => {
     try {
         const body = req.body || {};
@@ -1535,13 +1624,18 @@ app.post('/api/contest/spin', async (req, res) => {
             return res.status(400).json({ error: 'Registered device, flat number, and contest ID are required.' });
         }
 
-        const today = utcDate();
-        const statRef = db.collection('spinStats').doc(`${normalizeAuthValue(society.name)}_${today}`);
+        const now = new Date();
+        const today = istDate(now);
+        // New IST buckets must not merge with historical UTC aggregates.
+        const statRef = db.collection('spinStats').doc(`${normalizeAuthValue(society.name)}_ist_${today}`);
         const attemptRef = db.collection('contestAttempts').doc(contestAttemptDocumentId(society.id, today, deviceId, contestId));
+        const legacyDate = utcDate(now);
+        const legacyAttemptRef = legacyDate === today ? null : db.collection('contestAttempts').doc(contestAttemptDocumentId(society.id, legacyDate, deviceId, contestId));
         const societyRef = db.collection('societies').doc(society.id);
         const result = await db.runTransaction(async transaction => {
-            const [societySnap, statSnap, attemptSnap, vehicles] = await Promise.all([
+            const [societySnap, statSnap, attemptSnap, legacyAttemptSnap, vehicles] = await Promise.all([
                 transaction.get(societyRef), transaction.get(statRef), transaction.get(attemptRef),
+                legacyAttemptRef ? transaction.get(legacyAttemptRef) : Promise.resolve(null),
                 getVehiclesForDeviceInTransaction(transaction, society, deviceId)
             ]);
             if (!societySnap.exists) {
@@ -1551,7 +1645,7 @@ app.post('/api/contest/spin', async (req, res) => {
             if (!linkedVehicle) {
                 const error = new Error('This device is not linked to the submitted flat in this society.'); error.status = 403; throw error;
             }
-            if (attemptSnap.exists) {
+            if (attemptSnap.exists || (legacyAttemptSnap && legacyAttemptSnap.exists && isSameIstDay(legacyAttemptSnap.data() || {}, today))) {
                 const error = new Error('This device has already spun for this contest today.'); error.status = 409; throw error;
             }
 
@@ -1565,14 +1659,14 @@ app.post('/api/contest/spin', async (req, res) => {
             const stamp = FieldValue.serverTimestamp();
             const stat = {
                 societyId: society.id, societyName: society.name,
-                spinCount: next, date: today, updatedAt: stamp
+                spinCount: next, date: today, timeZone: 'Asia/Kolkata', updatedAt: stamp
             };
             if (!statSnap.exists) stat.createdAt = stamp;
             transaction.set(statRef, stat, { merge: true });
             transaction.set(attemptRef, {
                 societyId: society.id, contestIdHash: hashValue(contestId),
                 deviceIdHash: hashValue(deviceId), flatNumber: linkedVehicle.data().flatNumber,
-                date: today, spinCount: next, won, claimed: false, createdAt: stamp
+                date: today, timeZone: 'Asia/Kolkata', spinCount: next, won, claimed: false, createdAt: stamp
             });
             return { spinCount: next, won };
         });
@@ -1596,13 +1690,13 @@ app.post('/api/contest/winner', async (req, res) => {
             return res.status(400).json({ error: 'Registered device, flat number, and contest ID are required.' });
         }
 
-        const dates = [utcDate(), utcDate(new Date(Date.now() - 24 * 60 * 60 * 1000))];
+        const dates = attemptDates();
         const attemptRefs = dates.map(date => ({
             date,
             ref: db.collection('contestAttempts').doc(contestAttemptDocumentId(society.id, date, deviceId, contestId))
         }));
         const winnerRef = db.collection('winners').doc();
-        await db.runTransaction(async transaction => {
+        const verified = await db.runTransaction(async transaction => {
             const [attemptSnaps, vehicles] = await Promise.all([
                 Promise.all(attemptRefs.map(attempt => transaction.get(attempt.ref))),
                 getVehiclesForDeviceInTransaction(transaction, society, deviceId)
@@ -1613,12 +1707,13 @@ app.post('/api/contest/winner', async (req, res) => {
             }
             const attempt = attemptSnaps[index];
             const attemptData = attempt.data() || {};
-            if (attemptData.claimed === true) {
-                const error = new Error('This winning spin has already been claimed.'); error.status = 409; throw error;
-            }
             const linkedVehicle = uniqueVehicleForDevice(vehicles, deviceId, flatNumber);
             if (!linkedVehicle || normalizeAuthValue(attemptData.flatNumber) !== normalizeAuthValue(flatNumber)) {
                 const error = new Error('The submitted flat does not match the winning device registration.'); error.status = 403; throw error;
+            }
+            if (attemptData.claimed === true) {
+                if (body.recover === true) return { societyName: society.name, flatNumber: linkedVehicle.data().flatNumber };
+                const error = new Error('This winning spin has already been claimed.'); error.status = 409; throw error;
             }
 
             const stamp = FieldValue.serverTimestamp();
@@ -1629,8 +1724,9 @@ app.post('/api/contest/winner', async (req, res) => {
                 winnerFlatnumber: linkedVehicle.data().flatNumber,
                 contestIdHash: hashValue(contestId), createdAt: stamp
             });
+            return { societyName: society.name, flatNumber: linkedVehicle.data().flatNumber };
         });
-        return res.json({ success: true });
+        return res.set('Cache-Control', 'no-store').json({ success: true, ...verified });
     } catch (err) {
         if (err && Number.isInteger(err.status)) return res.status(err.status).json({ error: err.message });
         console.error('Contest winner claim failed:', err);
@@ -1656,8 +1752,8 @@ app.get('/api/contest/winners', async (req, res) => {
 
 // Master login: society spin counts.
 //
-// spinStats documents are keyed `<societyLowercased>_<YYYY-MM-DD>` and, in the
-// live database, hold only { createdAt, date, societyName, spinCount }. The
+// Legacy spinStats documents are keyed `<societyLowercased>_<YYYY-MM-DD>`
+// and hold only { createdAt, date, societyName, spinCount }. The
 // earlier version queried `where('societyId', '==', id)`, which silently skips
 // every document that has no societyId field - so a society with recorded spins
 // still reported nothing. The scan below falls back to the document id and the
@@ -1669,11 +1765,9 @@ app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
         const society = await authorization.resolveSociety(requested);
         if (!society) return res.status(404).json({ error: 'Society not found.' });
 
-        const today = utcDate();
+        const today = istDate();
         const month = today.slice(0, 7);
         const names = new Set([society.id, society.name, ...society.aliases].map(normalizeAuthValue).filter(Boolean));
-        const prefix = `${normalizeAuthValue(society.name)}_`;
-
         const entries = await readSpinStats(society);
         const belongs = entry => {
             const data = entry.data || {};
@@ -1688,9 +1782,12 @@ app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
             return match ? match[1] : '';
         };
 
-        // One document per day; a duplicate id for the same day would double
-        // count, so keep the largest count per date.
-        const perDay = new Map();
+        // Legacy UTC/unknown daily aggregates cannot be split accurately at
+        // IST midnight. Preserve them in lifetime totals, but do not label
+        // them as exact IST day/month counts. Within each bucket, legacy
+        // duplicate documents still use the largest count.
+        const istDays = new Map();
+        const legacyDays = new Map();
         let matched = 0;
         for (const entry of entries) {
             if (!belongs(entry)) continue;
@@ -1698,15 +1795,18 @@ app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
             const date = dayOf(entry);
             const count = Math.max(0, Number(entry.data && entry.data.spinCount) || 0);
             if (!date) continue;
-            perDay.set(date, Math.max(perDay.get(date) || 0, count));
+            const days = entry.data && entry.data.timeZone === 'Asia/Kolkata' ? istDays : legacyDays;
+            days.set(date, Math.max(days.get(date) || 0, count));
         }
-        let lifetime = 0;
+        const legacySpins = [...legacyDays.values()].reduce((sum, count) => sum + count, 0);
+        const lifetime = legacySpins + [...istDays.values()].reduce((sum, count) => sum + count, 0);
         let monthSpins = 0;
-        for (const [date, count] of perDay) {
-            lifetime += count;
+        for (const [date, count] of istDays) {
             if (date.slice(0, 7) === month) monthSpins += count;
         }
-        const todaySpins = perDay.get(today) || 0;
+        const todaySpins = istDays.get(today) || 0;
+        const lastIstDate = [...istDays.keys()].sort().pop() || null;
+        const lastLegacyDate = [...legacyDays.keys()].sort().pop() || null;
 
         const winnerFlat = await latestWinnerFlat(society);
         return res.set('Cache-Control', 'no-store').json({
@@ -1715,9 +1815,14 @@ app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
             totalLifetimeSpins: lifetime,
             totalDaySpins: todaySpins,
             totalMonthSpins: monthSpins,
-            daysRecorded: perDay.size,
+            daysRecorded: istDays.size,
+            legacyDaysRecorded: legacyDays.size,
             documentsMatched: matched,
-            lastSpinDate: [...perDay.keys()].sort().pop() || null,
+            lastSpinDate: lastIstDate,
+            lastIstSpinDate: lastIstDate,
+            lastLegacySpinDate: lastLegacyDate,
+            legacySpins,
+            timeZone: 'Asia/Kolkata',
             winnerFlat
         });
     } catch (err) {
@@ -1762,9 +1867,10 @@ app.post('/api/notices/:societyId', requireAdminForSociety(req => req.params.soc
             return res.status(400).json({ error: 'Invalid notice fields.' });
         }
         const society = req.authorizedSociety;
+        const now = new Date();
         await db.collection('notices').doc(society.id).set({
             societyId: society.id, societyName: society.name,
-            todayMessage, tomorrowMessage, date, updatedAt: FieldValue.serverTimestamp()
+            todayMessage, tomorrowMessage, date: istDate(now), noticeCycle: noticeCycle(now), updatedAt: FieldValue.serverTimestamp()
         }, { merge: true });
         return res.json({ success: true });
     } catch (_) { return res.status(500).json({ error: 'Could not update the notice.' }); }
@@ -1935,6 +2041,21 @@ app.patch('/api/societies/:societyId/limits', requireAdminForSociety(req => req.
         }, { merge: true });
         return res.json({ success: true });
     } catch (_) { return res.status(500).json({ error: 'Could not update society limits.' }); }
+});
+
+// Only the master admin may set a society-wide cap. Null removes it; zero
+// deliberately blocks all new vehicle registrations without deleting records.
+app.patch('/api/societies/:societyId/vehicle-cap', requireMaster, async (req, res) => {
+    try {
+        const value = req.body && req.body.maxTotalVehicles;
+        if (value !== null && (!Number.isSafeInteger(value) || value < 0 || value > MAX_VEHICLES)) {
+            return res.status(400).json({ error: `Total vehicle limit must be a whole number from 0 to ${MAX_VEHICLES}, or null for no limit.` });
+        }
+        const society = await authorization.resolveSociety(req.params.societyId);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        await db.collection('societies').doc(society.id).set({ maxTotalVehicles: value, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        return res.json({ success: true, maxTotalVehicles: value });
+    } catch (_) { return res.status(500).json({ error: 'Could not update the society vehicle limit.' }); }
 });
 
 app.patch('/api/societies/:societyId/flats', requireAdminForSociety(req => req.params.societyId), async (req, res) => {

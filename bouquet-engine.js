@@ -116,12 +116,29 @@
       title: 'Good Luck', badge: 'until we meet again'
     },
     {
-      id: 'diwali', name: 'Diwali', tagline: 'festival of lights', free: false,
+      id: 'festival', name: 'Festival Vibe', tagline: 'celebrate together', free: false,
       sky: { top: '#2b0a3d', mid: '#8e1240', low: '#f4a02a', floor: '#24062f' },
       halo: 'rgba(255, 205, 110, 0.60)', haloMid: 'rgba(255, 160, 70, 0.28)',
       glow: 'rgba(255, 215, 125, 0.70)', stars: 0, moon: false,
-      bg: 'diyas',
-      title: 'Happy Diwali', badge: 'light over darkness'
+      bg: 'festivalLights',
+      title: 'Festival Wishes', badge: 'celebrating together'
+    },
+    {
+      id: 'sorry', name: 'Sorry', tagline: 'from the heart', free: false,
+      sky: { top: '#e5d9ea', mid: '#e9c3c8', low: '#f8dfd1', floor: '#bd9aaf' },
+      halo: 'rgba(255, 255, 255, 0.64)', haloMid: 'rgba(255, 243, 236, 0.36)',
+      glow: 'rgba(255, 252, 246, 0.76)', stars: 0, moon: false,
+      bg: 'petals', colors: ['#fffaf8', '#f4aebf', '#cbaedb'],
+      ink: '#59364e', inkSub: 'rgba(89, 54, 78, 0.82)', inkRule: 'rgba(89, 54, 78, 0.36)',
+      title: 'I’m Sorry', badge: 'from the heart'
+    },
+    {
+      id: 'newyear', name: 'Happy New Year', tagline: 'new beginnings', free: false,
+      sky: { top: '#151741', mid: '#433b83', low: '#bb789e', floor: '#101332' },
+      halo: 'rgba(255, 225, 174, 0.52)', haloMid: 'rgba(255, 189, 168, 0.24)',
+      glow: 'rgba(255, 229, 187, 0.65)', stars: 0, moon: false,
+      bg: 'fireworks', colors: ['#ffe7a1', '#ffb7c8', '#b9d4ff', '#ffffff'],
+      title: 'Happy New Year', badge: 'cheers to new beginnings'
     }
   ];
 
@@ -335,10 +352,8 @@
     }
   }
 
-  function bgDiyas(ctx, w, h, t, time) {
-    // Diwali: a garland of warm lights swagged across the top, plus small lamps
-    // in the bottom corners. A row along the bottom edge would sit behind the
-    // message panel, so the garland carries the motif instead.
+  function bgFestivalLights(ctx, w, h, t, time) {
+    // A neutral garland of lights for festival wishes of any kind.
     const bulbs = 13;
     const sag = h * 0.045;
     const lineY = h * 0.045;
@@ -386,23 +401,29 @@
       ctx.fill();
     }
 
-    // corner lamps, clear of the message panel
-    for (const cx of [w * 0.075, w * 0.925]) {
-      const cy = h * 0.955;
-      const flick = 0.8 + 0.2 * Math.sin(time * 3.1 + cx);
-      const glow = ctx.createRadialGradient(cx, cy - h * 0.02, 1, cx, cy - h * 0.02, w * 0.075);
-      glow.addColorStop(0, 'rgba(255, 206, 110, ' + (0.70 * flick).toFixed(3) + ')');
-      glow.addColorStop(1, 'rgba(255, 170, 70, 0)');
-      ctx.fillStyle = glow;
-      ctx.fillRect(cx - w * 0.08, cy - h * 0.09, w * 0.16, h * 0.14);
-      ctx.fillStyle = '#c8752e';
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, w * 0.022, w * 0.011, 0, 0, Math.PI);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255, 236, 170, ' + flick.toFixed(3) + ')';
-      ctx.beginPath();
-      ctx.ellipse(cx, cy - h * 0.010, w * 0.005, w * 0.011, 0, 0, TAU);
-      ctx.fill();
+  }
+
+  function bgFireworks(ctx, w, h, t, time) {
+    // Seeded bursts twinkle without introducing a year or a specific festival.
+    const random = makeRandom(hashString('fireworks-' + t.id));
+    for (let i = 0; i < 10; i++) {
+      const x = w * (0.07 + random() * 0.86);
+      const y = h * (0.12 + random() * 0.62);
+      const radius = w * (0.035 + random() * 0.055);
+      const phase = random() * TAU;
+      const brightness = 0.35 + 0.30 * (0.5 + 0.5 * Math.sin(time * 1.5 + phase));
+      ctx.save();
+      ctx.globalAlpha = brightness;
+      ctx.strokeStyle = t.colors[i % t.colors.length];
+      ctx.lineWidth = Math.max(1, w * 0.0024);
+      for (let ray = 0; ray < 12; ray++) {
+        const angle = ray * TAU / 12 + phase;
+        ctx.beginPath();
+        ctx.moveTo(x + Math.cos(angle) * radius * 0.25, y + Math.sin(angle) * radius * 0.25);
+        ctx.lineTo(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
   }
 
@@ -428,7 +449,8 @@
     rays: bgRays,
     bokeh: bgBokeh,
     petals: bgPetals,
-    diyas: bgDiyas,
+    festivalLights: bgFestivalLights,
+    fireworks: bgFireworks,
     rings: bgRings
   };
 

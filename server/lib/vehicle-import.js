@@ -17,6 +17,8 @@
  */
 'use strict';
 
+const { registrationLockId, totalVehicleLimit } = require('./vehicle-limit');
+
 const VEHICLE_TYPES = ['2-Wheeler', '3-Wheeler', '4-Wheeler'];
 const MAX_ROWS = 2000;
 const BATCH_LIMIT = 400;
@@ -218,30 +220,75 @@ function createVehicleImport(options) {
             }
         }
 
-        await commit([
-            ...creates.map(row => batch => batch.set(db.collection('vehicles').doc(), {
-                societyId: society.id,
-                societyName: society.name,
-                flatNumber: row.flat,
-                residentType: row.residentType || 'Resident',
-                mobileNumber: row.mobileNumber || '',
-                vehicleType: row.vehicleType,
-                vehicleNumber: row.plate,
-                deviceId: null,
-                createdAt: stamp
-            })),
-            ...updates.map(row => batch => batch.update(db.collection('vehicles').doc(row.id), {
-                ...row.next,
-                societyId: society.id,
-                societyName: society.name,
-                updatedAt: stamp
-            }))
-        ]);
-
-        for (const row of creates) {
-            summary.added += 1;
-            summary.changes.push({ line: row.line, plate: row.plate, action: 'added', flat: row.flat });
+        // All creation paths share the society registration lock. Each chunk
+        // re-reads the cap and current vehicles inside a transaction, so a
+        // simultaneous resident registration or import cannot exceed it.
+        const lockRef = db.collection('vehicleRegistrationLocks').doc(registrationLockId(society.id));
+        const societyRef = db.collection('societies').doc(society.id);
+        for (let i = 0; i < creates.length; i += 100) {
+            const chunk = creates.slice(i, i + 100).map(row => ({ ...row, ref: db.collection('vehicles').doc() }));
+            const outcomes = await db.runTransaction(async tx => {
+                const [societySnap, lockSnap, ...snapshots] = await Promise.all([
+                    tx.get(societyRef), tx.get(lockRef),
+                    tx.get(db.collection('vehicles').where('societyId', '==', society.id)),
+                    tx.get(db.collection('vehicles').where('societyName', 'in', aliases)),
+                    tx.get(db.collection('vehicles').where('society', 'in', aliases))
+                ]);
+                if (!societySnap.exists) throw new Error('Society no longer exists.');
+                const current = new Map();
+                for (const snapshot of snapshots) snapshot.forEach(doc => {
+                    const data = doc.data() || {};
+                    if (vehicleBelongsTo(data, doc.id, society)) current.set(doc.id, data);
+                });
+                const existingPlates = new Set([...current.values()].map(data => normalizePlate(data.vehicleNumber)).filter(Boolean));
+                let count = current.size;
+                const freshSociety = societySnap.data() || {};
+                const max = totalVehicleLimit(freshSociety);
+                const currentFlats = Array.isArray(freshSociety.flatList) ? freshSociety.flatList : (Array.isArray(freshSociety.flats) ? freshSociety.flats : []);
+                const known = new Set(currentFlats.filter(flat => typeof flat === 'string' && flat.trim()).map(normalize));
+                const result = [];
+                let added = 0;
+                for (const row of chunk) {
+                    if (existingPlates.has(row.plate)) {
+                        result.push({ row, action: 'repeat', reason: 'Vehicle was registered while the import was running.' });
+                    } else if (known.size && !known.has(normalize(row.flat))) {
+                        result.push({ row, action: 'rejected', reason: 'Flat is no longer registered in this society.' });
+                    } else if (max !== null && count >= max) {
+                        result.push({ row, action: 'rejected', reason: `Society vehicle limit of ${max} reached.` });
+                    } else {
+                        tx.set(row.ref, {
+                            societyId: society.id, societyName: society.name, flatNumber: row.flat,
+                            residentType: row.residentType || 'Resident', mobileNumber: row.mobileNumber || '',
+                            vehicleType: row.vehicleType, vehicleNumber: row.plate, deviceId: null, createdAt: stamp
+                        });
+                        existingPlates.add(row.plate);
+                        count++; added++;
+                        result.push({ row, action: 'added' });
+                    }
+                }
+                if (added) {
+                    const version = lockSnap.exists ? Number((lockSnap.data() || {}).version) || 0 : 0;
+                    tx.set(lockRef, { societyId: society.id, version: version + 1, updatedAt: stamp });
+                }
+                return result;
+            });
+            for (const { row, action, reason } of outcomes) {
+                if (action === 'rejected') {
+                    summary.rejected++;
+                    summary.errors.push({ line: row.line, plate: row.plate, reason });
+                } else {
+                    summary[action]++;
+                    summary.changes.push({ line: row.line, plate: row.plate, action, flat: row.flat, ...(reason ? { reason } : {}) });
+                }
+            }
         }
+        await commit(updates.map(row => batch => batch.update(db.collection('vehicles').doc(row.id), {
+            ...row.next,
+            societyId: society.id,
+            societyName: society.name,
+            updatedAt: stamp
+        })));
+
         for (const row of updates) {
             summary.updated += 1;
             summary.changes.push({ line: row.line, plate: row.plate, action: 'updated', flat: row.flat });
