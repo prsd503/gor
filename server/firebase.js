@@ -1,7 +1,7 @@
 /* Full-feature Firebase HTTP API entry point.
  * See docs/firebase-api-full-release.md. All private routes remain protected
  * by verified Firebase identity and Firestore-backed membership/society checks.
- * No scheduled function is exported; process maintenance remains disabled.
+ * The notice rollover is a separate scheduled function; process cron remains disabled.
  */
 'use strict';
 
@@ -27,4 +27,11 @@ setGlobalOptions({
 exports.api = onRequest({ cors: false, invoker: 'public' }, (req, res) => {
     if (!/^\/api(?:[/?]|$)/.test(req.url)) req.url = '/api' + req.url;
     return app(req, res);
+});
+
+// Cloud Functions do not run the long-lived server cron. Scheduler invokes this
+// at midnight IST; the shared maintenance routine also respects the quota guard.
+const { onSchedule } = require('firebase-functions/v2/scheduler');
+exports.noticeRollover = onSchedule({ schedule: '0 0 * * *', timeZone: 'Asia/Kolkata', retryCount: 3, timeoutSeconds: 540 }, async () => {
+    await app.maintenance.runNoticeRollover();
 });

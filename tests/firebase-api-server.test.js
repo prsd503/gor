@@ -52,7 +52,7 @@ test('full Firebase entry enables staff login and gift-code routes with auth, qu
     Module._load = function (name, ...args) {
         if (name === 'firebase-functions/v2') return { setGlobalOptions: options => { globalOptions = options; } };
         if (name === 'firebase-functions/v2/https') return { onRequest: (_options, handler) => handler };
-        if (name.includes('firebase-functions') && name.includes('scheduler')) throw new Error('Scheduled Functions are not part of this release.');
+        if (name === 'firebase-functions/v2/scheduler') return { onSchedule: (options, handler) => { assert.equal(options.schedule, '0 0 * * *'); assert.equal(options.timeZone, 'Asia/Kolkata'); return handler; } };
         if (name === 'firebase-admin/app') return { initializeApp: () => ({}), applicationDefault: () => ({ getAccessToken: async () => ({ access_token: 'mock' }) }) };
         if (name === 'firebase-admin/firestore') return { getFirestore: () => db, FieldValue: createFieldValue() };
         if (name === 'firebase-admin/auth') return { getAuth: () => ({
@@ -72,7 +72,7 @@ test('full Firebase entry enables staff login and gift-code routes with auth, qu
     try {
         const entry = require('../server/firebase');
         app = require('../server/index');
-        assert.deepEqual(Object.keys(entry), ['api'], 'only the HTTP API is exported; scheduled maintenance remains separate');
+        assert.deepEqual(Object.keys(entry), ['api', 'noticeRollover']);
         assert.equal(process.env.ENABLE_CRON, '0');
         assert.equal(process.env.FIREBASE_READ_ONLY, '0');
         assert.equal(globalOptions.serviceAccount, process.env.API_RUNTIME_SERVICE_ACCOUNT);
@@ -84,6 +84,22 @@ test('full Firebase entry enables staff login and gift-code routes with auth, qu
         await new Promise(resolve => server.once('listening', resolve));
         const base = `http://127.0.0.1:${server.address().port}`;
         const json = { 'Content-Type': 'application/json' };
+
+        // Delayed scheduled jobs do not expose stale data on public reads; GET
+        // remains read-only, while the Scheduler callback persists the rollover.
+        const { noticeCycle, istDate } = require('../server/lib/notices');
+        const previousCycle = noticeCycle(new Date(Date.now() - 86400000));
+        const noticeRef = db.collection('notices').doc('aangan');
+        await noticeRef.set({ societyId: 'aangan', date: previousCycle, todayMessage: 'old', tomorrowMessage: 'next' });
+        const noticeResponse = await fetch(base + '/api/notices/Aangan');
+        const notice = await noticeResponse.json();
+        assert.equal(notice.date, istDate());
+        assert.equal(notice.todayMessage, 'next');
+        assert.equal(notice.tomorrowMessage, '');
+        assert.equal((await noticeRef.get()).data().tomorrowMessage, 'next');
+        await entry.noticeRollover();
+        assert.equal((await noticeRef.get()).data().tomorrowMessage, '');
+        assert.equal((await noticeRef.get()).data().todayMessage, 'next');
 
         const health = await fetch(base + '/api/health', { headers: { Origin: 'https://prsd503.github.io' } });
         assert.equal(health.status, 200);

@@ -13,7 +13,7 @@ function maintenanceWith(cron, options = {}) {
     // Keep callbacks in the same realm as cron: v4 uses instanceof Function
     // to distinguish an inline callback from a background-task filename.
     const module = new Module(path.join(root, 'server/lib/maintenance.js'));
-    module.require = name => { assert.equal(name, 'node-cron'); return cron; };
+    module.require = name => name === 'node-cron' ? cron : require(path.join(root, 'server/lib', name));
     module._compile(source, module.id);
     return module.exports.createMaintenance({ db: {}, logger: silent, ...options });
 }

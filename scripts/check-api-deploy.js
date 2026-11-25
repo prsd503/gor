@@ -53,7 +53,7 @@ function checkApiDeploy(root, shell = process.env) {
 if (require.main === module) {
     try {
         const result = checkApiDeploy(path.resolve(__dirname, '..'));
-        console.log(`Local API preflight passed: ${result.project}, ${result.profile}, authenticated routes enabled, no scheduled maintenance. This does not verify runtime IAM, live Monitoring, Firestore data compatibility or Firebase authentication.`);
+        console.log(`Local API preflight passed: ${result.project}, ${result.profile}, authenticated routes enabled, midnight IST notice rollover scheduled. This does not verify runtime IAM, live Monitoring, Firestore data compatibility or Firebase authentication.`);
     } catch (error) {
         console.error('API preflight failed:', error.message);
         process.exitCode = 1;

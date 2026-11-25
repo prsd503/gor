@@ -367,6 +367,52 @@ test('premium themes and flowers are locked until a code is accepted', async (t)
     assert.equal(page.needsCode(), false);
 });
 
+test('festival, sorry and new year themes preview as premium and unlock like other themes', async (t) => {
+    const { window, doc } = pageDom(t);
+    await settle();
+    const page = window.OwBouquetPage;
+    for (const [id, label] of [['festival', 'Festival Vibe'], ['sorry', 'Sorry'], ['newyear', 'Happy New Year']]) {
+        const tile = doc.querySelector(`.theme-tile[data-theme="${id}"]`);
+        assert.ok(tile, `${label} tile exists`);
+        assert.equal(tile.querySelector('.theme-name').textContent, label);
+        assert.equal(tile.dataset.locked, 'true');
+        tile.click();
+        assert.equal(page.state.theme, id);
+        assert.equal(page.needsCode(), true);
+        assert.equal(doc.getElementById('messageInput').readOnly, true);
+        assert.equal(doc.getElementById('themeChip').textContent, label);
+    }
+    assert.equal(doc.querySelector('.theme-tile[data-theme="diwali"]'), null);
+    page.state.unlocked = true;
+    for (const id of ['festival', 'sorry', 'newyear']) {
+        page.chooseTheme(id);
+        assert.equal(page.needsCode(), false, `${id} shares once unlocked`);
+        assert.equal(doc.querySelector(`.theme-tile[data-theme="${id}"]`).dataset.locked, 'false');
+        assert.equal(doc.getElementById('messageInput').readOnly, false);
+    }
+});
+
+test('new theme greetings render on the bouquet and festival has no Diwali-specific wording', () => {
+    for (const [id, expected] of [['festival', 'Festival Wishes'], ['sorry', 'I’m Sorry'], ['newyear', 'Happy New Year']]) {
+        const theme = engine.THEMES.find(item => item.id === id);
+        assert.ok(theme && !theme.free);
+        assert.equal(theme.title, expected);
+        const ctx = stubContext({ width: 440, height: 550 });
+        const text = [];
+        ctx.fillText = value => text.push(String(value));
+        engine.drawCard(ctx, {
+            width: 440, height: 550, images: {}, seed: 7, time: 1,
+            flowers: [], flowerCount: 0, theme: id, message: '', from: ''
+        });
+        assert.ok(text.includes(expected), `${id} greeting is drawn on the card`);
+    }
+    const festival = engine.themeById('festival');
+    assert.doesNotMatch(JSON.stringify(festival), /diwali|diya/i);
+    assert.equal(festival.bg, 'festivalLights');
+    assert.equal(engine.THEMES.some(theme => theme.id === 'diwali'), false);
+    assert.doesNotMatch(html, /diwali/i);
+});
+
 test('the note can only be typed on the free theme or after a code is redeemed', async (t) => {
     const { window, doc } = pageDom(t);
     await settle();
@@ -651,7 +697,7 @@ test('a pre-drawn canvas can render every theme without throwing', () => {
 });
 
 test('light themes use dark ink so the title stays readable', () => {
-    ['wedding', 'newbaby'].forEach((id) => {
+    ['wedding', 'newbaby', 'sorry'].forEach((id) => {
         const t = engine.THEMES.find((th) => th.id === id);
         assert.ok(t.ink, id + ' declares a dark ink colour');
         assert.match(t.ink, /^#[0-9a-f]{6}$/i, id + ' ink is a solid colour');

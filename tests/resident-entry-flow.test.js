@@ -49,7 +49,7 @@ async function startApi(t, societyDoc = { name: 'Aangan', flatList: ['A1-103'], 
     });
     const base = `http://127.0.0.1:${server.address().port}`;
     return {
-        base,
+        base, db, file,
         async register(extra, { flat = 'A1-103', deviceId = 'dev-1' } = {}) {
             const res = await fetch(base + '/api/vehicles', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -116,6 +116,29 @@ test('a plate that is too short is rejected with a message, not a silent drop', 
     const result = await api.register({ vehicles: ['GJ01'] });
     assert.equal(result.status, 400);
     assert.match(result.body.error, /exactly 10 letters or digits/);
+});
+
+test('resident can register a typed flat or name when the society has no list, with device and allowance checks intact', async t => {
+    const api = await startApi(t, { name: 'Aangan', flatList: [], max2Wheeler: 1, max4Wheeler: 0 });
+    const result = await api.register({ vehicles: ['GJ01AB1234'] }, { flat: '  Shanti Villa  ', deviceId: 'dev-1' });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    const rows = await createLocalStore({file: api.file}).collection('vehicles').get();
+    assert.equal(rows.docs[0].data().flatNumber, 'Shanti Villa');
+    assert.equal(rows.docs[0].data().societyId, 'aangan');
+    const otherDevice = await api.register({ vehicles: ['GJ01CD5678'] }, { flat: 'SHANTI VILLA', deviceId: 'dev-2' });
+    assert.notEqual(otherDevice.status, 200, 'device restrictions are still enforced');
+    const otherFlat = await api.register({ vehicles: ['GJ01EF5678'] }, { flat: 'Another home', deviceId: 'dev-1' });
+    assert.notEqual(otherFlat.status, 200, 'a device cannot register another flat');
+    const second = await api.register({ vehicles: ['GJ01GH5678'] }, { flat: 'Shanti Villa', deviceId: 'dev-1' });
+    assert.notEqual(second.status, 200, 'the per-flat allowance is enforced');
+});
+
+test('resident cannot bypass a configured flat list', async t => {
+    const api = await startApi(t);
+    const result = await api.register({ vehicles: ['GJ01AB1234'] }, { flat: 'Unknown', deviceId: 'dev-1' });
+    assert.equal(result.status, 400);
+    assert.match(result.body.error, /not registered/);
+    assert.equal((await api.db.collection('vehicles').get()).size, 0);
 });
 
 // --- Page ---------------------------------------------------------------
@@ -367,4 +390,47 @@ test('a host page with no Firebase session does not call the token endpoint at a
     assert.equal(authCalls.length, 0, 'submit did not ask for a token either');
     assert.equal(posts.length, 1);
     assert.equal(posts[0].headers['Content-Type'], 'application/json');
+});
+
+
+test('with no configured flat list, residents type a name and submit it', async t => {
+    const { window, doc, posts } = loadEntry(t, { name: 'Aangan', flatList: [] }, { postReply: { status: 200, body: { success: true } } });
+    await settle();
+    const select = doc.getElementById('flatSelect');
+    const input = doc.getElementById('flatInput');
+    assert.equal(select.disabled, true);
+    assert.equal(select.style.display, 'none');
+    assert.equal(input.disabled, false);
+    assert.equal(input.required, true);
+    input.value = '  Shanti Villa  ';
+    input.dispatchEvent(new window.Event('input'));
+    await settle(430);
+    assert.equal(doc.querySelectorAll('.dynamic-vehicle-input').length, 3);
+    doc.getElementById('residentTypeSelect').value = 'Owner';
+    doc.getElementById('mobileNumber').value = '9000000000';
+    const plate = doc.querySelector('.dynamic-vehicle-input');
+    plate.value = 'GJ01AB1234';
+    plate.dispatchEvent(new window.Event('input'));
+    doc.getElementById('vehicleForm').dispatchEvent(new window.Event('submit'));
+    await settle(120);
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].body.flatNumber, 'Shanti Villa');
+});
+
+
+test('the resident sees the society-wide cap explanation when registration is refused', async t => {
+    const { window, doc, posts } = loadEntry(t, undefined, {
+        postReply:{status:409, body:{code:'society-vehicle-limit-reached', error:'This society has reached its total vehicle limit of 3. Contact the master administrator.'}}
+    });
+    await settle();
+    await chooseFlat(doc);
+    doc.getElementById('mobileNumber').value = '9000000000';
+    doc.getElementById('residentTypeSelect').value = 'Owner';
+    const plate = doc.querySelector('.dynamic-vehicle-input');
+    plate.value = 'GJ01AB1234';
+    plate.dispatchEvent(new window.Event('input'));
+    doc.getElementById('vehicleForm').dispatchEvent(new window.Event('submit'));
+    await settle(120);
+    assert.equal(posts.length, 1);
+    assert.match(doc.getElementById('modalMessage').textContent, /total vehicle limit of 3/i);
 });

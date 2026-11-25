@@ -1,8 +1,7 @@
 > **Firebase API deployment preparation:** see [API-only setup](docs/firebase-api-setup.md)
-> and [authorization review](docs/firebase-api-security-review.md). The initial
-> cloud entry is read-only and exports no maintenance job. Do not move website
-> or Android clients to it as their primary API until the full-release blockers
-> are resolved. No deployment is performed by these repository changes.
+> and [authorization review](docs/firebase-api-security-review.md). The staged
+> [full release](docs/firebase-api-full-release.md) includes a scheduled midnight IST
+> notice rollover. Deployment is required for these changes to take effect.
 
 # Owl Watcher
 
@@ -53,9 +52,9 @@ Everything runs in the browser:
 
 ### Premium themes and flowers
 
-Midnight Sky and the ten original blooms are free for everyone. Nine occasion
+Midnight Sky and the ten original blooms are free for everyone. Eleven occasion
 themes (birthday, anniversary, champion, promotion, wedding, romance, new baby,
-farewell, Diwali) and six premium blooms (dahlia, hydrangea, magnolia, protea,
+farewell, festival vibe, sorry, happy new year) and six premium blooms (dahlia, hydrangea, magnolia, protea,
 hellebore, sweet pea) are premium.
 
 A premium selection is **previewable but not shareable**: the rendered card
@@ -69,9 +68,9 @@ share attempts cannot both win, even if both pages previously unlocked.
 
 Every premium theme has its **own backdrop** rather than a recoloured night sky —
 confetti and balloons, drifting hearts, a rotating gold sunburst, falling petals,
-floating bokeh, concentric ripples or a Diwali light garland. The **moon and the
+floating bokeh, concentric ripples, a festival light garland or fireworks. The **moon and the
 stars belong to Midnight Sky alone**; premium themes carry neither. Light themes
-(Wedding, New Baby) switch to dark ink so their titles stay readable.
+(Wedding, New Baby, Sorry) switch to dark ink so their titles stay readable.
 
 Premium blooms stay in **full colour** in the picker while locked — the `PREMIUM`
 badge is the only lock signal, so people can see exactly what they would buy. Once

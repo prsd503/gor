@@ -1019,7 +1019,16 @@
         }
     }
 
+    let noticeRefreshTimer;
+    function scheduleNoticeRefresh(societyIdOrName) {
+        clearTimeout(noticeRefreshTimer);
+        // Refresh at midnight in India, independent of the device zone.
+        const shiftedNow = Date.now() + 330 * 60 * 1000;
+        const untilBoundary = 24 * 60 * 60 * 1000 - shiftedNow % (24 * 60 * 60 * 1000);
+        noticeRefreshTimer = setTimeout(() => loadNoticeBoard(societyIdOrName), untilBoundary + 1000);
+    }
     async function loadNoticeBoard(societyIdOrName) {
+        scheduleNoticeRefresh(societyIdOrName);
         const board = document.getElementById("notice-board");
         const noticeContentEl = document.getElementById("notice-content");
         const noticeDateEl = document.getElementById("noticeDate");
@@ -1162,6 +1171,7 @@
         localStorage.removeItem("authToken");
         if (guardUnsubscribe) guardUnsubscribe();
         if (adInterval) clearInterval(adInterval);
+        clearTimeout(noticeRefreshTimer);
         currentSociety = "";
         document.getElementById("vehicleInput").value = "";
         document.getElementById("societyInput").value = "";
@@ -1188,8 +1198,10 @@
                 localStorage.setItem("societyLoginTime", Date.now().toString());
                 
                 showSearchScreen(serverName, serverName); 
-            } else { 
-                showModal("<p>❌ Society not found.</p>"); 
+            } else if (response.status === 404) {
+                showModal("<p>Request your society/group to enroll in Owl Watcher Vehicle Management</p>");
+            } else {
+                showModal("<p>❌ Error connecting to server.</p>");
             }
         } catch (err) {
             showModal("<p>❌ Error connecting to server.</p>");

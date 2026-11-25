@@ -137,16 +137,19 @@ function renderSpinStats(data, societyName) {
         `<div><b>Society:</b> ${escapeText(data.societyName || societyName)}</div>`,
         '<div class="spin-grid">',
         spinStatTile('Lifetime spins', lifetime),
-        spinStatTile('Spins today', data.totalDaySpins || 0),
-        spinStatTile('This month', data.totalMonthSpins || 0),
-        spinStatTile('Days recorded', data.daysRecorded || 0),
+        spinStatTile('Spins today (IST)', data.totalDaySpins || 0),
+        spinStatTile('This month (IST)', data.totalMonthSpins || 0),
+        spinStatTile('Days recorded (IST)', data.daysRecorded || 0),
         '</div>',
         `<div class="spin-winner">🏆 Latest winner flat: ${escapeText(data.winnerFlat || 'None yet')}</div>`
     ];
     if (!lifetime) {
         lines.push('<p class="spin-note">No spins are recorded for this society yet. Spins appear here after a resident spins in the contest.</p>');
-    } else if (data.lastSpinDate) {
-        lines.push(`<p class="spin-note">Last spin recorded: ${escapeText(data.lastSpinDate)} (UTC days).</p>`);
+    } else {
+        if (data.lastIstSpinDate) lines.push(`<p class="spin-note">Last IST spin recorded: ${escapeText(data.lastIstSpinDate)}.</p>`);
+        if (data.legacySpins) {
+            lines.push(`<p class="spin-note">${escapeText(data.legacySpins)} historical spin(s) are included in lifetime totals only. Older UTC-day records cannot be accurately split into IST days${data.lastLegacySpinDate ? `; last historical date: ${escapeText(data.lastLegacySpinDate)}` : ''}.</p>`);
+        }
     }
     resultDiv.innerHTML = lines.join('');
 }
@@ -498,7 +501,7 @@ document.getElementById('saveBtn')?.addEventListener('click', async () => {
         const normalise = value => String(value || '').trim().toUpperCase().replace(/\s+/g, '');
         const match = societyFlats.find(flat => normalise(flat) === normalise(fNum));
         if (!match) {
-            return window.showModal(`${fNum} is not a registered flat in ${assignedSociety}. Pick a flat from the list.`);
+            return window.showModal(`${escapeHtml(fNum)} is not a registered flat in ${escapeHtml(assignedSociety)}. Pick a flat from the list.`);
         }
         fNum = match;
         document.getElementById('fNum').value = match;
@@ -701,29 +704,62 @@ async function loadActiveBookings() {
 // A small RFC-4180-ish CSV reader: quoted fields, escaped quotes, CRLF or LF
 // line endings, and an optional header row in any column order. The browser
 // parses the file; the API validates and writes it per society.
-function parseCsvText(text) {
+function parseCsvText(text, strict = false) {
     const rows = [];
     let row = [];
     let field = '';
     let quoted = false;
+    let closedQuote = false;
     const source = String(text || '').replace(/^\uFEFF/, '');
     for (let i = 0; i < source.length; i++) {
         const char = source[i];
         if (quoted) {
             if (char === '"') {
                 if (source[i + 1] === '"') { field += '"'; i++; }
-                else quoted = false;
+                else { quoted = false; closedQuote = true; }
             } else field += char;
             continue;
         }
-        if (char === '"') { quoted = true; continue; }
-        if (char === ',') { row.push(field); field = ''; continue; }
+        if (char === '"') {
+            if (strict && (field.trim() || closedQuote)) throw new Error('Invalid quote in CSV.');
+            if (strict) field = '';
+            quoted = true; continue;
+        }
+        if (char === ',') { row.push(field); field = ''; closedQuote = false; continue; }
         if (char === '\r') continue;
-        if (char === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
+        if (char === '\n') { row.push(field); rows.push(row); row = []; field = ''; closedQuote = false; continue; }
+        if (strict && closedQuote) {
+            if (/\s/.test(char)) continue;
+            throw new Error('Unexpected text after a quoted CSV field.');
+        }
         field += char;
     }
+    if (strict && quoted) throw new Error('Unclosed quote in CSV.');
     if (field !== '' || row.length) { row.push(field); rows.push(row); }
     return rows.filter(cells => cells.some(cell => String(cell).trim() !== ''));
+}
+
+function formatFlatList(flats) {
+    return flats.map(flat => {
+        const value = String(flat);
+        return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+    }).join('\n');
+}
+
+function validateFlatList(flats) {
+    const cleaned = flats.map(value => String(value).trim()).filter(Boolean);
+    if (cleaned.length > 1000) throw new Error('A society can have at most 1000 flat numbers or names.');
+    if (cleaned.some(value => value.length > 80 || /[\r\n]/.test(value))) throw new Error('Each flat number or name must be at most 80 characters and on one line.');
+    return [...new Set(cleaned)];
+}
+
+function parseFlatCsv(text) {
+    const table = parseCsvText(text, true);
+    if (table.some(row => row.length !== 1)) throw new Error('Use one FlatNumber/Name column. Enclose values containing commas in double quotes.');
+    if (table.length && /^(flatnumber\/name|flatnumber|flat number|flat name|flatname|flat)$/i.test(table[0][0].trim())) table.shift();
+    const flats = validateFlatList(table.map(row => row[0]));
+    if (!flats.length) throw new Error('The CSV has no flat numbers or names.');
+    return flats;
 }
 
 const IMPORT_COLUMNS = {
@@ -905,9 +941,7 @@ async function lookupStaffRole(email) {
 
 window.OwAdminAuth = { lookupStaffRole, isPlausibleEmail, NOT_ADMIN_MESSAGE, GUARD_NOT_ADMIN_MESSAGE };
 
-// Flat numbers for the add/edit form come from the society, not free text: the
-// field is a combobox backed by societies/:id/flats (a datalist keeps it usable
-// as a dropdown on desktop and as a typeahead in the app's WebView).
+// Use the society list as a combobox when configured; otherwise accept text.
 let societyFlats = [];
 
 function renderFlatOptions(flats) {
@@ -915,27 +949,33 @@ function renderFlatOptions(flats) {
     const list = document.getElementById('flatNumberOptions');
     if (!list) return;
     list.innerHTML = societyFlats.map(flat => `<option value="${escapeHtml(flat)}"></option>`).join('');
+    const input = document.getElementById('fNum');
+    if (input) {
+        if (societyFlats.length) input.setAttribute('list', 'flatNumberOptions');
+        else input.removeAttribute('list');
+    }
     const hint = document.getElementById('fNumHint');
     if (hint) {
         hint.textContent = societyFlats.length
             ? `Choose from ${societyFlats.length} registered flat number(s) in this society.`
-            : 'No flat numbers are registered for this society yet.';
+            : 'No flat list is configured. Enter a flat number or name.';
     }
 }
 
 async function loadSocietyFlats() {
-    if (!assignedSociety) return;
+    const society = assignedSociety;
+    if (!society) return;
     try {
-        const res = await authenticatedFetch(`${API_BASE_URL}/societies/${encodeURIComponent(assignedSociety)}/flats`);
+        const res = await authenticatedFetch(`${API_BASE_URL}/societies/${encodeURIComponent(society)}/flats`);
         if (!res.ok) throw new Error(`Flat list failed (${res.status})`);
         const data = await res.json();
-        renderFlatOptions(data.flats);
+        if (society === assignedSociety) renderFlatOptions(data.flats);
     } catch (err) {
         console.error("Failed to load society flat numbers:", err);
     }
 }
 
-window.OwAdminFlats = { loadSocietyFlats, renderFlatOptions, flats: () => [...societyFlats] };
+window.OwAdminFlats = { loadSocietyFlats, renderFlatOptions, parseFlatCsv, formatFlatList, flats: () => [...societyFlats] };
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -948,21 +988,63 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    let limitEditorGeneration = 0;
+    let limitEditorSociety = '';
     async function loadSocietyLimits() {
-        if (!assignedSociety) return;
+        const society = assignedSociety;
+        const generation = ++limitEditorGeneration;
+        limitEditorSociety = '';
+        const total = document.getElementById('maxTotalVehiclesInput');
+        const save = document.getElementById('saveTotalVehiclesBtn');
+        if (total) { total.value = ''; total.disabled = true; }
+        if (save) save.disabled = true;
+        if (!society) return;
         try {
-            const res = await authenticatedFetch(`${API_BASE_URL}/societies/${assignedSociety}`);
-            if (res.ok) {
-                const data = await res.json();
-                const max4 = document.getElementById('max4WheelerInput');
-                const max2 = document.getElementById('max2WheelerInput');
-                if (max4) max4.value = Number.isInteger(data.max4Wheeler) ? data.max4Wheeler : '';
-                if (max2) max2.value = Number.isInteger(data.max2Wheeler) ? data.max2Wheeler : '';
-            }
+            const res = await authenticatedFetch(`${API_BASE_URL}/societies/${encodeURIComponent(society)}`);
+            if (!res.ok) throw new Error('Could not load society limits.');
+            const data = await res.json();
+            if (generation !== limitEditorGeneration || society !== assignedSociety) return;
+            const max4 = document.getElementById('max4WheelerInput');
+            const max2 = document.getElementById('max2WheelerInput');
+            if (max4) max4.value = Number.isInteger(data.max4Wheeler) ? data.max4Wheeler : '';
+            if (max2) max2.value = Number.isInteger(data.max2Wheeler) ? data.max2Wheeler : '';
+            if (total) { total.value = Number.isInteger(data.maxTotalVehicles) ? data.maxTotalVehicles : ''; total.disabled = false; }
+            const hint = document.getElementById('maxTotalVehiclesHint');
+            if (hint) hint.textContent = 'Leave blank for no society-wide limit. Zero blocks new vehicles; existing vehicles can still be edited.';
+            if (save) save.disabled = false;
+            limitEditorSociety = society;
         } catch (err) {
+            if (generation !== limitEditorGeneration || society !== assignedSociety) return;
             console.error("Failed to load society limits:", err);
+            const hint = document.getElementById('maxTotalVehiclesHint');
+            if (hint) hint.textContent = 'Could not load the society limit. Switch to this society again to retry.';
         }
     }
+    window.OwAdminFlats.loadSocietyLimits = loadSocietyLimits;
+
+    document.getElementById('saveTotalVehiclesBtn')?.addEventListener('click', async () => {
+        const society = assignedSociety;
+        if (!society || society !== limitEditorSociety) return window.showModal('Load the society limit before saving.');
+        const raw = document.getElementById('maxTotalVehiclesInput').value.trim();
+        if (raw && (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) > 1000000)) {
+            return window.showModal('Enter a whole number from 0 to 1000000, or leave it blank for no limit.');
+        }
+        const maxTotalVehicles = raw === '' ? null : Number(raw);
+        const button = document.getElementById('saveTotalVehiclesBtn');
+        button.disabled = true;
+        try {
+            const res = await authenticatedFetch(`${API_BASE_URL}/societies/${encodeURIComponent(society)}/vehicle-cap`, {
+                method: 'PATCH', body: JSON.stringify({ maxTotalVehicles })
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(body.error || 'Could not save the society limit.');
+            window.showModal(`Society-wide vehicle limit updated for ${escapeHtml(society)}.`);
+        } catch (err) {
+            window.showModal(`Failed to save society vehicle limit: ${escapeHtml(err.message)}`);
+        } finally {
+            if (society === assignedSociety && limitEditorSociety === society) button.disabled = false;
+        }
+    });
 
     document.getElementById('saveSocietyLimitsBtn')?.addEventListener('click', async () => {
         const max4W = parseInt(document.getElementById('max4WheelerInput').value, 10);
@@ -985,38 +1067,80 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    let flatEditorGeneration = 0;
+    let flatEditorSociety = '';
     async function loadFlatNumbers() {
-        if (!assignedSociety) return;
+        const society = assignedSociety;
+        const generation = ++flatEditorGeneration;
+        flatEditorSociety = '';
+        const textarea = document.getElementById('flatsInput');
+        const file = document.getElementById('flatCsvFile');
+        const save = document.getElementById('saveFlatsBtn');
+        const status = document.getElementById('flatCsvStatus');
+        if (!textarea || !file || !save) return;
+        textarea.value = '';
+        textarea.disabled = file.disabled = save.disabled = true;
+        if (!society) return;
+        if (status) status.textContent = 'Loading flat numbers for ' + society + '…';
         try {
-            const res = await authenticatedFetch(`${API_BASE_URL}/societies/${assignedSociety}`);
-            if (res.ok) {
-                const data = await res.json();
-                if (data.flatList) {
-                    const textarea = document.getElementById('flatsInput');
-                    if (textarea) {
-                        textarea.value = data.flatList.join(', ');
-                    }
-                }
-            }
+            const res = await authenticatedFetch(`${API_BASE_URL}/societies/${encodeURIComponent(society)}`);
+            if (!res.ok) throw new Error('Could not load the flat list.');
+            const data = await res.json();
+            if (!Array.isArray(data.flatList)) throw new Error('Invalid flat list response.');
+            if (generation !== flatEditorGeneration || society !== assignedSociety) return;
+            textarea.value = formatFlatList(data.flatList);
+            textarea.disabled = file.disabled = save.disabled = false;
+            flatEditorSociety = society;
+            if (status) status.textContent = 'CSV replaces the editor contents. Review and save to apply.';
         } catch (err) {
+            if (generation !== flatEditorGeneration || society !== assignedSociety) return;
             console.error("Failed to load flat numbers:", err);
+            if (status) status.textContent = 'Could not load flat numbers. Switch to this society again to retry.';
         }
     }
+    window.OwAdminFlats.loadFlatNumbers = loadFlatNumbers;
+
+    document.getElementById('flatCsvFile')?.addEventListener('change', async event => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        const status = document.getElementById('flatCsvStatus');
+        const generation = flatEditorGeneration;
+        if (!flatEditorSociety || flatEditorSociety !== assignedSociety) return;
+        try {
+            if (file.size > 1024 * 1024) throw new Error('Choose a CSV file smaller than 1 MB.');
+            const flats = parseFlatCsv(await readFileText(file));
+            if (generation !== flatEditorGeneration) return;
+            document.getElementById('flatsInput').value = formatFlatList(flats);
+            status.textContent = `${flats.length} flat number(s) loaded into the editor. Review and select Save flat numbers to apply.`;
+        } catch (err) {
+            if (generation === flatEditorGeneration) status.textContent = `Could not load CSV: ${err.message}`;
+        } finally {
+            event.target.value = '';
+        }
+    });
 
     document.getElementById('saveFlatsBtn')?.addEventListener('click', async () => {
-        const rawText = document.getElementById('flatsInput').value;
-        const flatList = rawText.split(',').map(f => f.trim()).filter(f => f.length > 0);
-
+        if (!assignedSociety || flatEditorSociety !== assignedSociety) return window.showModal('Load the society flat list before saving.');
+        const society = assignedSociety;
         try {
-            await authenticatedFetch(`${API_BASE_URL}/societies/${assignedSociety}/flats`, {
+            const rawText = document.getElementById('flatsInput').value;
+            const flatList = validateFlatList(parseCsvText(rawText, true).flat());
+            const res = await authenticatedFetch(`${API_BASE_URL}/societies/${encodeURIComponent(society)}/flats`, {
                 method: 'PATCH',
                 body: JSON.stringify({ flatList })
             });
-
-            window.showModal("Flat numbers updated successfully!");
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || 'Could not save flat numbers.');
+            }
+            if (society === assignedSociety && flatEditorSociety === society) {
+                document.getElementById('flatsInput').value = formatFlatList(flatList);
+                renderFlatOptions(flatList);
+            }
+            window.showModal(`Flat numbers updated for ${escapeHtml(society)}.`);
         } catch (err) {
             console.error("Error saving flat numbers:", err);
-            window.showModal("Failed to save flat numbers.");
+            window.showModal(`Failed to save flat numbers: ${escapeHtml(err.message)}`);
         }
     });
 
@@ -1040,6 +1164,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (typeof loadActiveBookings === 'function') loadActiveBookings();
             if (typeof loadSocietyLimits === 'function') loadSocietyLimits();
             if (typeof loadSocietyFlats === 'function') loadSocietyFlats();
+            loadFlatNumbers();
 
             let resultsContainer = document.getElementById('master-society-data');
             if (!resultsContainer) {
@@ -1060,28 +1185,12 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadNoticeData() {
         if (!assignedSociety) return;
         
-        const options = { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' };
-        const formatter = new Intl.DateTimeFormat('en-CA', options);
-        const currentIstDateStr = formatter.format(new Date());
-
         try {
             const res = await authenticatedFetch(`${API_BASE_URL}/notices/${assignedSociety}`);
             if (res.ok) {
                 const data = await res.json();
-                let todayMsg = data.todayMessage || "";
-                let tomorrowMsg = data.tomorrowMessage || "";
-                let noticeDate = data.date || "";
-
-                if (noticeDate && noticeDate < currentIstDateStr) {
-                    todayMsg = tomorrowMsg;
-                    tomorrowMsg = "";
-                    noticeDate = currentIstDateStr;
-
-                    await authenticatedFetch(`${API_BASE_URL}/notices/${assignedSociety}`, {
-                        method: 'POST',
-                        body: JSON.stringify({ todayMessage: todayMsg, tomorrowMessage: tomorrowMsg, date: noticeDate })
-                    });
-                }
+                const todayMsg = data.todayMessage || "";
+                const tomorrowMsg = data.tomorrowMessage || "";
 
                 if (document.getElementById('todayMsg')) document.getElementById('todayMsg').value = todayMsg;
                 if (document.getElementById('tomorrowMsg')) document.getElementById('tomorrowMsg').value = tomorrowMsg;
@@ -1166,6 +1275,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         loadFacilitiesDropdown();
                         loadActiveBookings();
                         loadSocietyFlats();
+                        if (isMasterAdminUser) { loadFlatNumbers(); loadSocietyLimits(); }
                     } else {
                         console.warn("Admin profile loaded, but no society assigned.");
                     }
@@ -1260,8 +1370,7 @@ document.addEventListener('DOMContentLoaded', () => {
             method: 'POST',
             body: JSON.stringify({
                 todayMessage: document.getElementById('todayMsg').value,
-                tomorrowMessage: document.getElementById('tomorrowMsg').value,
-                date: new Date().toLocaleDateString('en-CA')
+                tomorrowMessage: document.getElementById('tomorrowMsg').value
             })
         });
         window.showModal("Notices updated successfully!");

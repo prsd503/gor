@@ -240,11 +240,21 @@ GET  /api/contest/spinstats?societyName=Aangan      (master token)
 POST /api/contest/spinstats/backfill                (master token) { societyName }
 ```
 
-`POST /api/contest/spin` writes one document per society per **UTC** day:
+`POST /api/contest/spin` writes one document per society per **IST** day
+(Asia/Kolkata, midnight-to-midnight):
 
 ```
-spinStats/aangan_2026-11-04 = { createdAt, date: "2026-11-04", societyName: "Aangan", spinCount: 1 }
+spinStats/aangan_ist_2026-11-04 = { date: "2026-11-04", timeZone: "Asia/Kolkata", societyName: "Aangan", spinCount: 1 }
 ```
+
+The master page's today and month totals count these IST buckets. Contest-day
+repeat checks and the daily winning-spin ordinal also reset at midnight IST.
+UTC-keyed attempts created by an older deployment remain eligible for winner
+claims, and a timestamped legacy attempt in the same IST day blocks a repeat.
+When switching an already-running deployment, the new IST ordinal starts at one:
+legacy UTC daily aggregates cannot reliably establish how many spins happened
+in the current IST day. Plan the cutover at IST midnight to avoid affecting the
+winning-spin threshold during a partially completed day.
 
 Documents created before `societyId` was stamped carry only `date`,
 `societyName` and the `<societyLowercased>_<date>` document id. Because
@@ -252,12 +262,21 @@ Documents created before `societyId` was stamped carry only `date`,
 returned and the master page showed *"Society data not found or invalid
 response."* The read now tries the indexed query and then scans the collection,
 matching on `societyId`, **or** `societyName`, **or** the document id prefix, and
-takes the date from the `date` field or the id suffix. One document per date is
-counted (the largest `spinCount` wins if two collide).
+takes the date from the `date` field or the id suffix. For duplicate documents
+in the same timezone bucket and date, the largest `spinCount` wins.
+
+Legacy UTC or unmarked daily aggregates are preserved in lifetime totals and
+historical date reporting, but **excluded from the IST today, month, and days-recorded totals**:
+their individual spin times are not available, so they cannot be split at IST
+midnight reliably. The page labels this limitation. Legacy and IST buckets on
+the same date are kept separate so the new spins are not lost. All active spin
+writers must be updated to use the IST bucket and timezone marker; old writers
+will continue to produce legacy aggregates.
 
 ```
 → { societyName, totalSpins, totalLifetimeSpins, totalDaySpins,
-    totalMonthSpins, daysRecorded, documentsMatched, lastSpinDate, winnerFlat }
+    totalMonthSpins, daysRecorded, legacyDaysRecorded, documentsMatched, lastSpinDate,
+    lastIstSpinDate, lastLegacySpinDate, legacySpins, timeZone, winnerFlat }
 ```
 
 `backfill` stamps the missing `societyId` onto every matching document (batches
@@ -371,3 +390,53 @@ npm ci
 npm test        # 67 tests
 npm run check
 ```
+
+
+## Flat numbers and names
+
+When a society has a non-empty flat list, resident and admin vehicle entries must match that list. If the list is empty, residents and admins can type a flat number or name; it is stored on the vehicle record, not added automatically to the society list. Existing device locks, duplicate checks and per-flat allowances still apply. In this mode the API reads the society's vehicle records to compare legacy free-text names case-insensitively; large societies can incur additional Firestore reads. Free-text mode does not independently verify that a resident owns a flat.
+
+In the master admin panel, download the flat CSV template, replace the examples, and upload a single `FlatNumber/Name` column. Quote values containing commas. Uploading replaces only the editor content; select **Save flat numbers** to persist the reviewed list. An empty saved list enables free-text mode. The server accepts at most 1,000 names, each up to 80 characters.
+
+
+## Society-wide vehicle cap
+
+Master admins can set a society-wide maximum in the admin panel. A blank value removes the cap; zero prevents new registrations. Existing records are not deleted when the cap is lowered, and edits that do not add records remain available. The cap counts all vehicle types and legacy records belonging to the society. Residents, admin entries, and bulk CSV imports share the cap; an import reports rows rejected after the remaining slots are filled. Multi-vehicle resident submissions are all-or-nothing.
+
+`PATCH /api/societies/:societyId/vehicle-cap` requires a master token and accepts `{ "maxTotalVehicles": 100 }`, or `null` for unlimited (integer range 0–1,000,000). The limit is enforced transactionally against the society registry, including concurrent imports and registrations. Because an exact count includes older society-name-only documents, capped registrations and bulk import chunks read society vehicle records, which increases Firestore reads for large societies. Direct Firestore writers outside this API must enforce the same cap or they can bypass it.
+
+## Contest participation and guest winners
+
+The contest page supports registered devices and guests. Configure the exact
+`societies/Guest` document with a positive `spintodayNumber` to select that
+IST day's winning guest spin ordinal. If the document is missing, guest spins
+fail without being counted. Registered spins continue to use their own
+society's threshold. Both use the same IST-day statistics described above.
+
+The two answer attempts and successful-answer state are stored only in the
+browser/device's localStorage per advertisement. No quiz-answer state is saved
+on the server. Clearing storage resets those attempts, and another device or
+browser has its own attempt counter. Spin records still exist server-side to
+maintain daily counts and prevent duplicate spins.
+
+`POST /api/contest/guest/spin` takes `{deviceId, contestId}`. A transaction
+rejects registered devices, increments the guest count only once per device,
+contest and IST day, and, for a win, stores a random 9-digit code in
+`societies/Guest.uniqueCode`. No separate guest-winner or per-spin code record
+is created. A retry can recover that code while it is the latest code; the
+page also caches a received code locally. **A newer guest win overwrites the
+previous code:** the team can only verify the latest code from Firestore, and
+a prior code cannot be recovered from the server. Random codes are checked
+against the current code, but historical uniqueness cannot be guaranteed
+without retaining a history.
+
+Registered winners use `/api/contest/winner`; a verified claim returns the
+Firestore-linked society and flat/name. An optional `recover: true` allows a
+repeat request to recover the same verified details after a lost response.
+Winners can open WhatsApp using `configs/owlwatcher.teamPhone`, with either
+the registered details or guest winning code in the message.
+
+**Security limitations:** client-stored quiz attempts and answers are not
+secure against modification, and the device identifier is client-supplied and
+spoofable. A winning code is not proof of a person's identity; the team must
+apply its own prize-redemption checks.

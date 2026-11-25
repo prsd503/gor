@@ -61,7 +61,7 @@
 
         <!-- Device Verification Check Prompt (Hidden until lookup completes) -->
         <div id="deviceCheckPrompt" class="note contest-alert" style="display:none;">
-            <p>Use Registered Device to Play this Contest. (The device with which vehicle entry is done)</p>
+            <p id="participationNotice">Checking device…</p>
         </div>
 
         <!-- Step 1: Trivia Question -->
@@ -95,359 +95,258 @@
     </a>
 </main>
 
-<!-- Modal Popup for Win / Flat Number Registration -->
+<!-- Winner details are verified by the API before WhatsApp is enabled. -->
 <div id="resultModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <div class="modal-content">
         <span class="close" role="button" tabindex="0" aria-label="Close" onclick="document.getElementById('resultModal').style.display='none'">&times;</span>
-        <h2 id="modalTitle" class="win-title">You Won! </h2>
-        <div id="modalBodyContent">
-            <label for="flatNumberInput">Enter your flat number to register your win</label>
-            <input type="text" id="flatNumberInput" class="input-box" placeholder="e.g. A1-101">
-            <button type="button" class="action-btn btn-block" onclick="submitFlatWinner()">Submit flat number</button>
-        </div>
-        <div id="couponDisplaySection" style="display:none;">
-            <p class="win-success">Successfully registered your flat number!</p>
-        </div>
+        <h2 id="modalTitle" class="win-title">You won!</h2>
+        <p id="winnerDetails" aria-live="polite"></p>
+        <p id="winningCode" class="win-success"></p>
+        <a id="winnerWhatsApp" class="btn btn-success btn-block" target="_blank" rel="noopener" style="display:none;">Send winning details on WhatsApp</a>
+        <button type="button" id="retryWinnerBtn" class="btn btn-secondary btn-block" style="display:none;">Retry winner verification</button>
     </div>
 </div>
 
-
 <script type="module">
     import { Device } from 'https://cdn.jsdelivr.net/npm/@capacitor/device@latest/+esm';
-
     const API_BASE_URL = (window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api');
     const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
-
-    // Helper function matching entry.html to ensure authorized access
-    async function getAuthHeaders() {
-        try {
-            const tokenRes = await fetch(`${API_BASE_URL}/auth/token`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...NG_HEADERS }
-            });
-            const tokenData = await tokenRes.json();
-            if (tokenData && tokenData.token) {
-                return {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${tokenData.token}`,
-                    ...NG_HEADERS
-                };
-            }
-        } catch (err) {
-            console.error("Failed to acquire auth token:", err);
-        }
-        return { ...NG_HEADERS };
-    }
-
-    //document.getElementById('menuToggle').addEventListener('click', function() {
-      //  document.getElementById('navLinks').classList.toggle('active');
-    //});
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const adImgUrl = urlParams.get('adImg');
-
+    const jsonHeaders = { 'Content-Type': 'application/json', ...NG_HEADERS };
+    const adImgUrl = new URLSearchParams(window.location.search).get('adImg');
+    const contestId = adImgUrl || 'default';
     if (adImgUrl) {
-        const imgEl = document.getElementById('linkedAdImg');
-        imgEl.src = decodeURIComponent(adImgUrl);
-        imgEl.style.display = 'inline-block';
+        const img = document.getElementById('linkedAdImg');
+        img.src = adImgUrl;
+        img.style.display = 'inline-block';
     }
+    let deviceId = '';
+    let isRegistered = false;
+    let validatedSocietyName = '';
+    let linkedFlatNumber = '';
+    const attemptsKey = `attempts_ad_${contestId}`;
+    const blockKey = `failed_ad_${contestId}`;
+    const passedKey = `passed_ad_${contestId}`;
+    let winningPayload = null;
 
-    let correctOptionIndex = null;
-    let validatedSocietyName = "";
-    let deviceId = "";
-    let linkedFlatNumber = "";
-    const maxAttempts = 2;
-
-    // Exact device ID lookup logic matching entry.html
     async function getDeviceIdentifier() {
         try {
             const info = await Device.getId();
-            return info.identifier || info.uuid || "unknown";
-        } catch (e) {
-            let mock = localStorage.getItem('mockDeviceId') || `web-${Math.random().toString(36).substr(2, 9)}`;
-            localStorage.setItem('mockDeviceId', mock);
-            return mock;
+            if (info.identifier || info.uuid) return info.identifier || info.uuid;
+        } catch (_) { /* Browser fallback below. */ }
+        let id = localStorage.getItem('mockDeviceId');
+        if (!id) {
+            if (!window.crypto || typeof window.crypto.getRandomValues !== 'function') throw new Error('Device identification is unavailable.');
+            const bytes = new Uint8Array(16);
+            window.crypto.getRandomValues(bytes);
+            id = 'web-' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+            localStorage.setItem('mockDeviceId', id);
         }
+        return id;
     }
-
-    window.onload = async function() {
-        deviceId = await getDeviceIdentifier();
-        let isRegistered = false;
-
-        if (deviceId && deviceId !== "unknown") {
-            try {
-                // Ask backend to check Firestore for this deviceId
-                const res = await fetch(`${API_BASE_URL}/verify-device/${encodeURIComponent(deviceId)}`, { headers: NG_HEADERS });
-                if (res.ok) {
-                    const result = await res.json();
-                    if (result.registered === true) {
-                        isRegistered = true;
-                    }
-                }
-            } catch (err) {
-                console.error("Error verifying device registration:", err);
-            }
-        }
-
-        // If not registered in Firestore, block the contest and show notice
-        if (!isRegistered) {
-            document.getElementById('contestArea').style.display = 'none';
-            document.getElementById('deviceCheckPrompt').style.display = 'block';
-            return;
-        }
-
-        // If registered, proceed to load the contest
-        const attemptsKey = `attempts_ad_${adImgUrl || 'default'}`;
-        const blockKey = `failed_ad_${adImgUrl || 'default'}`;
-        
-        let currentAttempts = parseInt(localStorage.getItem(attemptsKey) || "0");
-
-        if (localStorage.getItem(blockKey) || currentAttempts >= maxAttempts) {
-            document.getElementById('contestArea').innerHTML = `
-                <p style="color: #d32f2f; font-size: 1.3rem; font-weight: bold;">
-                    ⚠️ You have already used your 2 attempts for this contest.
-                </p>
-            `;
-            return;
-        }
-
-        updateAttemptsNotice(currentAttempts);
-        loadContestData();
-    };
-
-    function updateAttemptsNotice(currentAttempts) {
-        const remaining = maxAttempts - currentAttempts;
-        const noticeEl = document.getElementById('attemptsNotice');
-        noticeEl.innerText = `⚠️ You have ${remaining} attempt${remaining === 1 ? '' : 's'} left for this contest.`;
+    function contestError(message) {
+        const area = document.getElementById('contestArea');
+        area.replaceChildren();
+        const text = document.createElement('p');
+        text.textContent = message;
+        area.appendChild(text);
     }
-
-    async function loadContestData() {
-        try {
-            const adsResponse = await fetch(`${API_BASE_URL}/ads/global`, { headers: NG_HEADERS });
-            if (adsResponse.ok) {
-                const globalAds = await adsResponse.json();
-                const matchedAd = globalAds.find(ad => ad.imageUrl === adImgUrl);
-
-                if (matchedAd && matchedAd.question && matchedAd.options) {
-                    setupCustomContestData(matchedAd);
-                    return;
-                }
-            }
-            setupMockContestData();
-        } catch (err) {
-            console.error("Failed to load contest data:", err);
-            setupMockContestData();
-        }
-    }
-
-    function setupCustomContestData(adData) {
-        correctOptionIndex = parseInt(adData.correctIndex, 10);
-        if (isNaN(correctOptionIndex)) correctOptionIndex = 0;
-
-        document.getElementById('questionText').innerText = adData.question;
-        const optContainer = document.getElementById('optionsContainer');
-        optContainer.innerHTML = "";
-
-        adData.options.forEach((opt, index) => {
-            const btn = document.createElement('button');
-            btn.className = 'option-btn';
-            btn.innerText = opt;
-            btn.onclick = () => checkAnswer(index, correctOptionIndex);
-            optContainer.appendChild(btn);
-        });
-    }
-
-    function setupMockContestData() {
-        correctOptionIndex = 0;
-        document.getElementById('questionText').innerHTML = 'Default Question: What does <span class="ow-brand">Owl Watcher</span> secure?';
-        const optContainer = document.getElementById('optionsContainer');
-        optContainer.innerHTML = "";
-
-        const mockOptions = ["Vehicles & Societies", "Outer Space", "Deep Ocean", "Volcanoes"];
-        mockOptions.forEach((opt, index) => {
-            const btn = document.createElement('button');
-            btn.className = 'option-btn';
-            btn.innerText = opt;
-            btn.onclick = () => checkAnswer(index, correctOptionIndex);
-            optContainer.appendChild(btn);
-        });
-    }
-
-    function checkAnswer(selectedIndex, correctIndex) {
-        const attemptsKey = `attempts_ad_${adImgUrl || 'default'}`;
-        const blockKey = `failed_ad_${adImgUrl || 'default'}`;
-        
-        let currentAttempts = parseInt(localStorage.getItem(attemptsKey) || "0");
-        if (currentAttempts >= maxAttempts || localStorage.getItem(blockKey)) return;
-
-        currentAttempts++;
-        localStorage.setItem(attemptsKey, currentAttempts.toString());
-
-        if (selectedIndex === correctIndex) {
-            document.getElementById('contestArea').style.display = 'none';
+    function showSpinOrSociety() {
+        document.getElementById('contestArea').style.display = 'none';
+        if (isRegistered) {
             document.getElementById('societySection').style.display = 'block';
         } else {
-            if (currentAttempts >= maxAttempts) {
-                localStorage.setItem(blockKey, "true");
-                document.getElementById('contestArea').innerHTML = `
-                    <p style="color: #d32f2f; font-size: 1.3rem; font-weight: bold;">
-                         Incorrect! You have completed your 2 attempts and are now blocked from this ad.
-                    </p>
-                `;
-            } else {
-                updateAttemptsNotice(currentAttempts);
-                alert(` Incorrect Answer! You have 1 attempt left.`);
-            }
+            validatedSocietyName = 'Guest';
+            document.getElementById('spinSection').style.display = 'block';
         }
     }
-
-    async function verifySocietyAndProceed() {
-        const societyVal = document.getElementById('societyInput').value.trim();
-        const errEl = document.getElementById('societyError');
-        
-        if (!societyVal) {
-            errEl.innerText = "Please enter a society name.";
-            errEl.style.display = 'block';
+    function showAttempts(remaining) {
+        document.getElementById('attemptsNotice').textContent = `⚠️ You have ${remaining} attempt${remaining === 1 ? '' : 's'} left for this contest.`;
+    }
+    function answer(choice, correctIndex) {
+        try {
+            let attempts = Math.max(0, Number.parseInt(localStorage.getItem(attemptsKey) || '0', 10) || 0);
+            if (localStorage.getItem(blockKey) || attempts >= 2) {
+                contestError('You have already used your 2 attempts for this contest.');
+                return;
+            }
+            attempts++;
+            localStorage.setItem(attemptsKey, String(attempts));
+            if (choice === correctIndex) {
+                localStorage.setItem(passedKey, 'true');
+                showSpinOrSociety();
+            } else if (attempts >= 2) {
+                localStorage.setItem(blockKey, 'true');
+                contestError('Incorrect. You have used your 2 attempts for this contest.');
+            } else {
+                showAttempts(2 - attempts);
+                alert('Incorrect answer. You have 1 attempt left.');
+            }
+        } catch (_) {
+            contestError('Device storage is unavailable. Enable it and reload to play.');
+        }
+    }
+    async function loadContest() {
+        if (localStorage.getItem(passedKey) === 'true') { showSpinOrSociety(); return; }
+        const attempts = Math.max(0, Number.parseInt(localStorage.getItem(attemptsKey) || '0', 10) || 0);
+        if (localStorage.getItem(blockKey) || attempts >= 2) {
+            contestError('You have already used your 2 attempts for this contest.');
             return;
         }
-
-        try {
-            const res = await fetch(`${API_BASE_URL}/societies/verify?name=${encodeURIComponent(societyVal)}`, { headers: NG_HEADERS });
-            if (res.ok) {
-                const societyData = await res.json();
-                validatedSocietyName = societyData.name || societyVal;
-
-                // Ask the API for only this device's registration in the selected society.
-                const headers = await getAuthHeaders();
-                const lookup = new URLSearchParams({ societyName: validatedSocietyName });
-                const vRes = await fetch(`${API_BASE_URL}/verify-device/${encodeURIComponent(deviceId)}?${lookup.toString()}`, { headers });
-                const deviceRecord = vRes.ok ? await vRes.json() : null;
-
-                if (!deviceRecord || deviceRecord.registered !== true) {
-                    errEl.innerText = "Use Registered Device to Play this Contest. (This device is not linked to any flat in this society)";
-                    errEl.style.display = 'block';
-                    return;
-                }
-
-                // Store linked flat number for later win verification
-                linkedFlatNumber = String(deviceRecord.flatNumber).trim().toUpperCase();
-
-                document.getElementById('societySection').style.display = 'none';
-                
-                const cacheKey = `spun_${adImgUrl}_${validatedSocietyName}`;
-                if (localStorage.getItem(cacheKey)) {
-                    document.getElementById('spinBtn').style.display = 'none';
-                    document.getElementById('spinNotice').innerText = "⚠️ This device has already spun for this contest!";
-                }
-
-                document.getElementById('spinSection').style.display = 'block';
-            } else {
-                errEl.innerText = "Society name not found in database. Please check spelling.";
-                errEl.style.display = 'block';
+        let question = 'Default Question: What does Owl Watcher secure?';
+        let options = ['Vehicles & Societies', 'Outer Space', 'Deep Ocean', 'Volcanoes'];
+        let correctIndex = 0;
+        if (adImgUrl) {
+            const res = await fetch(`${API_BASE_URL}/ads/global`, { headers: NG_HEADERS });
+            if (!res.ok) throw new Error('Could not load the contest. Please retry.');
+            const ads = await res.json();
+            if (!Array.isArray(ads)) throw new Error('Could not load the contest. Please retry.');
+            const ad = ads.find(item => item && item.imageUrl === adImgUrl);
+            if (!ad) throw new Error('Contest not found. Please return to the home page.');
+            if (ad.question && Array.isArray(ad.options) && ad.options.length >= 2) {
+                question = String(ad.question);
+                options = ad.options;
+                const parsed = Number.parseInt(ad.correctIndex, 10);
+                correctIndex = Number.isInteger(parsed) && parsed >= 0 && parsed < options.length ? parsed : 0;
             }
-        } catch (err) {
-            errEl.innerText = "Error verifying society. Try again.";
-            errEl.style.display = 'block';
         }
+        document.getElementById('questionText').textContent = question;
+        const container = document.getElementById('optionsContainer');
+        container.replaceChildren();
+        options.forEach((option, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'option-btn';
+            button.textContent = option;
+            button.addEventListener('click', () => answer(index, correctIndex));
+            container.appendChild(button);
+        });
+        showAttempts(2 - attempts);
+    }
+    window.onload = async function() {
+        try {
+            deviceId = await getDeviceIdentifier();
+            const res = await fetch(`${API_BASE_URL}/verify-device/${encodeURIComponent(deviceId)}`, { headers: NG_HEADERS });
+            if (!res.ok) throw new Error('Could not check this device. Please retry.');
+            const data = await res.json();
+            if (typeof data.registered !== 'boolean') throw new Error('Could not check this device. Please retry.');
+            isRegistered = data.registered;
+            const notice = document.getElementById('deviceCheckPrompt');
+            document.getElementById('participationNotice').textContent = isRegistered
+                ? 'Playing with your registered device.' : 'Playing as a guest. Answer the question to enter.';
+            notice.style.display = 'block';
+            await loadContest();
+        } catch (err) { contestError(err.message || 'Could not load the contest. Please retry.'); }
+    };
+    async function verifySocietyAndProceed() {
+        const society = document.getElementById('societyInput').value.trim();
+        const error = document.getElementById('societyError');
+        if (!society) { error.textContent = 'Please enter a society name.'; error.style.display = 'block'; return; }
+        try {
+            const res = await fetch(`${API_BASE_URL}/societies/verify?name=${encodeURIComponent(society)}`, { headers: NG_HEADERS });
+            if (!res.ok) throw new Error('Society name not found. Please check spelling.');
+            const found = await res.json();
+            const name = found.name || society;
+            const query = new URLSearchParams({ societyName: name });
+            const check = await fetch(`${API_BASE_URL}/verify-device/${encodeURIComponent(deviceId)}?${query}`, { headers: NG_HEADERS });
+            if (!check.ok) throw new Error('Could not verify the registered device.');
+            const record = await check.json();
+            if (!record.registered || !record.flatNumber) throw new Error('This device is not linked to a flat in that society.');
+            validatedSocietyName = name;
+            linkedFlatNumber = String(record.flatNumber).trim();
+            document.getElementById('societySection').style.display = 'none';
+            document.getElementById('spinSection').style.display = 'block';
+        } catch (err) { error.textContent = err.message || 'Could not verify the society.'; error.style.display = 'block'; }
     }
     window.verifySocietyAndProceed = verifySocietyAndProceed;
 
-    async function executeSpin() {
-        const cacheKey = `spun_${adImgUrl}_${validatedSocietyName}`;
-        if (localStorage.getItem(cacheKey)) {
-            alert("You have already spun for this contest!");
-            return;
-        }
-
-        const roller = document.getElementById('rollerDisplay');
-        const spinBtn = document.getElementById('spinBtn');
-        spinBtn.disabled = true;
-
-        let counter = 0;
-        const rollingInterval = setInterval(() => {
-            const randomSymbols = ["🍒", "🎰", "⭐", "🎁", "🔔", "💎"];
-            roller.innerText = randomSymbols[Math.floor(Math.random() * randomSymbols.length)];
-            counter++;
-        }, 100);
-
+    async function setWhatsApp(message) {
+        const link = document.getElementById('winnerWhatsApp');
+        link.style.display = 'none';
         try {
-            const response = await fetch(`${API_BASE_URL}/contest/spin`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...NG_HEADERS },
-                body: JSON.stringify({
-                    societyName: validatedSocietyName,
-                    deviceId,
-                    flatNumber: linkedFlatNumber,
-                    contestId: adImgUrl || 'default'
-                })
-            });
-
-            const data = await response.json();
-
-            setTimeout(() => {
-                clearInterval(rollingInterval);
-                localStorage.setItem(cacheKey, "true");
-                spinBtn.style.display = 'none';
-
-                if (data.won) {
-                    roller.innerText = "WON!";
-                    document.getElementById('modalTitle').innerText = "You Won the Spin! ";
-                    document.getElementById('modalBodyContent').style.display = 'block';
-                    document.getElementById('couponDisplaySection').style.display = 'none';
-                    document.getElementById('resultModal').style.display = 'block';
-                } else {
-                    roller.innerText = "Better Luck Next Time!";
-                    document.getElementById('spinNotice').innerText = "Better luck next time! Spin completed.";
-                }
-            }, 2500);
-
-        } catch (err) {
-            clearInterval(rollingInterval);
-            spinBtn.disabled = false;
-            roller.innerText = "Error";
-            alert("Spin error occurred. Please try again.");
+            const res = await fetch(`${API_BASE_URL}/config`, { headers: NG_HEADERS });
+            if (!res.ok) throw new Error('Team contact unavailable.');
+            const config = await res.json();
+            const phone = String(config.teamPhone || '').replace(/\D/g, '');
+            if (phone.length < 10 || phone.length > 15) throw new Error('Team contact unavailable.');
+            link.href = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+            link.style.display = 'inline-flex';
+        } catch (_) {
+            document.getElementById('winnerDetails').textContent += ' Team WhatsApp number is unavailable. Please retry.';
+            document.getElementById('retryWinnerBtn').style.display = 'block';
         }
     }
-
-    window.executeSpin = executeSpin;
-
-    async function submitFlatWinner() {
-        const flatVal = document.getElementById('flatNumberInput').value.trim().toUpperCase();
-        if (!flatVal) {
-            alert("Please enter your flat number.");
+    async function showWinningDetails(payload) {
+        winningPayload = payload;
+        document.getElementById('resultModal').style.display = 'block';
+        document.getElementById('retryWinnerBtn').style.display = 'none';
+        document.getElementById('winningCode').textContent = '';
+        if (!isRegistered) {
+            if (!/^[1-9]\d{8}$/.test(String(payload.winningCode || ''))) {
+                document.getElementById('winnerDetails').textContent = 'A newer guest win has replaced the latest code, and this device has no saved copy. Please contact the team.';
+                return;
+            }
+            document.getElementById('winnerDetails').textContent = 'Your guest win is registered. Keep this code and send it to the Owl Watcher team.';
+            document.getElementById('winningCode').textContent = `Winning code: ${payload.winningCode}`;
+            await setWhatsApp(`Hello Owl Watcher team, I won the contest as a guest. My winning code is ${payload.winningCode}. Please verify my win.`);
             return;
         }
-
-        // Verify entered flat number matches the device's registered flat
-        if (flatVal !== linkedFlatNumber) {
-            alert(`⚠️ Incorrect Flat Number. This device is registered for Flat ${linkedFlatNumber}.`);
-            return;
-        }
-
+        document.getElementById('winnerDetails').textContent = 'Verifying your registered winning details…';
         try {
-            const res = await fetch(`${API_BASE_URL}/contest/winner`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...NG_HEADERS },
-                body: JSON.stringify({
-                    societyName: validatedSocietyName,
-                    flatNumber: flatVal,
-                    winnerFlatnumber: flatVal,
-                    deviceId: deviceId,
-                    contestId: adImgUrl || 'default'
-                })
-            });
-
-            if (res.ok) {
-                document.getElementById('modalBodyContent').style.display = 'none';
-                document.getElementById('couponDisplaySection').style.display = 'block';
+            const res = await fetch(`${API_BASE_URL}/contest/winner`, { method: 'POST', headers: jsonHeaders,
+                body: JSON.stringify({ societyName: validatedSocietyName, flatNumber: linkedFlatNumber, deviceId, contestId, recover: true }) });
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.error || 'Winner verification failed.');
+            document.getElementById('winnerDetails').textContent = `Registered win: ${result.societyName}, flat/name ${result.flatNumber}.`;
+            await setWhatsApp(`Hello Owl Watcher team, I won the contest. Society: ${result.societyName}. Flat number/name: ${result.flatNumber}. Please verify my win.`);
+        } catch (err) {
+            document.getElementById('winnerDetails').textContent = err.message || 'Could not verify your win. Please retry.';
+            document.getElementById('retryWinnerBtn').style.display = 'block';
+        }
+    }
+    document.getElementById('retryWinnerBtn').addEventListener('click', () => showWinningDetails(winningPayload || {}));
+    async function executeSpin() {
+        const roller = document.getElementById('rollerDisplay');
+        const button = document.getElementById('spinBtn');
+        button.disabled = true;
+        roller.textContent = 'Spinning…';
+        try {
+            const endpoint = isRegistered ? '/contest/spin' : '/contest/guest/spin';
+            const payload = isRegistered ? { societyName: validatedSocietyName, deviceId, flatNumber: linkedFlatNumber, contestId } : { deviceId, contestId };
+            const res = await fetch(`${API_BASE_URL}${endpoint}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(payload) });
+            const data = await res.json();
+            if (!res.ok) {
+                if (isRegistered && res.status === 409) {
+                    roller.textContent = 'Already played';
+                    document.getElementById('spinNotice').textContent = 'You already spun today. If you won, recover your winning details below.';
+                    button.textContent = 'Recover winning details';
+                    button.onclick = () => showWinningDetails({});
+                    button.disabled = false;
+                    return;
+                }
+                throw new Error(data.error || 'Could not complete the spin.');
+            }
+            button.style.display = 'none';
+            if (!isRegistered && data.won && typeof data.attemptId === 'string') {
+                const codeKey = `guest_winning_code_${data.attemptId}`;
+                try {
+                    if (/^[1-9]\d{8}$/.test(String(data.winningCode || ''))) localStorage.setItem(codeKey, String(data.winningCode));
+                    else data.winningCode = localStorage.getItem(codeKey);
+                } catch (_) { /* The current response still contains the code when available. */ }
+            }
+            if (data.won) {
+                roller.textContent = 'WON!';
+                await showWinningDetails(data);
             } else {
-                alert("Failed to save winner details.");
+                roller.textContent = 'Better luck next time!';
+                document.getElementById('spinNotice').textContent = data.alreadyPlayed ? 'You already spun today.' : 'Spin completed.';
             }
         } catch (err) {
-            alert("Network error while saving winner info.");
+            roller.textContent = 'Could not complete the spin';
+            document.getElementById('spinNotice').textContent = err.message || 'Please retry.';
+            button.disabled = false;
         }
     }
-    window.submitFlatWinner = submitFlatWinner;
+    window.executeSpin = executeSpin;
 </script>
 
 </body>

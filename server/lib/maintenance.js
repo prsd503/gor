@@ -1,11 +1,12 @@
 /* Background routines for the long-running MacBook/server process.
  *
- * node-cron v4 only runs in a process that stays alive. The initial read-only
- * Firebase entry exports no scheduled function and never starts these jobs.
+ * node-cron v4 only runs in a process that stays alive. Firebase uses a
+ * separate scheduled function for notice rollover.
  */
 'use strict';
 
 const cron = require('node-cron');
+const { effectiveNotice } = require('./notices');
 
 const BOOKING_RETENTION_DAYS = 7;
 
@@ -43,23 +44,31 @@ function createMaintenance(options = {}) {
     async function checkAndShiftNotices() {
         const noticesSnapshot = await db.collection('notices').get();
         if (noticesSnapshot.empty) return 0;
-        const today = new Date().toLocaleDateString('en-CA', { timeZone });
-        const operations = [];
-        noticesSnapshot.forEach(doc => {
-            const data = doc.data() || {};
-            if (data.date && data.date !== today) {
-                const next = {
-                    todayMessage: data.tomorrowMessage || '',
-                    tomorrowMessage: '',
-                    date: today
-                };
-                if (FieldValue && FieldValue.serverTimestamp) next.updatedAt = FieldValue.serverTimestamp();
-                operations.push(batch => batch.update(doc.ref, next));
-            }
-        });
-        const updated = await commitChunks(operations);
-        if (updated) logger.log(`[maintenance] Shifted ${updated} notice(s) for ${today}.`);
+        let updated = 0;
+        for (const doc of noticesSnapshot.docs) {
+            if (options.beforeRun && !await options.beforeRun()) throw new Error('Notice rollover interrupted by quota drain.');
+            // Re-read in a transaction so a concurrent admin edit or another
+            // scheduler cannot be overwritten by a stale collection snapshot.
+            const shifted = await db.runTransaction(async tx => {
+                const fresh = await tx.get(doc.ref);
+                if (!fresh.exists) return false;
+                const next = effectiveNotice(fresh.data() || {}, options.now ? options.now() : new Date());
+                if (!next.due) return false;
+                const fields = { date: next.date, noticeCycle: next.noticeCycle,
+                    todayMessage: next.todayMessage, tomorrowMessage: next.tomorrowMessage };
+                if (FieldValue && FieldValue.serverTimestamp) fields.updatedAt = FieldValue.serverTimestamp();
+                tx.update(doc.ref, fields);
+                return true;
+            });
+            if (shifted) updated++;
+        }
+        if (updated) logger.log(`[maintenance] Shifted ${updated} notice(s).`);
         return updated;
+    }
+
+    async function runNoticeRollover() {
+        if (options.beforeRun && !await options.beforeRun()) throw new Error('Notice rollover skipped during quota drain.');
+        return checkAndShiftNotices();
     }
 
     async function runAll() {
@@ -91,7 +100,7 @@ function createMaintenance(options = {}) {
         });
     }
 
-    return { cleanupOldBookings, checkAndShiftNotices, runAll, schedule, lastRun, timeZone };
+    return { cleanupOldBookings, checkAndShiftNotices, runNoticeRollover, runAll, schedule, lastRun, timeZone };
 }
 
 module.exports = { createMaintenance, BOOKING_RETENTION_DAYS };

@@ -181,7 +181,7 @@
                 <label for="vNum">Vehicle number</label>
                 <input type="text" id="vNum" class="uppercase" placeholder="Vehicle Number">
                 <label for="fNum">Flat number / name</label>
-                <input type="text" id="fNum" class="uppercase" list="flatNumberOptions" autocomplete="off"
+                <input type="text" id="fNum" class="uppercase" list="flatNumberOptions" maxlength="80" autocomplete="off"
                     placeholder="Start typing the flat number" aria-describedby="fNumHint">
                 <datalist id="flatNumberOptions"></datalist>
                 <p class="note small" id="fNumHint">Choose from this society's registered flat numbers.</p>
@@ -216,6 +216,7 @@
                 <textarea id="todayMsg" placeholder="Visible now..." rows="3"></textarea>
                 <label for="tomorrowMsg">Tomorrow's notice</label>
                 <textarea id="tomorrowMsg" placeholder="Set for tomorrow..." rows="3"></textarea>
+                <p class="note">Tomorrow’s notice becomes today’s notice at 12:00 am IST (midnight); the tomorrow field is then cleared.</p>
                 <p class="note note-warning">⚠️ Publicly visible. Do not upload personal data.</p>
                 <div class="form-actions">
                     <button type="button" id="postNoticeBtn">Update notices</button>
@@ -309,11 +310,24 @@
                         <button type="button" id="saveSocietyLimitsBtn">Save vehicle limits</button>
                     </div>
                     <hr>
-                    <h3>🏠 Flat numbers</h3>
-                    <label for="flatsInput">Flat numbers, separated by commas (e.g. A1-101, A1-102, B1-101)</label>
-                    <textarea id="flatsInput" placeholder="A1-101, A1-102, B1-101..." rows="3"></textarea>
+                    <h3>🏘️ Society-wide vehicle limit</h3>
+                    <label for="maxTotalVehiclesInput">Maximum total vehicles in this society</label>
+                    <input type="number" id="maxTotalVehiclesInput" min="0" max="1000000" step="1" placeholder="No limit" disabled>
+                    <p class="note small" id="maxTotalVehiclesHint">Leave blank for no society-wide limit. Zero blocks new vehicles; existing vehicles can still be edited.</p>
                     <div class="form-actions">
-                        <button type="button" id="saveFlatsBtn">Save flat numbers</button>
+                        <button type="button" id="saveTotalVehiclesBtn" disabled>Save society-wide limit</button>
+                    </div>
+                    <hr>
+                    <h3>🏠 Flat numbers</h3>
+                    <label for="flatsInput">Flat numbers or names (one per line, or separated by commas)</label>
+                    <textarea id="flatsInput" disabled placeholder="A1-101&#10;A1-102&#10;B1-101" rows="3"></textarea>
+                    <p class="note small">Leave the list empty to let residents and admins type a flat number or name. Put names containing commas in double quotes.</p>
+                    <label for="flatCsvFile">Upload flat numbers or names (CSV)</label>
+                    <input type="file" id="flatCsvFile" disabled accept=".csv,text/csv">
+                    <a class="btn btn-secondary btn-sm" href="data:text/csv;charset=utf-8,FlatNumber%2FName%0AA1-101%0AA1-102%0A" download="flat-numbers-template.csv">Download CSV template</a>
+                    <p class="note small" id="flatCsvStatus" aria-live="polite">The CSV replaces the list in the editor; review it and select Save flat numbers to apply it. Replace the example rows in the template.</p>
+                    <div class="form-actions">
+                        <button type="button" id="saveFlatsBtn" disabled>Save flat numbers</button>
                     </div>
                 </div>
             </section>

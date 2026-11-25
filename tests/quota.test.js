@@ -203,10 +203,10 @@ test('maintenance skips all work during quota drain', async t => {
 
 test('maintenance shifts yesterday notice once and removes only expired bookings', async t => {
     const db=store(t), fv=createFieldValue();
-    await db.collection('notices').doc('society').set({date:'2020-01-01',todayMessage:'old',tomorrowMessage:'new'});
+    await db.collection('notices').doc('society').set({date:'2026-11-24',todayMessage:'old',tomorrowMessage:'new'});
     await db.collection('bookings').doc('old').set({end:'2020-01-01'});
     await db.collection('bookings').doc('future').set({end:'2099-01-01'});
-    const maintenance=createMaintenance({db,FieldValue:fv,logger:silent});
+    const maintenance=createMaintenance({db,FieldValue:fv,logger:silent,now:()=>new Date('2026-11-25T06:30:00Z')});
     assert.deepEqual(await maintenance.runAll(),{noticesShifted:1,bookingsDeleted:1});
     assert.equal((await db.collection('notices').doc('society').get()).data().todayMessage,'new');
     assert.equal((await maintenance.runAll()).noticesShifted,0);

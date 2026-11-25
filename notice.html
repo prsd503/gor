@@ -122,14 +122,10 @@
                     const data = await response.json();
                     if (data && data.todayMessage) {
                         contentDiv.innerText = data.todayMessage;
-                        if (data.date) {
-                            dateSpan.innerText = data.date;
-                        } else {
-                            dateSpan.innerText = new Date().toLocaleDateString('en-CA');
-                        }
+                        dateSpan.innerText = data.date;
                     } else {
                         contentDiv.innerText = "No active notices for today.";
-                        dateSpan.innerText = "";
+                        dateSpan.innerText = data.date;
                     }
                 } else if (response.status === 404) {
                     contentDiv.innerText = "Notice record could not be found.";
@@ -144,7 +140,12 @@
             }
         }
 
-        window.addEventListener("DOMContentLoaded", loadFullNotice);
+        function refreshNoticeAtIstBoundary() {
+            const shiftedNow = Date.now() + 330 * 60 * 1000;
+            const untilBoundary = 24 * 60 * 60 * 1000 - shiftedNow % (24 * 60 * 60 * 1000);
+            setTimeout(() => { loadFullNotice(); refreshNoticeAtIstBoundary(); }, untilBoundary + 1000);
+        }
+        window.addEventListener("DOMContentLoaded", () => { loadFullNotice(); refreshNoticeAtIstBoundary(); });
     </script>
 
     <div id="owl-container">
