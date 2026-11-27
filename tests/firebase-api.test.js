@@ -61,36 +61,33 @@ test('unsafe Firebase configuration fails before app/Firebase initialization', (
     assert.throws(() => prepareFirebaseApi({ ...env(), API_RUNTIME_SERVICE_ACCOUNT: '' }));
 });
 
-test('full website + API deployment selects Hosting and notice functions, never Firestore Rules', () => {
+test('deployment publishes only the API function: no Hosting, no scheduled jobs, never Firestore Rules', () => {
     const config = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json')));
-    assert.equal(config.hosting.public, '.firebase-public');
-    assert.deepEqual(config.hosting.rewrites, ['/api', '/api/**'].map(source => ({ source, function: { functionId: 'api', region: 'us-central1' } })));
+    assert.equal(config.hosting, undefined, 'Firebase Hosting is no longer deployed');
     assert.equal(config.functions[0].source, 'server');
     assert.equal(config.functions[0].runtime, 'nodejs22');
     assert.equal(config.firestore, undefined);
     const exampleEnv = fs.readFileSync(path.join(root, 'server/.env.firebase.example'), 'utf8');
-    assert.match(exampleEnv, /^ALLOWED_ORIGINS=.*https:\/\/finder-owl\.web\.app/m);
-    assert.match(exampleEnv, /^ALLOWED_ORIGINS=.*https:\/\/finder-owl\.firebaseapp\.com/m);
+    assert.match(exampleEnv, /^ALLOWED_ORIGINS=.*https:\/\/prsd503\.github\.io/m);
+    assert.match(exampleEnv, /^ALLOWED_ORIGINS=.*https:\/\/app\.owlwatcher\.tech/m);
+    assert.doesNotMatch(exampleEnv, /api\.owlwatcher\.tech|finder-owl\.web\.app|firebaseapp\.com/);
     const script = JSON.parse(fs.readFileSync(path.join(root, 'package.json'))).scripts['deploy:full'];
-    assert.equal(script, 'node scripts/check-api-deploy.js && npx firebase-tools deploy --config firebase.json --project finder-owl --only functions:api,functions:noticeRollover,hosting');
-    assert.doesNotMatch(script, /firestore:rules/);
+    assert.equal(script, 'node scripts/check-api-deploy.js && npx firebase-tools deploy --config firebase.json --project finder-owl --only functions:api');
+    assert.doesNotMatch(script, /firestore:rules|hosting|noticeRollover/);
 });
 
-test('API-only Hosting publishes only landing/404 pages, pins API region, and leaves website config intact', () => {
-    const config = JSON.parse(fs.readFileSync(path.join(root, 'firebase.api.json')));
-    assert.equal(config.hosting.public, 'firebase/api-public');
-    assert.equal(config.hosting.predeploy, undefined, 'never stages the website');
-    assert.deepEqual(fs.readdirSync(path.join(root, config.hosting.public)).sort(), ['404.html', 'index.html']);
-    assert.deepEqual(config.hosting.rewrites, ['/api', '/api/**'].map(source => ({ source, function: { functionId: 'api', region: 'us-central1' } })));
-    assert.equal(config.functions[0].source, 'server');
-    assert.equal(config.functions[0].runtime, 'nodejs22');
-    assert.ok(config.hosting.headers[0].headers.some(h => h.key === 'Cache-Control' && h.value === 'no-store'));
-    const original = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json')));
-    assert.equal(original.hosting.public, '.firebase-public');
+test('API-only Hosting site is removed: functions-only deploy, no website staging scripts', () => {
+    assert.equal(fs.existsSync(path.join(root, 'firebase.api.json')), false);
+    assert.equal(fs.existsSync(path.join(root, 'firebase/api-public')), false);
+    assert.equal(fs.existsSync(path.join(root, 'scripts/prepare-hosting.js')), false);
+    const config = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json')));
+    assert.equal(config.hosting, undefined);
     const scripts = JSON.parse(fs.readFileSync(path.join(root, 'package.json'))).scripts;
-    assert.match(scripts['deploy:api:functions'], /check-api-deploy\.js && .*--config firebase\.api\.json --project finder-owl --only functions:api,functions:noticeRollover$/);
-    assert.match(scripts['deploy:api:hosting'], /check-api-deploy\.js && .*--config firebase\.api\.json --project finder-owl --only hosting$/);
-    assert.ok(!scripts['deploy:functions'].endsWith('--only functions'), 'generic command selects only intended functions');
+    assert.equal(scripts['deploy:functions'], 'npx firebase-tools deploy --only functions:api');
+    assert.equal(scripts['deploy:api:functions'], undefined);
+    assert.equal(scripts['deploy:api:hosting'], undefined);
+    assert.equal(scripts['deploy:hosting'], undefined);
+    assert.doesNotMatch(scripts['check'], /prepare-hosting/);
 });
 
 function preflightFixture(t) {

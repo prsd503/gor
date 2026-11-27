@@ -16,19 +16,16 @@ This branch now stages a **full-feature HTTP API profile** at the user's request
 
 The old Firestore Rules do not grant these API permissions: the Admin SDK bypasses Firestore Rules. The Function runtime identity needs reviewed Firestore write permissions for mutations. Keeping old client Rules is a separate choice and does not make an API write succeed.
 
-`ENABLE_CRON=0` disables in-process cron. A separate `noticeRollover` scheduled Function runs daily at 12:00 **am (midnight)** Asia/Kolkata, shifts each society’s tomorrow message to today, and clears tomorrow. It respects the quota guard; GETs compute the effective notice without writing if a run is delayed. Missed days do not revive an outdated tomorrow notice. Cloud Scheduler may incur charges and requires its API to be enabled.
+`ENABLE_CRON=0` disables in-process cron, and there is **no scheduled Function**: the master admin portal triggers the 12:00 **am (midnight)** Asia/Kolkata rollover on demand via `POST /api/maintenance/notices` (it shifts each society’s tomorrow message to today and clears tomorrow), and `POST /api/maintenance/bookings` removes facility bookings older than 7 days. Both run across all societies, respect the quota guard, and are idempotent, so a timed-out run can simply be triggered again. GETs compute the effective notice without writing if a run is delayed. Missed days do not revive an outdated tomorrow notice.
 
 ## Correct deployment target
 
-The **main website plus API Function** uses `firebase.json`:
+The **API Function** uses `firebase.json`:
 
-- Hosting stages the explicit website allowlist into `.firebase-public`.
-- Hosting rewrites `/api` and `/api/**` to `functions:api` in `us-central1`, so both the hosted website (`finder-owl.web.app`, `finder-owl.firebaseapp.com`) and the custom domain (`api.owlwatcher.tech/api/...`) work together.
-- Functions deploys `server/firebase.js` as `functions:api` and `functions:noticeRollover` in `us-central1`.
-- The website's `api-env.js` points to the Function URL (`https://us-central1-finder-owl.cloudfunctions.net/api`), and `server/.env.firebase.example` includes `https://finder-owl.web.app` and `https://finder-owl.firebaseapp.com` in `ALLOWED_ORIGINS` so browser calls from Firebase Hosting pass CORS.
-- The config has no Firestore Rules section. `deploy:full` selects only `functions:api,functions:noticeRollover,hosting`.
-
-`firebase.api.json` is an API-only Hosting site with small landing/404 pages; it is not the full website.
+- **No Hosting is deployed.** The website stays on GitHub Pages / the Android app, and the API is reached only through the Function URL (`https://us-central1-finder-owl.cloudfunctions.net/api`). The former API-only Hosting site (`api.owlwatcher.tech`) and `firebase.api.json` were removed.
+- Functions deploys `server/firebase.js` as `functions:api` only — there is no scheduled Function.
+- The website's `api-env.js` points to the Function URL, and `server/.env.firebase.example` allows the GitHub Pages, `app.owlwatcher.tech`, and local origins in `ALLOWED_ORIGINS`.
+- The config has no Firestore Rules or Hosting section. `deploy:full` selects only `functions:api`.
 
 ## Step-by-step setup from the beginning
 
@@ -69,11 +66,11 @@ The **main website plus API Function** uses `firebase.json`:
    npx firebase-tools projects:list
    npm run deploy:full
    ```
-   - `deploy:full` runs `scripts/check-api-deploy.js`, stages the website into `.firebase-public` via `scripts/prepare-hosting.js`, and deploys `functions:api,functions:noticeRollover,hosting` to `finder-owl` using `firebase.json`. It does **not** deploy Firestore Rules.
+   - `deploy:full` runs `scripts/check-api-deploy.js` and deploys only `functions:api` to `finder-owl` using `firebase.json` (no Hosting, no scheduled Function). It does **not** deploy Firestore Rules.
 7. **Verify the live deployment**
-   - Check `https://finder-owl.web.app/` and `https://api.owlwatcher.tech/api/health` (expect HTTP 200 with `"accessMode":"firebase-full"`).
+   - Check `https://us-central1-finder-owl.cloudfunctions.net/api/health` (expect HTTP 200 with `"accessMode":"firebase-full"`).
    - Check `https://us-central1-finder-owl.cloudfunctions.net/api/ads/global` and then `/api/quota` (confirm `source: "monitoring"`, `action: "stop"`, `monitoringUnavailable: false`, fresh `remoteCheckedAt`).
-   - Confirm `GET /api/admins` without a token returns `401`, and verify staff login, society-scoped actions, CORS from `https://finder-owl.web.app`, and gift-code validation.
+   - Confirm `GET /api/admins` without a token returns `401`, and verify staff login, society-scoped actions, CORS from `https://prsd503.github.io`, gift-code validation, and the master-only maintenance jobs (`POST /api/maintenance/notices`, `POST /api/maintenance/bookings`).
 8. **Deploy hardened Firestore Rules separately (only after emulator + client verification)**
    - After `npm run test:firestore-rules` passes and you confirm no live web/Android client relies on direct Firestore writes or unlisted document reads outside `app_config/appVersion`, `ads/Aangan`, and `settings/contact`:
    ```sh

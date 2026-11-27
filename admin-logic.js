@@ -105,7 +105,33 @@ window.addEventListener("DOMContentLoaded", async () => {
         if (masterPanel) masterPanel.style.display = "none";
         const spinSection = document.getElementById("masterAdminSpinSection");
         if (spinSection) spinSection.style.display = "none";
+        const maintenanceSection = document.getElementById("masterMaintenanceSection");
+        if (maintenanceSection) maintenanceSection.style.display = "none";
     });
+
+    // --- Master maintenance jobs -------------------------------------------
+    // On-demand replacements for the old scheduled Cloud Run job. Only the
+    // master portal can see the buttons; the server re-checks requireMaster.
+    const maintenanceStatus = document.getElementById("maintenanceStatus");
+    async function runMaintenanceJob(job, button) {
+        button.disabled = true;
+        if (maintenanceStatus) maintenanceStatus.textContent = "Running " + job + "…";
+        try {
+            const res = await authenticatedFetch(`${API_BASE_URL}/maintenance/${job}`, { method: "POST" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+            if (maintenanceStatus) maintenanceStatus.textContent = job === "notices"
+                ? `Done — shifted ${data.shifted} notice(s) across all societies.`
+                : `Done — deleted ${data.deleted} expired booking(s) (older than 7 days) across all societies.`;
+        } catch (err) {
+            console.error("Maintenance job failed:", err);
+            if (maintenanceStatus) maintenanceStatus.textContent = `Could not run the job: ${err.message}`;
+        } finally {
+            button.disabled = false;
+        }
+    }
+    document.getElementById("btnShiftNotices")?.addEventListener("click", e => runMaintenanceJob("notices", e.currentTarget));
+    document.getElementById("btnCleanupBookings")?.addEventListener("click", e => runMaintenanceJob("bookings", e.currentTarget));
 });
 
 
@@ -1268,6 +1294,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Display the Spin Count Analytics Section specifically for MasterAdmin
                         const spinSection = document.getElementById('masterAdminSpinSection');
                         if (spinSection) spinSection.style.display = 'block';
+
+                        // On-demand maintenance jobs (no scheduled Cloud Run job)
+                        const maintenanceSection = document.getElementById('masterMaintenanceSection');
+                        if (maintenanceSection) maintenanceSection.style.display = 'block';
                     }
                     
                     if (assignedSociety) {

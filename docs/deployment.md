@@ -92,13 +92,13 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --role="roles/monitoring.viewer"
 ```
 
-The initial runtime needs read-only Firestore access (`roles/datastore.viewer`), not write privileges. It also requires `API_RUNTIME_SERVICE_ACCOUNT` in `server/.env`; see the API-only guide. The deployer needs normal Firebase/Cloud Run deployment and Scheduler permissions. The Firebase CLI will identify missing APIs/permissions during deployment.
+The initial runtime needs read-only Firestore access (`roles/datastore.viewer`), not write privileges. It also requires `API_RUNTIME_SERVICE_ACCOUNT` in `server/.env`; see the API-only guide. The deployer needs normal Firebase/Cloud Run deployment permissions. The Firebase CLI will identify missing APIs/permissions during deployment.
 
 ```sh
-npm run deploy:api:functions
+npm run deploy:full
 ```
 
-The initial deployment exports only the gated, read-only `api`; no `maintenance` schedule is exported and no process cron starts. A dedicated runtime service account and exact allowed origins are required; follow the linked API-only guide before deployment. Image/build/storage costs remain outside the guard. Scheduled maintenance needs a separate approved rollout.
+The deployment exports only the `api` Function; there is **no scheduled Function** and no process cron. Maintenance jobs (the midnight IST notice rollover and the 7-day expired-booking cleanup) run on demand from the master admin portal via `POST /api/maintenance/notices` and `POST /api/maintenance/bookings`. A dedicated runtime service account and exact allowed origins are required; follow the linked API-only guide before deployment. Image/build/storage costs remain outside the guard.
 
 **When Monitoring fails or permissions are missing, stop mode fails closed:** the API returns a drain response with `code: "quota-monitoring-unavailable"`, rather than trusting one new instance's zero counters. On cold start, the first protected request waits for the check. Checks are shared within an instance for `QUOTA_REFRESH_MS` (default 60 seconds), not across instances. Do not switch production to `QUOTA_SOURCE=local` to bypass a permissions problem.
 
@@ -120,7 +120,7 @@ Only after the authorization release blockers are fixed and the full API is veri
 
 ```js
 window.OWL_API_CONFIG = {
-    primary: 'https://api.owlwatcher.tech/api',
+    primary: 'https://us-central1-finder-owl.cloudfunctions.net/api',
     local: '',
     fallbacks: []
 };
@@ -128,13 +128,7 @@ window.OWL_API_CONFIG = {
 
 All application pages load it before API calls. Existing Auth and App Check behavior is retained. The version popup does not bypass the managed API's drain by making a direct Firestore read.
 
-Keep GitHub Pages for the website. The following **legacy website-hosting** command publishes website files, not the dedicated API-only Hosting setup. Do not run it on the API Hosting site:
-
-```sh
-npm run deploy:hosting
-```
-
-`prepare-hosting.js` stages only an explicit allowlist of public files and `assets/`, **not** `.env`, database files, dependencies, or server code. It excludes the development console. Firebase Hosting uses clean HTML URLs. For native apps, rebuild/resync the web assets too; old installed clients with hardcoded Hostinger URLs will not acquire this change automatically.
+Keep GitHub Pages for the website. **Firebase Hosting is not deployed at all** (the former API-only Hosting site `api.owlwatcher.tech` and its two stub pages were removed, along with `firebase.api.json` and `scripts/prepare-hosting.js`): the API is reachable only through the Cloud Function URL, and the static frontend stays on GitHub Pages / the Android app. Remove the `api.owlwatcher.tech` custom domain from the Firebase console and its DNS CNAME after switching.
 
 Hostinger is not an authorized backend host; do not direct backend traffic there. This code does not cancel a Hostinger plan or change DNS, and those cleanup actions require separate approval.
 

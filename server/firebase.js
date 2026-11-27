@@ -1,7 +1,13 @@
 /* Full-feature Firebase HTTP API entry point.
  * See docs/firebase-api-full-release.md. All private routes remain protected
  * by verified Firebase identity and Firestore-backed membership/society checks.
- * The notice rollover is a separate scheduled function; process cron remains disabled.
+ *
+ * There is deliberately NO scheduled Function. Maintenance jobs (the daily
+ * notice rollover and the expired-booking cleanup) run on demand from the
+ * master admin portal via POST /api/maintenance/notices and
+ * POST /api/maintenance/bookings, so nothing on Cloud Run executes on a
+ * timer. The same jobs still run via process cron in the MacBook fallback,
+ * where ENABLE_CRON is allowed.
  */
 'use strict';
 
@@ -22,16 +28,9 @@ setGlobalOptions({
     minInstances: 0
 });
 
-// Hosting preserves /api/...; the direct Function URL strips its /api name.
-// Normalize once so both transports use the same gated Express routes.
+// The direct Function URL strips the /api name from the path; normalize once
+// so the gated Express routes work unchanged.
 exports.api = onRequest({ cors: false, invoker: 'public' }, (req, res) => {
     if (!/^\/api(?:[/?]|$)/.test(req.url)) req.url = '/api' + req.url;
     return app(req, res);
-});
-
-// Cloud Functions do not run the long-lived server cron. Scheduler invokes this
-// at midnight IST; the shared maintenance routine also respects the quota guard.
-const { onSchedule } = require('firebase-functions/v2/scheduler');
-exports.noticeRollover = onSchedule({ schedule: '0 0 * * *', timeZone: 'Asia/Kolkata', retryCount: 3, timeoutSeconds: 540 }, async () => {
-    await app.maintenance.runNoticeRollover();
 });

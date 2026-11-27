@@ -175,3 +175,10 @@ number list, and the per-society spin counts.
   dropdown, so a vehicle can only be attached to a registered flat.
 * **Spin counts** sum the per-day `spinStats` documents: lifetime, today and
   this month, plus the latest winner flat.
+* **Maintenance jobs** — master-only on-demand buttons (*🔧 Scheduled jobs*)
+  run the 12am IST notice rollover and the 7-day expired-booking cleanup
+  (`POST /api/maintenance/notices`, `POST /api/maintenance/bookings`) across all
+  societies. There is **no scheduled Cloud Run job**: nothing runs on a timer,
+  and both jobs are safe to repeat. Firebase Hosting is not deployed either —
+  the site stays on GitHub Pages / the Android app, and the API is reachable
+  only at the Cloud Function URL.

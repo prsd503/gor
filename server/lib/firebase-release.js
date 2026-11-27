@@ -54,8 +54,9 @@ function prepareFirebaseApi(env) {
         throw new Error('Set API_RUNTIME_SERVICE_ACCOUNT to a dedicated non-read-only service account in the deployment project.');
     }
 
-    // Do not start process maintenance in an HTTP Function. Scheduled work is
-    // handled by the separate noticeRollover Function; authenticated API routes are on.
+    // Do not start process maintenance in an HTTP Function. There is no
+    // scheduled Function either: maintenance jobs run on demand from the
+    // master admin portal (POST /api/maintenance/*).
     env.ENABLE_CRON = '0';
     return { serviceAccount: account, origins, project, profile: 'firebase-full' };
 }

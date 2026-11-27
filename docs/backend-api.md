@@ -14,7 +14,7 @@
 
 # Owl Watcher backend API
 
-Backend code lives in `server/`. It is deployed to the API host (`api.owlwatcher.tech`), separately from the static frontend.
+Backend code lives in `server/`. It is deployed as the `api` Cloud Function (`https://us-central1-finder-owl.cloudfunctions.net/api`); the static frontend stays on GitHub Pages / the Android app. There is no Firebase Hosting deployment.
 
 ```
 server/index.js               Express app and all routes
@@ -232,6 +232,23 @@ the allowance in <society>. Increase the limit under vehicle allowance limits
 first." }`. A society that has never set limits keeps the defaults 1 / 2. An
 edit that keeps the same plate on the same flat and type is never blocked by an
 already-full flat.
+
+## Maintenance jobs (master login)
+
+The old scheduled Cloud Run job is gone; the master portal triggers each job on
+demand (buttons under *🔧 Scheduled jobs (run on demand)*, visible only to the
+master login). Both run across **all societies**, check the quota guard between
+chunks, and are idempotent — a timed-out run can be triggered again to continue.
+
+| Route | Who | Purpose |
+| --- | --- | --- |
+| `POST /api/maintenance/notices` | master | Shift each society's tomorrow notice to today (the 12am IST rollover) |
+| `POST /api/maintenance/bookings` | master | Delete facility bookings older than 7 days |
+
+Responses: `{ "success": true, "shifted": N }` and
+`{ "success": true, "deleted": N }` respectively. Without a verified identity the
+routes answer `401`; verified non-master staff get `403`; a draining quota guard
+answers `503`.
 
 ## Society spin counts (master login)
 

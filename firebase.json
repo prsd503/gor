@@ -22,43 +22,5 @@
         "**/*service_account*.json"
       ]
     }
-  ],
-  "hosting": {
-    "public": ".firebase-public",
-    "predeploy": [
-      "node scripts/prepare-hosting.js"
-    ],
-    "ignore": [
-      "**/.*",
-      "**/node_modules/**"
-    ],
-    "cleanUrls": true,
-    "rewrites": [
-      {
-        "source": "/api",
-        "function": {
-          "functionId": "api",
-          "region": "us-central1"
-        }
-      },
-      {
-        "source": "/api/**",
-        "function": {
-          "functionId": "api",
-          "region": "us-central1"
-        }
-      }
-    ],
-    "headers": [
-      {
-        "source": "/api-env.js",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "no-store"
-          }
-        ]
-      }
-    ]
-  }
+  ]
 }

@@ -9,11 +9,14 @@
 **The instructions below are retained for reference only. Do not use them to
 publish the full-feature API.**
 
-The user has connected `api.owlwatcher.tech` to the `finder-owl` Hosting site and
+The `api.owlwatcher.tech` custom domain and its API-only Hosting site have been
+**removed**: Firebase Hosting is no longer deployed, and the API is served only
+from the Cloud Function URL. (Historically the user connected that domain to the
+`finder-owl` Hosting site and
 shown Blaze billing enabled. Their CLI reported no deployed functions. Those are
 user-observed facts, not an independent live check. The former API A record was
 replaced with the CNAME Firebase requested. `Site Not Found` before the first
-Hosting release is expected. Do not change the website (`@`, `www`, `app`) records.
+Hosting release is expected. Do not change the website (`@`, `www`, `app`) records.)
 
 ## Scope: a read-only first release, NOT the full app
 
@@ -45,18 +48,17 @@ writes deliberately do not work. See [the release-blocking authorization review]
 
 ```text
 GitHub Pages / Android (unchanged for now)
-  eventual base: https://api.owlwatcher.tech/api
+  base: https://us-central1-finder-owl.cloudfunctions.net/api
                            |
-Firebase Hosting: finder-owl, custom domain api.owlwatcher.tech
-  /api and /api/** -> Function api, us-central1
+Function api, us-central1 (no Firebase Hosting)
                            |
-Read-only release gate -> App Check / auth / quota layer -> Firestore
+Release gate -> App Check / auth / quota layer -> Firestore
 ```
 
-- `firebase.api.json`: separate, explicit API-only Hosting deployment. Static
-  contents are only `firebase/api-public/index.html` and `404.html`.
-- `firebase.json`: existing website Hosting configuration is left intact. Do not
-  use it for the API-only deployment; it stages the website.
+- No `firebase.api.json`: the API-only Hosting site and its landing/404 pages
+  were removed; `firebase.json` now contains the functions-only configuration.
+- `firebase.json`: functions-only configuration (no Hosting section); it deploys
+  the `api` Function only.
 - `server/firebase.js`: same Functions source/codebase for both configs; only API
   is exported, safe even if the generic Functions command is used accidentally.
 - `server/.env.firebase.example`: private configuration template; never publish
@@ -167,7 +169,7 @@ FUNCTIONS_REGION=us-central1
 MAX_INSTANCES=2
 CONCURRENCY=20
 API_RUNTIME_SERVICE_ACCOUNT=owl-api-readonly@finder-owl.iam.gserviceaccount.com
-ALLOWED_ORIGINS=https://prsd503.github.io,https://app.owlwatcher.tech,https://api.owlwatcher.tech,https://localhost,http://localhost,capacitor://localhost
+ALLOWED_ORIGINS=https://prsd503.github.io,https://app.owlwatcher.tech,https://localhost,http://localhost,capacitor://localhost
 ```
 
 This snippet deliberately omits JWT_SECRET; set it privately. Exact origins
@@ -200,15 +202,15 @@ costs even if application usage is low.
 First deploy just the gated API:
 
 ```sh
-npm run deploy:api:functions
+npm run deploy:full
 ```
 
-This script selects `firebase.api.json`, project `finder-owl`, and
+This script runs the local preflight, then deploys project `finder-owl` with
 `--only functions:api`. Confirm the deployed runtime service account matches the
 one above. Configure a short Artifact Registry cleanup policy when prompted;
 builds and stored images have costs outside the application quota guard.
 
-Test the direct Function before publishing Hosting:
+Test the direct Function URL:
 
 ```sh
 curl -i https://us-central1-finder-owl.cloudfunctions.net/api/health
@@ -229,14 +231,8 @@ public invocation or the platform returns 403 before JSON health, review that
 policy for this deliberately public, gated function only; do not grant broad
 project access or remove the application gate.
 
-Only after these pass, deploy API-only Hosting:
-
-```sh
-npm run deploy:api:hosting
-```
-
-Then repeat checks at `https://api.owlwatcher.tech/api/...`. Test the following
-at both the direct Function URL and the custom domain:
+There is no Hosting step: Firebase Hosting is not deployed, so all checks run at
+the direct Function URL. Test the following:
 
 | Request | Expected |
 | --- | --- |

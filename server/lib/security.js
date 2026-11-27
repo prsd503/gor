@@ -14,7 +14,6 @@
 const DEFAULT_ORIGINS = [
     'https://prsd503.github.io',
     'https://app.owlwatcher.tech',
-    'https://api.owlwatcher.tech',
     'http://localhost',
     'https://localhost',
     'capacitor://localhost',
