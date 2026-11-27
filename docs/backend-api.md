@@ -360,6 +360,14 @@ master-or-self only. Both deletion pages also read the Owl Watcher team number
 from `GET /api/config` (`configs/owlwatcher.teamPhone`) and keep a built-in
 number only as an offline fallback.
 
+The admin portal's **Danger zone** buttons open those pages in a new tab and
+store the society it just resolved (origin, society id, email) through
+`request-context.js` (localStorage key `owl:requestContext`, cleared on logout).
+A newly opened tab does not always have the Firebase session restored when the
+page runs, so the page seeds its label and request text from that hand-off and
+lets a live `/api/admins/me` answer replace it. A visitor with neither a session
+nor a hand-off sees a disabled button, and the society is never taken from a URL.
+
 ## Facility calendar admin contact
 
 ```

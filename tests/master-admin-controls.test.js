@@ -220,6 +220,11 @@ function loadAdmin(t, { isMaster = true, flats = ['A1-103', 'A1-104', 'B2-201'] 
         if (parsed.pathname.endsWith('/vehicles')) return { ok: true, json: async () => [] };
         return { ok: true, json: async () => [] };
     };
+    window.__opened = [];
+    window.open = (url) => { window.__opened.push(url); return null; };
+    // admin.html loads this as a plain script; outside-only jsdom does not run
+    // script tags, so evaluate it the same way the page does.
+    window.eval(fs.readFileSync(path.join(root, 'request-context.js'), 'utf8'));
     const source = fs.readFileSync(path.join(root, 'admin-logic.js'), 'utf8')
         .replace(/^import .*$/gm, '')
         .replace(/^const API_BASE_URL = .*$/m, 'var API_BASE_URL = window.OWL_API_BASE;')
@@ -228,7 +233,7 @@ function loadAdmin(t, { isMaster = true, flats = ['A1-103', 'A1-104', 'B2-201'] 
         .replace('let isMasterAdminUser = false;', `var isMasterAdminUser = ${isMaster};`);
     window.eval(`
         var authenticatedFetch = window.fetch;
-        var auth = { currentUser: { getIdToken: async () => 't' } };
+        var auth = { currentUser: { email: 'admin@aangan.in', getIdToken: async () => 't' } };
         var signInWithEmailAndPassword = async () => {};
         var signOut = async () => {};
         var onAuthStateChanged = () => {};
@@ -523,4 +528,31 @@ test('the cap counts legacy society-name records, excludes other societies, and 
     assert.equal(response.status, 409);
     assert.equal((await response.json()).code, 'society-vehicle-limit-reached');
     assert.equal((await api.get('/api/vehicles?society=Aangan')).body.length, 4);
+});
+
+test('the danger zone hands the admin society to the deletion request pages', (t) => {
+    const { window, doc } = loadAdmin(t);
+    const bulk = doc.getElementById('openDataDeleteBtn');
+    const account = doc.getElementById('openAccountDeleteBtn');
+    assert.equal(bulk.textContent.trim(), 'Bulk data delete');
+    assert.equal(account.textContent.trim(), 'Delete full account');
+
+    bulk.click();
+    assert.deepEqual(window.__opened, ['deletedata.html']);
+    const handed = window.OwRequestContext.load();
+    assert.equal(handed.society, 'Aangan', 'the society resolved for this admin is handed over');
+    assert.equal(handed.email, 'admin@aangan.in');
+
+    account.click();
+    assert.deepEqual(window.__opened, ['deletedata.html', 'delete.html']);
+    assert.equal(window.OwRequestContext.load().society, 'Aangan');
+});
+
+test('the danger zone buttons announce the society in the page markup, not the URL', () => {
+    const html = fs.readFileSync(path.join(root, 'admin.html'), 'utf8');
+    assert.match(html, /id="openDataDeleteBtn"/);
+    assert.match(html, /id="openAccountDeleteBtn"/);
+    assert.match(html, /src="request-context\.js"/);
+    assert.doesNotMatch(html, /href="deletedata\.html\?/, 'the society never travels in a URL');
+    assert.doesNotMatch(html, /href="delete\.html\?/);
 });

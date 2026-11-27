@@ -7,6 +7,7 @@ const API_BASE_URL = (window.OWL_API_BASE || 'https://us-central1-finder-owl.clo
 const NG_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 
 let assignedSociety = "";
+let assignedSocietyId = "";
 let teamPhone = "919033406816";
 let isMasterAdminUser = false;
 
@@ -112,6 +113,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("logoutBtn")?.addEventListener("click", () => {
         localStorage.removeItem("adminLoggedIn");
         localStorage.removeItem("isAdminMaster");
+        // Never let a later visitor of the deletion pages inherit this society.
+        window.OwRequestContext?.clear();
         document.getElementById("login-section").style.display = "block";
         document.getElementById("search-section").style.display = "none";
         document.getElementById("data-section").style.display = "none";
@@ -121,6 +124,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         if (spinSection) spinSection.style.display = "none";
         const maintenanceSection = document.getElementById("masterMaintenanceSection");
         if (maintenanceSection) maintenanceSection.style.display = "none";
+        window.OwRequestContext?.clear();
     });
 
     // --- Master maintenance jobs -------------------------------------------
@@ -1199,6 +1203,15 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             assignedSociety = newSociety;
+            assignedSocietyId = data.id || "";
+            // A master admin switched society: the deletion pages must name the
+            // newly selected one, not the previous hand-off.
+            window.OwRequestContext?.save({
+                society: assignedSociety,
+                societyId: assignedSocietyId,
+                email: (auth.currentUser && auth.currentUser.email) || "",
+                isMaster: isMasterAdminUser
+            });
             window.showModal(`Active society switched to: ${assignedSociety}`);
             
             if (typeof loadNoticeData === 'function') loadNoticeData();
@@ -1290,7 +1303,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (res.ok) {
                     const adminData = await res.json();
                     assignedSociety = adminData.society || "";
+                    assignedSocietyId = adminData.societyId || "";
                     isMasterAdminUser = adminData.isMaster || false;
+
+                    // The Danger zone pages open in a new tab, where the Firebase
+                    // session may not be restored yet. Hand the society (read from
+                    // the server, never from the URL) over so those pages can name
+                    // it immediately.
+                    window.OwRequestContext?.save({
+                        society: assignedSociety,
+                        societyId: assignedSocietyId,
+                        email: user.email,
+                        isMaster: isMasterAdminUser
+                    });
 
                     document.getElementById('login-section').style.display = 'none';
                     document.getElementById('search-section').style.display = 'block';
@@ -1567,6 +1592,32 @@ document.addEventListener('DOMContentLoaded', () => {
             if (button) button.disabled = false;
         }
     });
+
+    // --- Danger zone: deletion request pages --------------------------------
+    // The buttons hand the resolved society over before opening the page in a
+    // new tab, so the request is named after this admin's society even while
+    // the new tab is still restoring the Firebase session. Signing is still
+    // required: the pages read the society from their own /api/admins/me call
+    // and only fall back to this hand-off (see request-context.js).
+    function openDeletionRequest(path) {
+        if (!assignedSociety) {
+            window.showModal("Your admin account is not assigned to a society yet. Ask the Owl Watcher team to assign it before requesting a deletion.");
+            return;
+        }
+        window.OwRequestContext?.save({
+            society: assignedSociety,
+            societyId: assignedSocietyId,
+            email: (auth.currentUser && auth.currentUser.email) || "",
+            isMaster: isMasterAdminUser
+        });
+        // Opened from a click, so the popup blocker allows it; a blocked popup
+        // still gets the page in the same tab.
+        const opened = window.open(path, '_blank', 'noopener');
+        if (!opened) window.location.href = path;
+    }
+
+    document.getElementById('openDataDeleteBtn')?.addEventListener('click', () => openDeletionRequest('deletedata.html'));
+    document.getElementById('openAccountDeleteBtn')?.addEventListener('click', () => openDeletionRequest('delete.html'));
 
     document.getElementById('approveAdBtn')?.addEventListener('click', async () => {
         const adKey = document.getElementById('adApprovalKey').value.trim().toUpperCase();
