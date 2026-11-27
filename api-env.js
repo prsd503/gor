@@ -1,24 +1,25 @@
-/* Where the website sends API calls — the only file you edit after deploying.
+/* Where the website sends API calls.
  *
  * Loaded before api-config.js on every page. Leave a value empty to ignore it.
  *
- * primary   the Firebase Cloud Functions URL (or today's API host)
+ * primary   https://api.owlwatcher.tech/api — the PERMANENT custom domain
+ *           attached to the API Function (Functions console → api → Custom
+ *           domains). If the backend later moves to another cloud provider,
+ *           only the domain's mapping changes — this file never does.
  * local     the MacBook copy, normally a Cloudflare Tunnel / ngrok HTTPS URL
- * fallbacks any extra servers, tried in the order listed
+ * fallbacks extra servers, tried in the order listed. The Firebase Function
+ *           URL is kept here on purpose: while a backend move is in flight,
+ *           requests fail over to it; afterwards it is simply unreachable
+ *           and costs nothing.
  * testBases trusted opt-in endpoints, NEVER automatic fallback destinations
- *
- * After `firebase deploy --only functions` the URL looks like:
- *   https://us-central1-finder-owl.cloudfunctions.net/api
- * and for the MacBook, with Cloudflare Tunnel:
- *   https://owl-mac.example.com/api
  *
  * For a one-off test without editing this file, add ?api=<url> to any page URL
  * (must match one of the trusted bases configured below).
  */
 window.OWL_API_CONFIG = {
-    primary: 'https://us-central1-finder-owl.cloudfunctions.net/api',
+    primary: 'https://api.owlwatcher.tech/api',
     local: '',
-    fallbacks: [],
+    fallbacks: ['https://us-central1-finder-owl.cloudfunctions.net/api'],
     // Restricted, read-only MacBook pilot. Only selected by an exact ?api= link.
     // Remove/update this entry if the ngrok hostname changes ownership or expires.
     testBases: ['https://unloving-limit-ferry.ngrok-free.dev/api']
