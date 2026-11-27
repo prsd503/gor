@@ -140,3 +140,42 @@ test('preflight refuses placeholders, local credentials, conflicting dotenv file
         return /credential JSON/.test(error.message);
     });
 });
+
+test('the retired noticeRollover Function is gone from the code and has a reviewed removal path', () => {
+    // The rollover is master-triggered now. The old scheduled Function exists
+    // only in the deployed project, so nothing in this repo may recreate it:
+    // a stray export here would be re-uploaded by the next `firebase deploy`.
+    const firebaseEntry = fs.readFileSync(path.join(root, 'server/firebase.js'), 'utf8');
+    assert.doesNotMatch(firebaseEntry, /noticeRollover|onSchedule/);
+    const maintenance = fs.readFileSync(path.join(root, 'server/lib/maintenance.js'), 'utf8');
+    assert.doesNotMatch(maintenance, /runNoticeRollover/);
+    assert.match(maintenance, /checkAndShiftNotices/, 'the on-demand path still exists');
+
+    // Deleting it from the project is a Cloud API call; the helper must refuse
+    // to touch the live api Function and must optimise for a dry run by default.
+    const helper = require('../scripts/remove-legacy-scheduled-function');
+    const options = helper.parseArgs([]);
+    assert.equal(options.apply, false, 'the default is a report, not a deletion');
+    assert.deepEqual(options.names, ['noticeRollover']);
+    assert.equal(options.project, 'finder-owl');
+    assert.throws(() => helper.parseArgs(['api']), /live API Function/, 'api is never deletable');
+    assert.throws(() => helper.parseArgs(['noticeRollover', 'api']), /live API Function/);
+    assert.equal(helper.parseArgs(['--apply']).apply, true);
+});
+
+test('the legacy-function helper fails loudly instead of reporting "not deployed" when it cannot check', async () => {
+    // In this checkout gcloud is not installed. The helper must not print a
+    // clean "nothing to do" report: that would hide a live scheduled Function
+    // from whoever is trying to remove it.
+    const { execFile } = require('node:child_process');
+    const helperPath = path.join(root, 'scripts/remove-legacy-scheduled-function.js');
+    const result = await new Promise(resolve => {
+        execFile(process.execPath, [helperPath], { env: { ...process.env, PATH: '/nonexistent' } }, (error, stdout, stderr) => {
+            resolve({ code: error ? error.code : 0, output: `${stdout || ''}${stderr || ''}` });
+        });
+    });
+    assert.equal(result.code, 1, 'the exit code is a failure, not a clean report');
+    assert.match(result.output, /gcloud/);
+    assert.match(result.output, /not installed/i);
+    assert.doesNotMatch(result.output, /not deployed/i, 'no false clean result');
+});

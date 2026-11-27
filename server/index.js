@@ -2363,7 +2363,7 @@ app.patch('/api/ads/:adKey', requireMaster, async (req, res) => {
 // the quota guard (via maintenance's beforeRun) between chunks.
 app.post('/api/maintenance/notices', requireMaster, async (req, res) => {
     try {
-        const shifted = await maintenance.runNoticeRollover();
+        const shifted = await maintenance.checkAndShiftNotices();
         return res.json({ success: true, shifted });
     } catch (err) {
         console.error('notice rollover failed:', err);

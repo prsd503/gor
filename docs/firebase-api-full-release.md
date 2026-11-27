@@ -23,7 +23,7 @@ The old Firestore Rules do not grant these API permissions: the Admin SDK bypass
 The **API Function** uses `firebase.json`:
 
 - **No Hosting is deployed.** The website stays on GitHub Pages / the Android app, and the API is reached only through the Function URL (`https://us-central1-finder-owl.cloudfunctions.net/api`). The former API-only Hosting site (`api.owlwatcher.tech`) and `firebase.api.json` were removed.
-- Functions deploys `server/firebase.js` as `functions:api` only — there is no scheduled Function.
+- Functions deploys `server/firebase.js` as `functions:api` only — there is no scheduled Function. An older release did deploy `noticeRollover`; it is not in this repository, so it must be removed from the project once (step 8).
 - The website's `api-env.js` points to the Function URL, and `server/.env.firebase.example` allows the GitHub Pages, `app.owlwatcher.tech`, and local origins in `ALLOWED_ORIGINS`.
 - The config has no Firestore Rules or Hosting section. `deploy:full` selects only `functions:api`.
 
@@ -71,7 +71,25 @@ The **API Function** uses `firebase.json`:
    - Check `https://us-central1-finder-owl.cloudfunctions.net/api/health` (expect HTTP 200 with `"accessMode":"firebase-full"`).
    - Check `https://us-central1-finder-owl.cloudfunctions.net/api/ads/global` and then `/api/quota` (confirm `source: "monitoring"`, `action: "stop"`, `monitoringUnavailable: false`, fresh `remoteCheckedAt`).
    - Confirm `GET /api/admins` without a token returns `401`, and verify staff login, society-scoped actions, CORS from `https://prsd503.github.io`, gift-code validation, and the master-only maintenance jobs (`POST /api/maintenance/notices`, `POST /api/maintenance/bookings`).
-8. **Deploy hardened Firestore Rules separately (only after emulator + client verification)**
+8. **Remove the retired `noticeRollover` Function from the project (once)**
+   The rollover is master-triggered click-only now, so the old scheduled
+   Function should not stay deployed, and a `firebase deploy` can no longer
+   remove it (it is not in this repository). It is a Cloud API deletion:
+   ```sh
+   npm run remove:legacy-function                     # report only
+   npm run remove:legacy-function -- --apply          # delete it
+   ```
+   - The script deletes the Function (gen 1 or gen 2) and then the orphaned
+     `firebase-schedule-noticeRollover-us-central1` Scheduler job, if one is
+     still listed. It refuses to touch `api`, and it does nothing without
+     `--apply`.
+   - Confirm in the Functions console that only `api` remains. If the old
+     Function keeps reappearing, something is deploying from an old checkout, or
+     a Cloud Scheduler job is recreating it - check both.
+   - Deleting it costs nothing at request time: `GET /api/notices/:society`
+     computes the effective notice on read, and the **Shift daily notices**
+     button in the master portal persists the shift.
+9. **Deploy hardened Firestore Rules separately (only after emulator + client verification)**
    - After `npm run test:firestore-rules` passes and you confirm no live web/Android client relies on direct Firestore writes or unlisted document reads outside `app_config/appVersion`, `ads/Aangan`, and `settings/contact`:
    ```sh
    npx firebase-tools deploy --config firebase.rules.json --project finder-owl --only firestore:rules
