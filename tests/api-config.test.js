@@ -79,7 +79,7 @@ test('the published frontend config is fixed to the permanent custom domain', ()
     dom.window.eval(envSource);
     const config = dom.window.OWL_API_CONFIG;
     assert.equal(config.primary, 'https://api.owlwatcher.tech/api', 'the frontend URL never changes when the backend moves');
-    assert.ok((config.fallbacks || []).includes('https://us-central1-finder-owl.cloudfunctions.net/api'), 'the Firebase function stays a failover during a backend move');
+    assert.deepEqual([...config.fallbacks], [], 'no automatic failover: the single permanent domain is the only base');
     dom.window.close();
 });
 
@@ -290,13 +290,13 @@ function routingStorage(window) {
     return Object.fromEntries(['owl:api:active', 'owl:api:drained'].map(key => [key, window.localStorage.getItem(key)]));
 }
 
-test('published config is fixed to the permanent domain with the function as failover', async () => {
+test('published config is fixed to the permanent domain with no automatic failover', async () => {
     const {window,api,calls}=harness({publishedConfig:true,fetchImpl:async()=>response(200)});
     assert.equal(window.OWL_API_CONFIG.primary,DOMAIN);
     assert.equal(window.OWL_API_CONFIG.local,'');
-    assert.deepEqual([...window.OWL_API_CONFIG.fallbacks],[FIREBASE]);
+    assert.deepEqual([...window.OWL_API_CONFIG.fallbacks],[]);
     assert.deepEqual([...api.status().testBases],[PILOT]);
-    assert.deepEqual([...api.bases()],[DOMAIN,FIREBASE]);
+    assert.deepEqual([...api.bases()],[DOMAIN]);
     await window.fetch(DOMAIN+'/ads/global');
     assert.equal(calls[0].url,DOMAIN+'/ads/global');
 });
@@ -304,7 +304,7 @@ test('published config is fixed to the permanent domain with the function as fai
 test('normal visitors never fail over to the test-only tunnel, even on drain', async () => {
     const {window,calls}=harness({publishedConfig:true,fetchImpl:async()=>response(503,{headers:{'x-owl-drain':'1'}})});
     assert.equal((await window.fetch(DOMAIN+'/ads/global')).status,503);
-    assert.deepEqual(calls.map(call=>call.url),[DOMAIN+'/ads/global',FIREBASE+'/ads/global']);
+    assert.deepEqual(calls.map(call=>call.url),[DOMAIN+'/ads/global']);
     assert.ok(calls.every(call=>!call.url.startsWith(PILOT)),'the test-only tunnel is never a failover candidate');
 });
 
@@ -313,7 +313,7 @@ test('verified pilot link selects only the tunnel and injects ngrok bypass heade
     assert.equal(api.base(),PILOT);
     assert.equal(window.OWL_API_BASE,PILOT);
     assert.deepEqual([...api.bases()],[PILOT]);
-    await window.fetch(FIREBASE+'/ads/global');
+    await window.fetch(DOMAIN+'/ads/global');
     assert.equal(calls[0].url,PILOT+'/ads/global');
     assert.equal(calls[0].init.headers.get('ngrok-skip-browser-warning'),'true');
 });
@@ -326,14 +326,14 @@ test('pilot override wins over remembered primary and drain state without modify
     const {window,api,calls}=harness({publishedConfig:true,url:PILOT_PAGE,initialStorage,fetchImpl:async()=>response(200)});
     const before=routingStorage(window);
     assert.equal(api.base(),PILOT);
-    await window.fetch(FIREBASE+'/ads/global');
+    await window.fetch(DOMAIN+'/ads/global');
     assert.equal(calls[0].url,PILOT+'/ads/global');
     assert.deepEqual(routingStorage(window),before);
 });
 
 test('successful pilot selection is not remembered for the next ordinary page load', async () => {
     const pilot=harness({publishedConfig:true,url:PILOT_PAGE,fetchImpl:async()=>response(200)});
-    await pilot.window.fetch(FIREBASE+'/ads/global');
+    await pilot.window.fetch(DOMAIN+'/ads/global');
     assert.equal(pilot.window.localStorage.getItem('owl:api:active'),null);
     const normal=harness({publishedConfig:true,fetchImpl:async()=>response(200)});
     assert.equal(normal.api.base(),DOMAIN);
@@ -348,7 +348,7 @@ test('pilot drain responses never retry GETs or writes on the primary and do not
     for(const method of ['GET','POST']){
         const {window,calls}=harness({publishedConfig:true,url:PILOT_PAGE,fetchImpl:async()=>response(503,{headers:{'x-owl-drain':'1'}})});
         const before=routingStorage(window);
-        const result=await window.fetch(FIREBASE+'/ads/global',{method,...(method==='POST'?{body:'{}'}:{})});
+        const result=await window.fetch(DOMAIN+'/ads/global',{method,...(method==='POST'?{body:'{}'}:{})});
         assert.equal(result.status,503);
         assert.deepEqual(calls.map(call=>call.url),[PILOT+'/ads/global']);
         assert.deepEqual(routingStorage(window),before);
@@ -358,20 +358,20 @@ test('pilot drain responses never retry GETs or writes on the primary and do not
 test('pilot network failure never silently reads from the primary or changes storage', async () => {
     const {window,calls}=harness({publishedConfig:true,url:PILOT_PAGE,fetchImpl:async()=>{throw new Error('tunnel offline');}});
     const before=routingStorage(window);
-    await assert.rejects(window.fetch(FIREBASE+'/ads/global'),/tunnel offline/);
+    await assert.rejects(window.fetch(DOMAIN+'/ads/global'),/tunnel offline/);
     assert.deepEqual(calls.map(call=>call.url),[PILOT+'/ads/global']);
     assert.deepEqual(routingStorage(window),before);
 });
 
 test('restricted pilot 403 stays on the tunnel and is not retried elsewhere', async () => {
     const {window,calls}=harness({publishedConfig:true,url:PILOT_PAGE,fetchImpl:async()=>response(403)});
-    assert.equal((await window.fetch(FIREBASE+'/vehicles')).status,403);
+    assert.equal((await window.fetch(DOMAIN+'/vehicles')).status,403);
     assert.deepEqual(calls.map(call=>call.url),[PILOT+'/vehicles']);
 });
 
 test('an unconfigured ngrok hostname in a pilot link is rejected', async () => {
     const {window,api,calls}=harness({publishedConfig:true,url:'https://prsd503.github.io/gor/index.html?api=https://attacker.ngrok-free.dev/api',fetchImpl:async()=>response(200)});
     assert.equal(api.status().pageOverride,null);
-    await window.fetch(FIREBASE+'/ads/global');
+    await window.fetch(DOMAIN+'/ads/global');
     assert.equal(calls[0].url,DOMAIN+'/ads/global');
 });

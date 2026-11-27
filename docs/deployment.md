@@ -122,13 +122,13 @@ Only after the authorization release blockers are fixed and the full API is veri
 window.OWL_API_CONFIG = {
     primary: 'https://api.owlwatcher.tech/api',
     local: '',
-    fallbacks: ['https://us-central1-finder-owl.cloudfunctions.net/api']
+    fallbacks: []
 };
 ```
 
 All application pages load it before API calls. Existing Auth and App Check behavior is retained. The version popup does not bypass the managed API's drain by making a direct Firestore read.
 
-Keep GitHub Pages for the website. **Firebase Hosting is not deployed at all** (the former API-only Hosting site and its stub pages were removed, along with `firebase.api.json` and `scripts/prepare-hosting.js`): the static frontend stays on GitHub Pages / the Android app, and the API is reachable through the **`api` Function's custom domain `https://api.owlwatcher.tech/api`** (Functions console → `api` → Custom domains; CNAME `api` → `ow-fc-apps-as-dns.google.com` at the DNS provider). That domain is the permanent frontend contract — `api-env.js` is fixed to it, so moving the backend to another cloud later only means remapping the domain. The Firebase Function URL stays in the `fallbacks` list purely as a failover for that transition.
+Keep GitHub Pages for the website. **Firebase Hosting is not deployed at all** (the former API-only Hosting site and its stub pages were removed, along with `firebase.api.json` and `scripts/prepare-hosting.js`): the static frontend stays on GitHub Pages / the Android app, and the API is reachable through the **`api` Function's custom domain `https://api.owlwatcher.tech/api`** (Functions console → `api` → Custom domains; CNAME `api` → `ow-fc-apps-as-dns.google.com` at the DNS provider). That domain is the permanent frontend contract — `api-env.js` is fixed to it, so moving the backend to another cloud later only means remapping the domain. No automatic failover is configured (the app is pre-production and has no users relying on a fallback path); the Firebase Function URL remains a valid direct endpoint for CLI checks and debugging.
 
 Hostinger is not an authorized backend host; do not direct backend traffic there. This code does not cancel a Hostinger plan or change DNS, and those cleanup actions require separate approval.
 
