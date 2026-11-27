@@ -92,7 +92,10 @@ function isCliProblem(error) {
 /* Gen 1 and Gen 2 Functions live in different APIs, so a failed lookup in one
  * is not an error - it just means the Function is not that generation. */
 async function describeFunction(name, options) {
+    // Pass the generation explicitly: gcloud's default for `describe` differs
+    // between versions, and an older CLI rejects the flag it does not know.
     const attempts = [
+        { generation: 2, args: ['functions', 'describe', name, `--region=${options.region}`, `--project=${options.project}`, '--format=json', '--gen2'] },
         { generation: 2, args: ['functions', 'describe', name, `--region=${options.region}`, `--project=${options.project}`, '--format=json'] },
         { generation: 1, args: ['functions', 'describe', name, `--region=${options.region}`, `--project=${options.project}`, '--format=json', '--gen1'] }
     ];
@@ -133,6 +136,9 @@ async function main() {
         console.log('Remove a retired scheduled Function (default: noticeRollover) and its Scheduler job.');
         console.log('Usage: node scripts/remove-legacy-scheduled-function.js [--apply] [--project=ID] [--region=REGION] [name ...]');
         console.log('Without --apply it only reports what it would delete. Never deletes the api Function.');
+        console.log('');
+        console.log('Run it from a checkout of this repository (the folder that holds package.json),');
+        console.log('or call the script directly by path - it needs no npm packages installed.');
         return 0;
     }
     const mode = options.apply ? 'DELETE' : 'report only (dry run)';
@@ -154,7 +160,7 @@ async function main() {
             continue;
         }
         const args = ['functions', 'delete', name, `--region=${options.region}`, `--project=${options.project}`, '--quiet'];
-        if (found.generation === 1) args.push('--gen1');
+        args.push(found.generation === 1 ? '--gen1' : '--gen2');
         await gcloud(args);
         console.log(`  deleted the Function.`);
         report.push({ name, status: 'deleted', action: 'function removed' });
