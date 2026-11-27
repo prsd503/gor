@@ -83,6 +83,15 @@ The **API Function** uses `firebase.json`:
      `firebase-schedule-noticeRollover-us-central1` Scheduler job, if one is
      still listed. It refuses to touch `api`, and it does nothing without
      `--apply`.
+   - Run it **from this repository's folder** (the one holding `package.json`).
+     In Cloud Shell the session starts in the home directory, so `cd` there
+     first, or use the plain `gcloud` command below. The script itself needs no
+     npm installs - it only uses Node's standard library.
+   - One-liner equivalent, if you would rather not clone the repo:
+     ```sh
+     gcloud functions delete noticeRollover --region=us-central1 --project=finder-owl --gen2 --quiet
+     gcloud scheduler jobs list --location=us-central1 --project=finder-owl   # delete any firebase-schedule-noticeRollover-* job it still shows
+     ```
    - Confirm in the Functions console that only `api` remains. If the old
      Function keeps reappearing, something is deploying from an old checkout, or
      a Cloud Scheduler job is recreating it - check both.
