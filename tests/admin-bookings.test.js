@@ -17,15 +17,12 @@ function loadAdmin(t, { society = 'Aangan', facilities = { F1: 'Clubhouse', F2: 
         url: 'https://owlwatcher.test/admin.html',
         runScripts: 'outside-only',
         beforeParse(win) {
-            win.__confirms = [];
-            win.confirm = message => { win.__confirms.push(String(message)); return true; };
             win.HTMLCanvasElement.prototype.getContext = () => null;
         }
     });
     const { window } = dom;
     const calls = [];
     window.OWL_API_BASE = 'https://api.test/api';
-    window.alert = () => {};
     window.fetch = async (url, options = {}) => {
         const parsed = new URL(String(url), window.location.href);
         calls.push({ url: parsed, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null });
@@ -140,7 +137,10 @@ test('deleting a booking calls the API for that document and refreshes the list'
     const render = view.window.OwAdminBookings.renderActiveBookings;
     render([{ id: 'b1', facilityId: 'F1', start: isoAt(1, '10:00'), end: isoAt(1, '12:00') }], { F1: 'Clubhouse' });
     view.doc.querySelector('[data-booking-delete]').click();
-    // The delete path is async (confirm → DELETE → refresh): wait for the call.
+    await view.settle();
+    assert.equal(view.doc.getElementById('customModal').style.display, 'block', 'deleting asks for confirmation in the in-page dialog');
+    view.window.runConfirmAction(); // the dialog's confirm button
+    // The delete path is async (confirm dialog → DELETE → refresh): wait for the call.
     for (let i = 0; i < 40 && !view.window.__bookingDelete; i++) await view.settle();
     await view.settle(); // let the handler finish (message + list refresh)
     assert.equal(view.window.__bookingDelete, '/api/bookings/b1');

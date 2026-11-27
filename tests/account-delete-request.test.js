@@ -17,7 +17,6 @@ function page(t, { teamPhone, society, societyId, meStatus = 200 }) {
         beforeParse(win) {
             win.__opened = [];
             win.open = (url) => { win.__opened.push(url); return null; };
-            win.alert = message => { win.__alert = message; };
         }
     });
     const { window } = dom;

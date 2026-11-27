@@ -61,6 +61,16 @@
         </a>
     </main>
 
-    <script type="module" src="deletedata-logic.js"></script>
+    <!-- Generic notice modal: the app uses in-page dialogs instead of browser alerts. -->
+<div id="deleteModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+    <div class="modal-content">
+        <span class="close" role="button" tabindex="0" aria-label="Close" onclick="document.getElementById('deleteModal').style.display='none'">&times;</span>
+        <h2 id="deleteModalTitle"></h2>
+        <p id="deleteModalText"></p>
+        <button type="button" class="btn btn-secondary btn-block" onclick="document.getElementById('deleteModal').style.display='none'">OK</button>
+    </div>
+</div>
+
+<script type="module" src="deletedata-logic.js"></script>
 </body>
 </html>

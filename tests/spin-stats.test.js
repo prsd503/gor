@@ -217,7 +217,7 @@ function loadAdminPage(t, responses = {}) {
     const dom = new JSDOM(html, {
         url: 'https://owlwatcher.test/admin.html',
         runScripts: 'outside-only',
-        beforeParse(win) { win.HTMLCanvasElement.prototype.getContext = () => null; win.confirm = () => true; }
+        beforeParse(win) { win.HTMLCanvasElement.prototype.getContext = () => null; }
     });
     const { window } = dom;
     const calls = [];
@@ -330,6 +330,9 @@ test('Repair spin data posts the society and reloads the counts', async (t) => {
     });
     doc.getElementById('adminSocietyQuery').value = 'Aangan';
     doc.getElementById('repairSpinsBtn').click();
+    for (let i = 0; i < 20 && doc.getElementById('customModal').style.display !== 'block'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(doc.getElementById('customModal').style.display, 'block', 'repairing asks for confirmation in the in-page dialog');
+    window.runConfirmAction(); // the dialog's confirm button
     await new Promise(resolve => setTimeout(resolve, 150));
 
     const repair = calls.find(entry => entry.pathname.endsWith('/contest/spinstats/backfill'));
