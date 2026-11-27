@@ -102,11 +102,29 @@
     let allLoadedBookings = [];
     let societyAdminPhone = ""; 
 
+    // Skip the token exchange when the page has no Firebase session: the API can
+    // only answer 400 without an ID token, and the public endpoints the calendar
+    // uses accept an anonymous caller.
+    async function getIdTokenIfAvailable() {
+        try {
+            if (typeof window.OWL_GET_ID_TOKEN === 'function') return await window.OWL_GET_ID_TOKEN();
+            if (typeof auth !== 'undefined' && auth && auth.currentUser && typeof auth.currentUser.getIdToken === 'function') {
+                return await auth.currentUser.getIdToken();
+            }
+        } catch (err) {
+            console.error("Failed to read the Firebase ID token:", err);
+        }
+        return null;
+    }
+
     async function getAuthHeaders() {
         try {
+            const idToken = await getIdTokenIfAvailable();
+            if (!idToken) return { ...NG_HEADERS };
             const tokenRes = await fetch(`${API_BASE_URL}/auth/token`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...NG_HEADERS }
+                headers: { 'Content-Type': 'application/json', ...NG_HEADERS },
+                body: JSON.stringify({ idToken })
             });
             const tokenData = await tokenRes.json();
             if (tokenData && tokenData.token) {
@@ -197,9 +215,11 @@
 
         header.innerText = `${societyName} Facility Calendar`;
 
+        // One header build for all three reads: the token exchange was repeated
+        // once per request, and without a session it could only answer 400.
+        const headers = await getAuthHeaders();
+
         try {
-            const headers = await getAuthHeaders();
-            
             const facRes = await fetch(`${API_BASE_URL}/facilities/${encodeURIComponent(societyId)}`, { headers });
             if (facRes.ok) {
                 facilityMap = await facRes.json();
@@ -218,14 +238,14 @@
         }
 
         try {
-            const headers = await getAuthHeaders();
-            
-            let bookingsRes = await fetch(`${API_BASE_URL}/bookings?society=${encodeURIComponent(societyId)}`, { headers });
+            // The API already resolves the society id case-insensitively, so the
+            // "Aangan" retry is only kept for a genuinely empty first answer.
+            const bookingsRes = await fetch(`${API_BASE_URL}/bookings?society=${encodeURIComponent(societyId)}`, { headers });
             if (bookingsRes.ok) {
                 const rawBookings = await bookingsRes.json();
                 allLoadedBookings = Array.isArray(rawBookings) ? rawBookings : [];
             }
-            
+
             if (allLoadedBookings.length === 0 && societyId.toLowerCase() === 'aangan') {
                 const fallbackRes = await fetch(`${API_BASE_URL}/bookings?society=Aangan`, { headers });
                 if (fallbackRes.ok) {

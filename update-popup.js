@@ -8,8 +8,16 @@
     var CONFIG_PATH = ['app_config', 'appVersion'];
     // Backend read uses the Admin SDK, so it works even when native App Check attestation fails.
     var VERSION_API = (globalThis.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api') + '/app-version';
-    var CHECK_INTERVAL = 60000;
+    /* The version policy changes when a release is published - days or weeks
+     * apart - so polling it every minute was pure cost: one invocation plus one
+     * Firestore read per tick, per open app. The policy is now kept in
+     * localStorage for POLICY_TTL and the periodic check is disabled by default;
+     * a cold start, regaining focus and coming back online still re-check (the
+     * cached copy usually answers those without a request). */
+    var CHECK_INTERVAL = 0;
     var REQUEST_TIMEOUT = 10000;
+    var POLICY_TTL = 12 * 60 * 60 * 1000;
+    var POLICY_CACHE_KEY = 'owl-update-popup:policy';
     var DISMISSAL_KEY_PREFIX = 'owl-update-popup:dismissed:';
 
     function parseVersion(value) {
@@ -103,7 +111,7 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
         var win = options.window || doc.defaultView;
         var platform = options.platform;
         var timeoutMs = options.timeoutMs || REQUEST_TIMEOUT;
-        var intervalMs = options.checkIntervalMs || CHECK_INTERVAL;
+        var intervalMs = options.checkIntervalMs === undefined ? CHECK_INTERVAL : options.checkIntervalMs;
         var visible = false;
         var destroyed = false;
         var started = false;
@@ -364,9 +372,11 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
             listen(win.document, 'visibilitychange', function () {
                 if (win.document.visibilityState === 'visible') resume();
             });
-            interval = win.setInterval(function () {
-                if (win.document.visibilityState !== 'hidden') check();
-            }, intervalMs);
+            if (intervalMs > 0) {
+                interval = win.setInterval(function () {
+                    if (win.document.visibilityState !== 'hidden') check();
+                }, intervalMs);
+            }
             return check();
         }
 
@@ -421,17 +431,43 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
         };
     }
 
-    /* Prefer the backend endpoint (Admin SDK, no client App Check dependency); fall back
-     * to the direct Firestore read so an API outage does not disable the popup. */
+    /* A stored policy is reused for POLICY_TTL so a reopened app costs no request
+     * at all, and only then is the network asked. The endpoint also declares its
+     * own `max-age`/`s-maxage`, so even that revalidation is usually free. */
+    function readCachedPolicy(win) {
+        try {
+            var storage = win && win.localStorage;
+            if (!storage) return null;
+            var raw = storage.getItem(POLICY_CACHE_KEY);
+            if (!raw) return null;
+            var stored = JSON.parse(raw);
+            if (!stored || !stored.policy || typeof stored.savedAt !== 'number') return null;
+            if (Date.now() - stored.savedAt > POLICY_TTL) return null;
+            return stored.policy;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function writeCachedPolicy(win, policy) {
+        try {
+            var storage = win && win.localStorage;
+            if (!storage) return;
+            storage.setItem(POLICY_CACHE_KEY, JSON.stringify({ savedAt: Date.now(), policy: policy }));
+        } catch (_) { /* Private mode / quota: the cache is an optimisation only. */ }
+    }
+
     function createPolicyLoader(win, importModule, apiUrl) {
         var firestoreLoad = createFirestorePolicyLoader(importModule);
         var endpoint = apiUrl || VERSION_API;
         return function loadPolicy() {
+            var cached = readCachedPolicy(win);
+            if (cached) return Promise.resolve(cached);
             if (!win || typeof win.fetch !== 'function') return firestoreLoad();
             return win.fetch(endpoint, {
                 method: 'GET',
                 headers: { 'Accept': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-                cache: 'no-store'
+                cache: 'default'
             }).then(function (response) {
                 if (!response.ok) {
                     var failure = new Error('Version API returned ' + response.status);
@@ -441,6 +477,7 @@ html[data-owl-update-popup] body { overflow: hidden !important; }
                 return response.json();
             }).then(function (data) {
                 if (!data || typeof data !== 'object') throw new Error('Invalid version API response.');
+                writeCachedPolicy(win, data);
                 return data;
             }).catch(function (error) {
                 // The managed API already tried the trusted fallback. Never

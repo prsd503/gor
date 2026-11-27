@@ -98,9 +98,11 @@ The initial runtime needs read-only Firestore access (`roles/datastore.viewer`),
 npm run deploy:full
 ```
 
-The deployment exports only the `api` Function; there is **no scheduled Function** and no process cron. Maintenance jobs (the midnight IST notice rollover and the 7-day expired-booking cleanup) run on demand from the master admin portal via `POST /api/maintenance/notices` and `POST /api/maintenance/bookings`. A dedicated runtime service account and exact allowed origins are required; follow the linked API-only guide before deployment. Image/build/storage costs remain outside the guard.
+The deployment exports only the `api` Function; there is **no scheduled Function** and no process cron. Maintenance jobs (the midnight IST notice rollover, the 7-day expired-booking cleanup, the spin-history retention prune, and the one-off legacy-record migration) run on demand from the master admin portal via `POST /api/maintenance/notices`, `POST /api/maintenance/bookings`, `POST /api/maintenance/prune-spin-history` and `POST /api/maintenance/migrate-society`.
 
-**When Monitoring fails or permissions are missing, stop mode fails closed:** the API returns a drain response with `code: "quota-monitoring-unavailable"`, rather than trusting one new instance's zero counters. On cold start, the first protected request waits for the check. Checks are shared within an instance for `QUOTA_REFRESH_MS` (default 60 seconds), not across instances. Do not switch production to `QUOTA_SOURCE=local` to bypass a permissions problem.
+Run `migrate-society` once per society after deploying: it stamps `societyId` (and `flatLower` on vehicles) onto legacy records and then lets every society-scoped read use a single query instead of three. Until it runs, the old behaviour is preserved exactly. See [firebase-cost-reduction.md](firebase-cost-reduction.md) §18. A dedicated runtime service account and exact allowed origins are required; follow the linked API-only guide before deployment. Image/build/storage costs remain outside the guard.
+
+**When Monitoring fails or permissions are missing, stop mode fails closed:** the API returns a drain response with `code: "quota-monitoring-unavailable"`, rather than trusting one new instance's zero counters. On cold start, the first protected request waits for the check. Checks are shared within an instance for `QUOTA_REFRESH_MS` (default 300 seconds), not across instances. Do not switch production to `QUOTA_SOURCE=local` to bypass a permissions problem.
 
 Verify after deployment:
 

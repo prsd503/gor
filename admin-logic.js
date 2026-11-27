@@ -140,7 +140,9 @@ window.addEventListener("DOMContentLoaded", async () => {
             if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
             if (maintenanceStatus) maintenanceStatus.textContent = job === "notices"
                 ? `Done — shifted ${data.shifted} notice(s) across all societies.`
-                : `Done — deleted ${data.deleted} expired booking(s) (older than 7 days) across all societies.`;
+                : job === "prune-spin-history"
+                    ? `Done — deleted ${data.attemptsDeleted || 0} old spin attempt(s) and ${data.spinStatsDeleted || 0} old daily bucket(s).`
+                    : `Done — deleted ${data.deleted} expired booking(s) (older than 7 days) across all societies.`;
         } catch (err) {
             console.error("Maintenance job failed:", err);
             if (maintenanceStatus) maintenanceStatus.textContent = `Could not run the job: ${err.message}`;
@@ -150,6 +152,38 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
     document.getElementById("btnShiftNotices")?.addEventListener("click", e => runMaintenanceJob("notices", e.currentTarget));
     document.getElementById("btnCleanupBookings")?.addEventListener("click", e => runMaintenanceJob("bookings", e.currentTarget));
+    document.getElementById("btnPruneSpinHistory")?.addEventListener("click", e => runMaintenanceJob("prune-spin-history", e.currentTarget));
+
+    // One-off speed-up: tag a society's legacy records with their society id so
+    // every scoped read costs one query instead of three. Safe to press again.
+    document.getElementById("btnMigrateLegacy")?.addEventListener("click", async (e) => {
+        const button = e.currentTarget;
+        const societyName = (document.getElementById("adminSocietyQuery")?.value || "").trim();
+        if (!societyName) {
+            if (maintenanceStatus) maintenanceStatus.textContent = "Type the society name in the field above first, then press the button.";
+            return;
+        }
+        button.disabled = true;
+        if (maintenanceStatus) maintenanceStatus.textContent = `Tagging ${societyName}'s legacy records…`;
+        try {
+            const res = await authenticatedFetch(`${API_BASE_URL}/maintenance/migrate-society`, {
+                method: "POST",
+                body: JSON.stringify({ societyName })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+            const totals = data.updated || {};
+            const count = Object.values(totals).reduce((sum, value) => sum + (Number(value) || 0), 0);
+            if (maintenanceStatus) maintenanceStatus.textContent = count
+                ? `Done — tagged ${count} legacy record(s) in ${data.society}. Reads for this society now use a single query.`
+                : `Nothing to do — ${data.society} had no untagged records.`;
+        } catch (err) {
+            console.error("Legacy migration failed:", err);
+            if (maintenanceStatus) maintenanceStatus.textContent = `Could not tag the records: ${err.message}`;
+        } finally {
+            button.disabled = false;
+        }
+    });
 });
 
 
@@ -355,9 +389,10 @@ if (vehicleForm) {
                 return;
             }
 
-            const flatRes = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(targetSociety)}`);
-            const allVehicles = await flatRes.json();
-            const flatVehicles = allVehicles.filter(v => v.flatNumber === flatNumber);
+            // Only this flat's records are needed for the allowance check. Asking
+            // for the whole society downloaded and read every vehicle on each save.
+            const flatRes = await authenticatedFetch(`${API_BASE_URL}/vehicles?societyName=${encodeURIComponent(targetSociety)}&flatNumber=${encodeURIComponent(flatNumber)}`);
+            const flatVehicles = await flatRes.json();
 
             let current4WheelerCount = 0;
             let current2WheelerCount = 0;

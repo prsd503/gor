@@ -30,7 +30,7 @@
  * Server / web:
  *   PORT, HOST, ALLOWED_ORIGINS, TRUST_PROXY_HOPS
  *   SERVE_STATIC=1        - also serve the static site (handy on the MacBook)
- *   READ_CACHE_TTL_MS     - read cache TTL, default 20000 (0 disables)
+ *   READ_CACHE_TTL_MS     - read cache TTL, default 60000 (0 disables)
  *   ENV_FILE              - dotenv file to load, default .env
  */
 'use strict';
@@ -253,7 +253,11 @@ app.use((req, res, next) => cors({
     },
     allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'X-Firebase-AppCheck'],
     exposedHeaders: ['X-Owl-Drain', 'X-Owl-Quota-Level', 'X-Owl-Quota-Used', 'X-Owl-Fallback-Url', 'Retry-After'],
-    credentials: true
+    credentials: true,
+    // Cache the preflight itself for a day. Every JSON write and every
+    // Authorization header makes the browser send an OPTIONS first, which is a
+    // full billable invocation; without this it is paid on every single request.
+    maxAge: 86400
 })(req, res, next));
 
 if (TUNNEL_PREVIEW) {
@@ -378,6 +382,10 @@ function isVehicleForSociety(data, society) {
     return [data.societyName, data.society].some(value => aliases.has(normalizeAuthValue(value)));
 }
 
+/* Every society-scoped collection is matched by the canonical `societyId` first.
+ * Only when that query comes back empty do the legacy name fields get queried,
+ * because each extra query is a separate billable read even when it returns
+ * nothing. `legacyQueries` is therefore evaluated at most once, on demand. */
 function vehicleSocietyQueries(society) {
     const aliases = society.aliases.slice(0, 30);
     return [
@@ -385,6 +393,92 @@ function vehicleSocietyQueries(society) {
         db.collection('vehicles').where('societyName', 'in', aliases),
         db.collection('vehicles').where('society', 'in', aliases)
     ];
+}
+
+/* Read a society-scoped collection with the minimum number of queries.
+ *
+ * Records written by this API carry the canonical `societyId`; records that
+ * predate it carry only `societyName`/`society`, and a Firestore equality filter
+ * silently skips those. So until a society has been migrated, all three queries
+ * run, exactly as before. Once `societies/:id/<flagKey> === true` (set by the
+ * maintenance migration, which stamps `societyId` on every legacy record), the
+ * canonical query alone is complete and the two legacy queries - each of which
+ * is billed again at full society size - are skipped.
+ */
+// One small settings document per society carries the migration flags. It lives
+// in `societyFlags`, not on the society document, because `GET /api/societies`
+// publishes every document in `societies` and because other flows rewrite the
+// society document without preserving unknown fields.
+//
+// It is read through the db layer, which already caches it for a minute and
+// drops that entry whenever the document is written - a second cache here would
+// not see the migration itself.
+async function societyFlags(societyId) {
+    const snapshot = await db.collection('societyFlags').doc(societyId).get({ ttlMs: 60000 });
+    return snapshot.exists ? (snapshot.data() || {}) : {};
+}
+
+async function societyFlag(societyId, key) {
+    const flags = await societyFlags(societyId);
+    return flags[key] === true;
+}
+
+/* Legacy (name-field) queries only run for a society that has not been
+ * migrated. They are pure fallbacks, so a longer cache window is safe: a write
+ * to the collection still clears it, and the migration clears it too. */
+const LEGACY_QUERY_CACHE_MS = 300000;
+
+async function readSocietyScoped(collectionName, society, options = {}) {
+    const getOptions = options.fresh ? { fresh: true } : (options.ttlMs !== undefined ? { ttlMs: options.ttlMs } : undefined);
+    const documents = new Map();
+    const absorb = (snapshot, accept) => {
+        if (!snapshot) return;
+        snapshot.forEach(doc => {
+            if (documents.has(doc.id)) return;
+            if (accept && !accept(doc)) return;
+            documents.set(doc.id, doc);
+        });
+    };
+    const accept = options.accept;
+    const canonical = await db.collection(collectionName)
+        .where('societyId', '==', society.id)
+        .get(getOptions)
+        .catch(() => null);
+    absorb(canonical, accept);
+
+    const migrated = options.flagKey ? await societyFlag(society.id, options.flagKey) : false;
+    if (migrated) return [...documents.values()];
+
+    // Not migrated yet: the legacy queries are still needed, but only until the
+    // migration has been run for this society. The flag itself costs nothing
+    // extra (it is cached), so it is consulted before paying for them.
+    const aliases = society.aliases.slice(0, 30);
+    const nameFields = options.nameFields || ['societyName', 'society'];
+    // A legacy-only query can answer the whole request, so the cache for it is
+    // allowed to be a little longer than the default.
+    const legacyOptions = getOptions || { ttlMs: LEGACY_QUERY_CACHE_MS };
+    const legacySnapshots = await Promise.all(nameFields.map(field =>
+        db.collection(collectionName).where(field, 'in', aliases)
+            .get(legacyOptions).catch(() => null)));
+    for (const snapshot of legacySnapshots) absorb(snapshot, accept);
+    return [...documents.values()];
+}
+
+/* `notices` and `facilities` are written keyed by the society id, so that one
+ * document answers the request. The legacy lookups run only when it is missing:
+ * the id-shaped keys first, then the name fields only if those found nothing -
+ * a society that simply has no notice must not cost four reads. */
+async function readSocietyDocument(collectionName, society) {
+    const primary = await db.collection(collectionName).doc(society.id).get();
+    if (primary.exists && recordMatchesSociety(primary.data() || {}, primary.id, society)) return primary;
+    // Legacy documents were often keyed by the society's display name.
+    for (const key of [...new Set([society.name, ...society.aliases])].slice(0, 4)) {
+        if (!key || key === society.id) continue;
+        const doc = await db.collection(collectionName).doc(key).get();
+        if (doc.exists && recordMatchesSociety(doc.data() || {}, doc.id, society)) return doc;
+    }
+    const named = await readSocietyScoped(collectionName, society, { flagKey: 'legacyDocumentsMigrated' });
+    return named.length ? named[0] : null;
 }
 
 async function collectVehicleSnapshots(snapshots, society) {
@@ -398,9 +492,11 @@ async function collectVehicleSnapshots(snapshots, society) {
 }
 
 async function getVehiclesForSociety(society, fresh = false) {
-    const queries = vehicleSocietyQueries(society);
-    const snapshots = await Promise.all(queries.map(query => query.get(fresh ? { fresh: true } : undefined)));
-    return collectVehicleSnapshots(snapshots, society);
+    return readSocietyScoped('vehicles', society, {
+        fresh,
+        flagKey: 'legacyVehiclesMigrated',
+        accept: doc => isVehicleForSociety(doc.data(), society)
+    });
 }
 
 // Vehicle types accepted by the admin registry. The resident flow stays limited
@@ -477,16 +573,69 @@ function lookupVariants(value) {
     return [...new Set([raw, raw.toLowerCase(), raw.toUpperCase()].filter(Boolean))];
 }
 
-async function getVehiclesMatchingField(society, field, values, fresh = false) {
+/* A flat name typed by a resident may differ in case from the stored value, and
+ * Firestore equality is case-sensitive. Vehicles therefore store this normalised
+ * copy so the registration can query exactly one flat without reading (or
+ * guessing the casing of) the rest of the society's records. Legacy records get
+ * the field from the one-off migration. */
+function flatLowerOf(value) {
+    return String(value == null ? '' : value).trim().toLowerCase();
+}
+
+
+/* One query per lookup field. `flatNumber` is matched on the normalised
+ * `flatLower` field once the society is migrated (legacy free-text names used to
+ * need the whole society read just to compare casing in memory). */
+async function getVehiclesMatchingField(society, field, values, options = {}) {
     const variants = [...new Set(values.flatMap(value => field === 'deviceId'
         ? [String(value == null ? '' : value).trim()]
         : lookupVariants(value)).filter(Boolean))];
     if (!variants.length) return [];
-    const query = variants.length === 1
-        ? db.collection('vehicles').where(field, '==', variants[0])
-        : db.collection('vehicles').where(field, 'in', variants);
-    const snapshot = await query.get(fresh ? { fresh: true } : undefined);
+    let queryField = field;
+    let lookup = variants;
+    if (field === 'flatNumber' && options.migrated) {
+        queryField = 'flatLower';
+        lookup = [...new Set(values.map(flatLowerOf).filter(Boolean))];
+        if (!lookup.length) return [];
+    }
+    const query = lookup.length === 1
+        ? db.collection('vehicles').where(queryField, '==', lookup[0])
+        : db.collection('vehicles').where(queryField, 'in', lookup);
+    const snapshot = await query.get(options.fresh ? { fresh: true } : undefined);
     return collectVehicleSnapshots([snapshot], society);
+}
+
+/* Does this society's vehicle data carry the normalised fields the cheap
+ * queries rely on? Cached with the other flags. */
+async function vehicleLookupMigration(society) {
+    const flags = await societyFlags(society.id);
+    return flags.legacyVehiclesMigrated === true;
+}
+
+/* The flat's records plus this device's link - and nothing else. The
+ * normalised `flatLower` field answers the flat question in one query for every
+ * society, including one that has not been migrated yet (vehicles written by
+ * this API have carried the field since this change; the name-variant query
+ * below still covers older documents, and only a society whose data predates it
+ * in full falls back to the society-wide scan).
+ */
+async function readResidentFlatVehicles(society, targetFlat, deviceId) {
+    // Only a society with untagged legacy records needs the name-variant query
+    // (it finds documents that store a differently-cased flat and no
+    // `flatLower`). Everything else is answered by the normalised field alone.
+    const migrated = await vehicleLookupMigration(society);
+    const [normalised, byName, deviceMatches] = await Promise.all([
+        getVehiclesMatchingField(society, 'flatNumber', [targetFlat], { migrated: true }),
+        migrated ? Promise.resolve([]) : getVehiclesMatchingField(society, 'flatNumber', [targetFlat]),
+        getVehiclesMatchingField(society, 'deviceId', [deviceId])
+    ]);
+    if (normalised.length || byName.length || migrated) {
+        return mergeVehicleDocuments([normalised, byName, deviceMatches]);
+    }
+    // Pre-migration records may store a flat spelling that matches none of the
+    // case variants (extra spaces, an old name); only then is the society-wide
+    // read needed, and it is the only remaining way to find them.
+    return getVehiclesForSociety(society, true);
 }
 
 function mergeVehicleDocuments(groups) {
@@ -495,11 +644,13 @@ function mergeVehicleDocuments(groups) {
     return [...found.values()];
 }
 
-async function getVehiclesForRegistration(transaction, society, flatNumber, deviceId, vehicleNumbers) {
+async function getVehiclesForRegistration(transaction, society, flatNumber, deviceId, vehicleNumbers, migrated = false) {
     const flatVariants = lookupVariants(flatNumber);
     const plateVariants = [...new Set(vehicleNumbers.flatMap(lookupVariants))];
     const queries = [
-        db.collection('vehicles').where('flatNumber', flatVariants.length === 1 ? '==' : 'in', flatVariants),
+        migrated
+            ? db.collection('vehicles').where('flatLower', '==', flatLowerOf(flatNumber))
+            : db.collection('vehicles').where('flatNumber', flatVariants.length === 1 ? '==' : 'in', flatVariants),
         ...(deviceId ? [db.collection('vehicles').where('deviceId', '==', deviceId)] : []),
         db.collection('vehicles').where('vehicleNumber', plateVariants.length === 1 ? '==' : 'in', plateVariants)
     ];
@@ -507,8 +658,12 @@ async function getVehiclesForRegistration(transaction, society, flatNumber, devi
     return collectVehicleSnapshots(snapshots, society);
 }
 
+/* A device can only be linked to one flat, so the spin/claim transaction needs
+ * at most two vehicle documents. Capping the query keeps the read cost flat as
+ * the registry grows, and a `.limit(2)` (rather than 1) still lets the existing
+ * "one device on two flats" corruption check fail closed. */
 async function getVehiclesForDeviceInTransaction(transaction, society, deviceId) {
-    const query = db.collection('vehicles').where('deviceId', '==', deviceId);
+    const query = db.collection('vehicles').where('deviceId', '==', deviceId).limit(2);
     const snapshot = await transaction.get(query);
     return collectVehicleSnapshots([snapshot], society);
 }
@@ -544,23 +699,14 @@ function publicWhatsAppNumber(value) {
 async function findSocietyAdminRecords(society) {
     // `in` is case-sensitive, so both the document id and the display name are
     // queried as written; duplicates are removed by exact value only.
-    const requested = [...new Set([society.id, society.name, ...society.aliases]
-        .map(alias => String(alias == null ? '' : alias).trim())
-        .filter(Boolean))].slice(0, 30);
-    const fields = ['societyId', 'societyName', 'society'];
-    const snapshots = await Promise.all(fields.map(field =>
-        db.collection('admins').where(field, 'in', requested).get().catch(() => null)));
-    const found = new Map();
-    for (const snapshot of snapshots) {
-        if (!snapshot) continue;
-        snapshot.forEach(doc => {
+    return readSocietyScoped('admins', society, {
+        flagKey: 'legacyAdminsMigrated',
+        accept: doc => {
             const data = doc.data() || {};
-            if (data.disabled === true || data.active === false) return;
-            if (!recordMatchesSociety(data, doc.id, society)) return;
-            found.set(doc.id, doc);
-        });
-    }
-    return [...found.values()];
+            if (data.disabled === true || data.active === false) return false;
+            return recordMatchesSociety(data, doc.id, society);
+        }
+    });
 }
 
 function adminContactFor(records) {
@@ -580,25 +726,7 @@ function adminContactFor(records) {
 }
 
 async function getSocietyDocument(collectionName, society) {
-    const found = new Map();
-    const names = [...new Set([society.id, ...society.aliases])].slice(0, 30);
-    for (const id of names) {
-        try {
-            const doc = await db.collection(collectionName).doc(id).get();
-            if (doc.exists && recordMatchesSociety(doc.data() || {}, doc.id, society)) found.set(doc.id, doc);
-        } catch (_) { /* Invalid legacy document IDs are skipped. */ }
-    }
-    const aliases = society.aliases.slice(0, 30);
-    const queries = [
-        db.collection(collectionName).where('societyId', '==', society.id),
-        db.collection(collectionName).where('societyName', 'in', aliases),
-        db.collection(collectionName).where('society', 'in', aliases)
-    ];
-    const snapshots = await Promise.all(queries.map(query => query.get()));
-    for (const snapshot of snapshots) snapshot.forEach(doc => {
-        if (recordMatchesSociety(doc.data() || {}, doc.id, society)) found.set(doc.id, doc);
-    });
-    return found.values().next().value || null;
+    return readSocietyDocument(collectionName, society);
 }
 
 function hashValue(value) {
@@ -609,20 +737,29 @@ function contestAttemptDocumentId(societyId, date, deviceId, contestId) {
     return hashValue([societyId, date, deviceId, contestId].join('\\0'));
 }
 
-// Spin statistics are read through a collection scan rather than a
-// `where('societyId', ...)` query: live documents predate that field, and a
-// Firestore equality filter drops documents that do not have it. A dedicated
-// query is tried first so the cost stays small when the index and field exist.
-async function readSpinStats(society) {
+/* Spin statistics used to require a whole-collection scan on every dashboard
+ * load: live documents predate `societyId`, and a Firestore equality filter
+ * silently drops documents that lack the field, while legacy documents are
+ * keyed `<society>_<date>`.
+ *
+ * The scan is now the fallback, not the rule:
+ *   1. the canonical `societyId` query - one read when the society is migrated,
+ *   2. only if that found nothing, the full scan that also matches legacy ids
+ *      and `societyName` documents (what the dashboard used to always pay for).
+ * `includeScan` forces the scan for the one-off backfill, which has to see the
+ * legacy documents even when the society already has migrated ones.
+ */
+async function readSpinStats(society, options = {}) {
     const collected = new Map();
-    const add = snapshot => snapshot.forEach(doc => {
+    const add = snapshot => snapshot && snapshot.forEach(doc => {
         if (!collected.has(doc.id)) collected.set(doc.id, { id: doc.id, data: doc.data() || {} });
     });
     try {
-        add(await db.collection('spinStats').where('societyId', '==', society.id).get({ fresh: true }));
+        add(await db.collection('spinStats').where('societyId', '==', society.id).get());
     } catch (_) { /* Missing field/index must not hide the scan below. */ }
+    if (collected.size > 0 && !options.includeScan) return [...collected.values()];
     try {
-        add(await db.collection('spinStats').get({ fresh: true }));
+        add(await db.collection('spinStats').get());
     } catch (err) {
         if (collected.size === 0) throw err;
     }
@@ -648,7 +785,7 @@ async function latestWinnerFlat(society) {
 // them. Rewriting them makes the per-society query work and is safe to repeat.
 async function backfillSpinStatsSocietyIds(society) {
     const names = new Set([society.id, society.name, ...society.aliases].map(normalizeAuthValue).filter(Boolean));
-    const entries = await readSpinStats(society);
+    const entries = await readSpinStats(society, { includeScan: true });
     const updates = entries.filter(entry => {
         const data = entry.data || {};
         if (data.societyId && String(data.societyId) === society.id) return false;
@@ -677,7 +814,9 @@ app.get('/api/app-version', async (req, res) => {
         const snap = await db.collection('app_config').doc('appVersion').get();
         if (!snap.exists) return res.status(404).json({ error: 'Version policy not configured.' });
         const payload = buildVersionResponse(snap.data(), req.query);
-        res.set('Cache-Control', 'public, max-age=60').json(payload);
+        // A release policy changes on the order of weeks; a long browser and
+        // shared cache removes the per-open invocations the popup used to cause.
+        res.set('Cache-Control', 'public, max-age=600, s-maxage=3600, stale-while-revalidate=600').json(payload);
     } catch (err) {
         if (err.status === 400) return res.status(400).json({ error: err.message });
         console.error('app-version error:', err);
@@ -782,12 +921,25 @@ app.get('/api/ads/global', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* Ads are stored one document per society, keyed by the society id. A resident
+ * page load only needs its own document, so read that first and scan only for a
+ * legacy mixed-case id. The result is cached for a minute: ads change rarely and
+ * this route is hit by every page open. */
+async function findAdsDocument(requestedId) {
+    const direct = await db.collection('ads').doc(requestedId).get({ ttlMs: 60000 });
+    if (direct.exists) return direct;
+    const snapshot = await db.collection('ads').get({ ttlMs: 60000 });
+    let matchedDoc = null;
+    snapshot.forEach(doc => {
+        if (!matchedDoc && doc.id.trim().toLowerCase() === requestedId) matchedDoc = doc;
+    });
+    return matchedDoc;
+}
+
 app.get('/api/ads/local/:deviceId', async (req, res) => {
     try {
         const requestedId = req.params.deviceId.trim().toLowerCase();
-        const snapshot = await db.collection('ads').get();
-        let matchedDoc = null;
-        snapshot.forEach(doc => { if (doc.id.trim().toLowerCase() === requestedId) matchedDoc = doc; });
+        const matchedDoc = await findAdsDocument(requestedId);
         if (!matchedDoc) return res.status(200).json([]);
         const data = matchedDoc.data();
         let items = [];
@@ -805,10 +957,15 @@ app.get('/api/ads/local/:deviceId', async (req, res) => {
 app.get('/api/ads/greeting/:id', async (req, res) => {
     try {
         const targetId = req.params.id;
-        const adsSnapshot = await db.collection('ads').get();
+        // A greeting id may name the society document directly; otherwise fall
+        // back to the (cached) collection scan.
+        const directDoc = await findAdsDocument(String(targetId).trim().toLowerCase());
+        const candidates = directDoc
+            ? [directDoc]
+            : (await db.collection('ads').get({ ttlMs: 60000 })).docs;
         let foundItem = null, foundDocId = null;
-        adsSnapshot.forEach(doc => {
-            if (foundItem) return;
+        for (const doc of candidates) {
+            if (foundItem) break;
             const data = doc.data();
             if (data[targetId] && typeof data[targetId] === 'object') {
                 foundItem = data[targetId]; foundDocId = doc.id;
@@ -817,7 +974,7 @@ app.get('/api/ads/greeting/:id', async (req, res) => {
                     item && typeof item === 'object' && (item.greetingId === targetId || item.id === targetId));
                 if (matched) { foundItem = matched; foundDocId = doc.id; }
             }
-        });
+        }
         if (!foundItem) return res.status(404).json({ error: `Greeting with ID '${targetId}' not found.` });
         res.json({ ...foundItem, societyId: foundDocId });
     } catch (err) { console.error('Greeting fetch error:', err); res.status(500).json({ error: err.message }); }
@@ -874,7 +1031,7 @@ app.get('/api/admins/:email', requireStaff, async (req, res) => {
         if (req.membership.role !== 'master' && email !== req.membership.email) {
             return res.status(403).json({ error: 'Only the signed-in administrator profile is available.', code: 'self-only' });
         }
-        const doc = await db.collection('admins').doc(email).get({ fresh: true });
+        const doc = await db.collection('admins').doc(email).get({ ttlMs: 5000 });
         if (!doc.exists) return res.status(404).json({ error: 'Admin not found' });
         const data = doc.data() || {};
         const society = await authorization.resolveSociety(data.societyId || data.society || data.societyName);
@@ -915,22 +1072,18 @@ app.get('/api/guards', requireStaff, async (req, res) => {
 
         let docs = [];
         if (society) {
-            const aliases = society.aliases.slice(0, 30);
-            const snapshots = await Promise.all([
-                db.collection('guards').where('societyId', '==', society.id).get(),
-                db.collection('guards').where('society', 'in', aliases).get(),
-                db.collection('guards').where('societyName', 'in', aliases).get()
-            ]);
-            const found = new Map();
-            for (const snapshot of snapshots) snapshot.forEach(doc => found.set(doc.id, doc));
-            docs = [...found.values()].filter(doc => {
-                const data = doc.data() || {};
-                if (data.societyId) return data.societyId === society.id;
-                return [data.society, data.societyName].some(value =>
-                    society.aliases.some(alias => normalizeAuthValue(alias) === normalizeAuthValue(value)));
+            docs = await readSocietyScoped('guards', society, {
+                nameFields: ['society', 'societyName'],
+                flagKey: 'legacyGuardsMigrated',
+                accept: doc => {
+                    const data = doc.data() || {};
+                    if (data.societyId) return data.societyId === society.id;
+                    return [data.society, data.societyName].some(value =>
+                        society.aliases.some(alias => normalizeAuthValue(alias) === normalizeAuthValue(value)));
+                }
             });
         } else {
-            const doc = await db.collection('guards').doc(email).get({ fresh: true });
+            const doc = await db.collection('guards').doc(email).get({ ttlMs: 5000 });
             if (doc.exists && normalizeAuthValue((doc.data() || {}).email || doc.id) === email) docs = [doc];
         }
         const nameLower = normalizeAuthValue(req.query.name_lower || '');
@@ -976,20 +1129,28 @@ app.get('/api/vehicles', async (req, res) => {
         }
         let docs;
         if (targetVehicle) {
-            docs = await getVehiclesMatchingField(society, 'vehicleNumber', [targetVehicle], true);
+            docs = await getVehiclesMatchingField(society, 'vehicleNumber', [targetVehicle]);
+        } else if (!staff && targetFlat) {
+            // Resident flow: the flat alone (plus the device link) answers every
+            // question below (locks, counts, hidden legacy details), so ask for
+            // exactly that instead of scanning or reading the whole society.
+            docs = await readResidentFlatVehicles(society, targetFlat, deviceId);
         } else if (targetFlat && !configuredFlats(society.data || {}).length) {
-            // Without a configured list, users can enter different casing for
-            // legacy flat names. Scan only this society and compare normalized
-            // names below so device locks and allowances cannot be bypassed.
-            docs = await getVehiclesForSociety(society, true);
+            // Admin add/edit for a society with no configured flat list: free-text
+            // names may differ in casing, so compare normalised names below.
+            const [flatMatches, deviceMatches] = await Promise.all([
+                getVehiclesMatchingField(society, 'flatNumber', [targetFlat], { migrated: await vehicleLookupMigration(society) }),
+                getVehiclesMatchingField(society, 'deviceId', [deviceId])
+            ]);
+            docs = mergeVehicleDocuments([flatMatches, deviceMatches]);
         } else if (staff && targetFlat) {
-            docs = await getVehiclesMatchingField(society, 'flatNumber', [targetFlat], true);
+            docs = await getVehiclesMatchingField(society, 'flatNumber', [targetFlat], { migrated: await vehicleLookupMigration(society) });
         } else if (staff) {
             docs = await getVehiclesForSociety(society);
         } else {
             const [flatMatches, deviceMatches] = await Promise.all([
-                getVehiclesMatchingField(society, 'flatNumber', [targetFlat], true),
-                getVehiclesMatchingField(society, 'deviceId', [deviceId], true)
+                getVehiclesMatchingField(society, 'flatNumber', [targetFlat], { migrated: await vehicleLookupMigration(society) }),
+                getVehiclesMatchingField(society, 'deviceId', [deviceId])
             ]);
             docs = mergeVehicleDocuments([flatMatches, deviceMatches]);
         }
@@ -1092,13 +1253,13 @@ app.get('/api/verify-device/:deviceId', async (req, res) => {
         if (requested) {
             const society = await authorization.resolveSociety(requested);
             if (!society) return res.status(404).json({ registered: false });
-            const vehicles = await getVehiclesMatchingField(society, 'deviceId', [deviceId], true);
+            const vehicles = await getVehiclesMatchingField(society, 'deviceId', [deviceId]);
             const record = uniqueVehicleForDevice(vehicles, deviceId);
             return res.set('Cache-Control', 'no-store').json(record
                 ? { registered: true, flatNumber: (record.data() || {}).flatNumber || '' }
                 : { registered: false });
         }
-        const snapshot = await db.collection('vehicles').where('deviceId', '==', deviceId).limit(1).get({ fresh: true });
+        const snapshot = await db.collection('vehicles').where('deviceId', '==', deviceId).limit(1).get({ ttlMs: 10000 });
         return res.set('Cache-Control', 'no-store').json({ registered: !snapshot.empty });
     } catch (_) { return res.status(503).json({ error: 'Device registration could not be verified.' }); }
 });
@@ -1161,21 +1322,19 @@ app.get('/api/bookings', async (req, res) => {
         if (membership && ['admin', 'guard'].includes(membership.role) && membership.societyId !== society.id) {
             return res.status(403).json({ error: 'Your staff account is not assigned to this society.', code: 'society-scope-forbidden' });
         }
-        const aliases = society.aliases.slice(0, 30);
-        const snapshots = await Promise.all([
-            db.collection('bookings').where('societyId', '==', society.id).get(),
-            db.collection('bookings').where('society', 'in', aliases).get(),
-            db.collection('bookings').where('societyName', 'in', aliases).get()
-        ]);
-        const docs = new Map();
-        for (const snapshot of snapshots) snapshot.forEach(doc => {
-            if (recordMatchesSociety(doc.data() || {}, doc.id, society)) docs.set(doc.id, doc);
+        const docs = await readSocietyScoped('bookings', society, {
+            nameFields: ['society', 'societyName'],
+            flagKey: 'legacyBookingsMigrated',
+            accept: doc => recordMatchesSociety(doc.data() || {}, doc.id, society)
         });
-        const bookings = [...docs.values()].map(doc => {
+        const bookings = docs.map(doc => {
             const data = doc.data() || {};
             return { id: doc.id, facilityId: data.facilityId || '', start: data.start || '', end: data.end || '' };
         });
-        return res.set('Cache-Control', 'public, no-store').json(bookings);
+        // Public, non-personal facility calendar: a short browser cache plus a
+        // slightly longer shared/CDN cache removes repeat invocations without
+        // making a new booking noticeably stale.
+        return res.set('Cache-Control', 'public, max-age=30, s-maxage=120, stale-while-revalidate=60').json(bookings);
     } catch (_) { return res.status(503).json({ error: 'Bookings could not be loaded.' }); }
 });
 
@@ -1220,15 +1379,21 @@ app.get('/api/societies/:societyIdentifier/flats', requireAdminForSociety(req =>
         const society = req.authorizedSociety;
         const flats = [...new Set(publicSociety(society).flatList.map(flat => String(flat).trim()).filter(Boolean))]
             .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
-        const vehicles = await getVehiclesForSociety(society, true);
+        // Per-flat counts only need the number of documents, so they are aggregate
+        // counts (billed per thousand) instead of reading the whole registry twice.
         const counts = {};
-        for (const doc of vehicles) {
-            const data = doc.data() || {};
-            const flat = String(data.flatNumber || '').trim();
-            if (!flat) continue;
-            const entry = counts[flat] || (counts[flat] = { '2-Wheeler': 0, '4-Wheeler': 0, other: 0 });
-            if (data.vehicleType === '2-Wheeler' || data.vehicleType === '4-Wheeler') entry[data.vehicleType] += 1;
-            else entry.other += 1;
+        for (const flat of flats) {
+            const byType = { '2-Wheeler': 0, '4-Wheeler': 0, other: 0 };
+            const forFlat = db.collection('vehicles').where('flatNumber', '==', flat);
+            const [two, four, total] = await Promise.all([
+                forFlat.where('vehicleType', '==', '2-Wheeler').count(),
+                forFlat.where('vehicleType', '==', '4-Wheeler').count(),
+                forFlat.count()
+            ]);
+            byType['2-Wheeler'] = two;
+            byType['4-Wheeler'] = four;
+            byType.other = Math.max(0, total - two - four);
+            counts[flat] = byType;
         }
         return res.set('Cache-Control', 'private, no-store').json({
             societyId: society.id,
@@ -1392,6 +1557,28 @@ app.post('/api/vehicles', async (req, res) => {
         const existingRef = docId ? db.collection('vehicles').doc(docId) : null;
         const newRefs = docId ? [] : requestedVehicles.map(() => db.collection('vehicles').doc());
 
+        // Until the one-off migration has stamped `societyId` and `flatLower` on
+        // the society's records, legacy documents can only be matched by a full
+        // scan; after it, the flat's own documents plus an aggregate count are
+        // enough, and the scan is skipped entirely.
+        const flags = await societyFlags(society.id);
+        const migrated = flags.legacyVehiclesMigrated === true;
+        let capScanRequired = false;
+        let capCount = null;
+        if (!existingRef && !migrated) {
+            const preliminary = await societyRef.get();
+            const preliminaryLimit = totalVehicleLimit((preliminary.data && preliminary.data()) || {});
+            if (preliminaryLimit !== null || !configuredFlats((preliminary.data && preliminary.data()) || {}).length) {
+                capScanRequired = true;
+            }
+        } else if (!existingRef && migrated) {
+            const preliminary = await societyRef.get();
+            if (totalVehicleLimit((preliminary.data && preliminary.data()) || {}) !== null) {
+                // Billed per thousand documents, instead of one read per vehicle.
+                capCount = await db.collection('vehicles').where('societyId', '==', society.id).count();
+            }
+        }
+
         await db.runTransaction(async transaction => {
             const [societySnap, registrationLock] = await Promise.all([
                 transaction.get(societyRef), transaction.get(registrationLockRef)
@@ -1399,18 +1586,24 @@ app.post('/api/vehicles', async (req, res) => {
             if (!societySnap.exists) fail(404, 'Society not found.');
             const societyData = societySnap.data() || {};
             const flatList = configuredFlats(societyData);
-            // Case-insensitive matching is essential for free-text names, even
-            // for older vehicles that do not have a normalized index field.
+            // A society that has never configured its flat list cannot verify the
+            // flat name against a list, but it must not scan the whole registry
+            // either: the flat's own documents are enough for uniqueness and the
+            // per-flat allowance, and a batch registration already looks up every
+            // plate by number.
             const totalLimit = totalVehicleLimit(societyData);
-            // A configured society-wide cap requires counting all vehicle
-            // documents, including legacy societyName-only records.
-            const allSocietyVehicles = (!flatList.length || (totalLimit !== null && !existingRef))
+            // A configured cap on a not-yet-migrated society is the one case that
+            // still has to see every document (legacy records carry no societyId).
+            const allSocietyVehicles = capScanRequired
                 ? await collectVehicleSnapshots(await Promise.all(vehicleSocietyQueries(society).map(query => transaction.get(query))), society)
                 : null;
-            const existingVehicles = allSocietyVehicles || await getVehiclesForRegistration(transaction, society, flatNumber, isResident ? deviceId : '', numbers);
-            if (!existingRef && totalLimit !== null && allSocietyVehicles.length + requestedVehicles.length > totalLimit) {
-                const remaining = Math.max(0, totalLimit - allSocietyVehicles.length);
-                fail(409, `The society's total vehicle limit is ${totalLimit}; only ${remaining} more vehicle(s) can be added. Contact the master administrator.`, 'society-vehicle-limit-reached');
+            const existingVehicles = allSocietyVehicles || await getVehiclesForRegistration(transaction, society, flatNumber, isResident ? deviceId : '', numbers, migrated);
+            if (!existingRef && totalLimit !== null) {
+                const total = allSocietyVehicles ? allSocietyVehicles.length : capCount;
+                if (total + requestedVehicles.length > totalLimit) {
+                    const remaining = Math.max(0, totalLimit - total);
+                    fail(409, `The society's total vehicle limit is ${totalLimit}; only ${remaining} more vehicle(s) can be added. Contact the master administrator.`, 'society-vehicle-limit-reached');
+                }
             }
             const flatIsKnown = flatList.some(flat => normalizeAuthValue(flat) === normalizeAuthValue(flatNumber));
             if (flatList.length > 0 && !flatIsKnown) fail(400, 'Flat is not registered in this society.');
@@ -1473,15 +1666,24 @@ app.post('/api/vehicles', async (req, res) => {
             }
 
             const stamp = FieldValue.serverTimestamp();
-            const lockVersion = registrationLock.exists ? Number((registrationLock.data() || {}).version) || 0 : 0;
-            transaction.set(registrationLockRef, {
-                societyId: society.id, version: lockVersion + 1, updatedAt: stamp
-            });
+            // The lock document exists to make two concurrent registrations
+            // conflict, so Firestore re-runs the loser instead of both committing
+            // a duplicate plate or a flat over its allowance. Only registrations
+            // that *create* a vehicle need that (an edit targets a single
+            // document and cannot race a duplicate into existence), so the extra
+            // write per registration is confined to the create path.
+            if (!existingRef) {
+                const lockVersion = registrationLock.exists ? Number((registrationLock.data() || {}).version) || 0 : 0;
+                transaction.set(registrationLockRef, {
+                    societyId: society.id, version: lockVersion + 1, updatedAt: stamp
+                });
+            }
             if (existingRef) {
                 transaction.update(existingRef, {
                     societyId: society.id,
                     societyName: society.name,
                     flatNumber,
+                    flatLower: flatLowerOf(flatNumber),
                     residentType: residentType || oldData.residentType || 'Resident',
                     mobileNumber: mobileNumber || oldData.mobileNumber || '',
                     vehicleType: requestedVehicles[0].vehicleType,
@@ -1495,6 +1697,7 @@ app.post('/api/vehicles', async (req, res) => {
                         societyId: society.id,
                         societyName: society.name,
                         flatNumber,
+                        flatLower: flatLowerOf(flatNumber),
                         residentType: residentType || 'Resident',
                         mobileNumber: mobileNumber || '',
                         vehicleType: vehicle.vehicleType,
@@ -1558,7 +1761,7 @@ app.post('/api/contest/guest/spin', async (req, res) => {
     try {
         const input = contestInput(req.body || {});
         if (!input) return res.status(400).json({ error: 'Valid device and contest are required.' });
-        const guestDoc = await db.collection('societies').doc('Guest').get({ fresh: true });
+        const guestDoc = await db.collection('societies').doc('Guest').get();
         if (!guestDoc.exists) return res.status(503).json({ error: 'Guest contest is not configured.' });
         const guest = { id: 'Guest', name: String((guestDoc.data() || {}).name || 'Guest') };
         const today = istDate();
@@ -1831,6 +2034,74 @@ app.get('/api/contest/spinstats', requireMaster, async (req, res) => {
     }
 });
 
+/* One-off, idempotent migration: stamp the canonical `societyId` onto records
+ * that carry only a legacy society name, then record on the society's flags
+ * document that the scoped queries no longer need the name-field fallbacks.
+ * Running it twice changes nothing. This is what turns the three-query fan-out
+ * on vehicle, booking and guard reads into a single query.
+ */
+const MIGRATED_COLLECTIONS = ['vehicles', 'bookings', 'guards', 'admins'];
+
+/* `pending` for vehicles covers two kinds of record: legacy documents with no
+ * `societyId`, and this society's documents that predate `flatLower` (both need
+ * a write before the flat-scoped query can be trusted). */
+async function migrateSocietyLegacyRecords(society) {
+    const aliases = new Set(society.aliases.map(normalizeAuthValue).filter(Boolean));
+    const updated = {};
+    for (const collectionName of MIGRATED_COLLECTIONS) {
+        // The scan is deliberate and runs once: every document is inspected so
+        // legacy records are found regardless of which name field they used.
+        const snapshot = await db.collection(collectionName).get({ fresh: true });
+        // Legacy records are adopted only when they name this society; a record
+        // that already belongs to another society is never moved.
+        const pending = snapshot.docs.filter(doc => {
+            const data = doc.data() || {};
+            if (data.societyId) {
+                // Already scoped: only a vehicle still missing its normalised
+                // flat name needs writing.
+                return collectionName === 'vehicles' && data.societyId === society.id &&
+                    Boolean(data.flatNumber) && data.flatLower === undefined;
+            }
+            return [data.societyName, data.society].some(value => aliases.has(normalizeAuthValue(value)));
+        });
+        for (let index = 0; index < pending.length; index += 400) {
+            const batch = db.batch();
+            for (const doc of pending.slice(index, index + 400)) {
+                const patch = { societyId: society.id, updatedAt: FieldValue.serverTimestamp() };
+                if (collectionName === 'vehicles') {
+                    const flat = (doc.data() || {}).flatNumber;
+                    if (flat) patch.flatLower = flatLowerOf(flat);
+                }
+                batch.set(db.collection(collectionName).doc(doc.id), patch, { merge: true });
+            }
+            await batch.commit();
+        }
+        updated[collectionName] = pending.length;
+    }
+    await db.collection('societyFlags').doc(society.id).set({
+        legacyVehiclesMigrated: true,
+        legacyBookingsMigrated: true,
+        legacyGuardsMigrated: true,
+        legacyAdminsMigrated: true,
+        migratedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+    return updated;
+}
+
+app.post('/api/maintenance/migrate-society', requireMaster, async (req, res) => {
+    try {
+        const requested = String((req.body && (req.body.societyName || req.body.society || req.body.societyId)) || '').trim();
+        if (!requested) return res.status(400).json({ error: 'Society name is required.' });
+        const society = await authorization.resolveSociety(requested);
+        if (!society) return res.status(404).json({ error: 'Society not found.' });
+        const updated = await migrateSocietyLegacyRecords(society);
+        return res.set('Cache-Control', 'no-store').json({ success: true, society: society.name, updated });
+    } catch (err) {
+        console.error('Legacy migration error:', err);
+        return res.status(503).json({ error: 'Legacy records could not be migrated.' });
+    }
+});
+
 // Master login: stamp `societyId` onto spinStats documents that predate the
 // field, so per-society queries (and the console) line up. Returns how many
 // documents were repaired; running it twice is harmless.
@@ -2007,16 +2278,11 @@ app.patch('/api/societies/:societyId/active-guard', requireStaffForSociety(req =
         const activeGuardName = String((req.body && req.body.activeGuardName) || '').trim();
         let activeGuardPhone = null;
         if (activeGuardName) {
-            const aliases = society.aliases.slice(0, 30);
-            const snapshots = await Promise.all([
-                db.collection('guards').where('societyId', '==', society.id).get(),
-                db.collection('guards').where('society', 'in', aliases).get(),
-                db.collection('guards').where('societyName', 'in', aliases).get()
-            ]);
-            const guard = snapshots.flatMap(snapshot => snapshot.docs).find(doc => {
-                const data = doc.data() || {};
-                return recordMatchesSociety(data, doc.id, society) && normalizeAuthValue(data.name) === normalizeAuthValue(activeGuardName);
-            });
+            const guard = (await readSocietyScoped('guards', society, {
+                nameFields: ['society', 'societyName'],
+                flagKey: 'legacyGuardsMigrated',
+                accept: doc => recordMatchesSociety(doc.data() || {}, doc.id, society)
+            })).find(doc => normalizeAuthValue((doc.data() || {}).name) === normalizeAuthValue(activeGuardName));
             if (!guard) return res.status(400).json({ error: 'Selected guard is not registered in this society.' });
             activeGuardPhone = (guard.data() || {}).phone || null;
         }
@@ -2105,6 +2371,16 @@ app.post('/api/maintenance/notices', requireMaster, async (req, res) => {
         return res.status(drained ? 503 : 500).json({ error: drained
             ? 'Job paused: the quota guard is draining; try again later.'
             : 'Could not shift the daily notices right now.' });
+    }
+});
+
+app.post('/api/maintenance/prune-spin-history', requireMaster, async (req, res) => {
+    try {
+        const pruned = await maintenance.pruneSpinHistory();
+        return res.json({ success: true, ...pruned });
+    } catch (err) {
+        console.error('spin history prune failed:', err);
+        return res.status(500).json({ error: 'Could not prune the spin history right now.' });
     }
 });
 

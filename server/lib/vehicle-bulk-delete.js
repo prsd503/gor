@@ -60,9 +60,9 @@ function createVehicleBulkDelete(options) {
 
         const aliases = society.aliases.slice(0, 30);
         const snapshots = await Promise.all([
-            db.collection('vehicles').where('societyId', '==', society.id).get({ fresh: true }),
-            db.collection('vehicles').where('societyName', 'in', aliases).get({ fresh: true }),
-            db.collection('vehicles').where('society', 'in', aliases).get({ fresh: true })
+            db.collection('vehicles').where('societyId', '==', society.id).get(),
+            db.collection('vehicles').where('societyName', 'in', aliases).get(),
+            db.collection('vehicles').where('society', 'in', aliases).get()
         ]);
         const wanted = new Map(plates.map(plate => [plate, []]));
         const seen = new Set();

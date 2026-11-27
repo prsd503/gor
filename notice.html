@@ -70,11 +70,28 @@
             return { 'X-Firebase-AppCheck': appCheckToken };
         }
 
+        // Without a Firebase session the exchange can only answer 400, so it is
+        // skipped and the public notice endpoint is read anonymously.
+        async function getIdTokenIfAvailable() {
+            try {
+                if (typeof window.OWL_GET_ID_TOKEN === 'function') return await window.OWL_GET_ID_TOKEN();
+                if (typeof auth !== 'undefined' && auth && auth.currentUser && typeof auth.currentUser.getIdToken === 'function') {
+                    return await auth.currentUser.getIdToken();
+                }
+            } catch (err) {
+                console.error("Failed to read the Firebase ID token:", err);
+            }
+            return null;
+        }
+
         async function getAuthHeaders() {
             try {
+                const idToken = await getIdTokenIfAvailable();
+                if (!idToken) throw new Error('no-session');
                 const tokenResponse = await fetch(`${API_BASE_URL}/auth/token`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...NG_HEADERS }
+                    headers: { 'Content-Type': 'application/json', ...NG_HEADERS },
+                    body: JSON.stringify({ idToken })
                 });
                 if (tokenResponse.ok) {
                     const tokenData = await tokenResponse.json();

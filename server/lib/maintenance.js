@@ -9,6 +9,13 @@ const cron = require('node-cron');
 const { effectiveNotice } = require('./notices');
 
 const BOOKING_RETENTION_DAYS = 7;
+/* Attempt records exist to stop a duplicate spin for one contest on one day, and
+ * `spinStats` day buckets exist for the lifetime/month totals. Keeping them
+ * forever means every scan (and the storage bill) grows without bound, so the
+ * retention job trims attempts after a week and daily buckets after five years -
+ * long past any reporting window, and neither is ever written again. */
+const ATTEMPT_RETENTION_DAYS = 7;
+const SPIN_STATS_RETENTION_DAYS = 365 * 5;
 
 function createMaintenance(options = {}) {
     const db = options.db;
@@ -39,6 +46,42 @@ function createMaintenance(options = {}) {
         const deleted = await commitChunks(snapshot.docs.map(doc => batch => batch.delete(doc.ref)));
         logger.log(`[maintenance] Removed ${deleted} expired booking(s).`);
         return deleted;
+    }
+
+    function isoDay(offsetDays) {
+        const date = new Date();
+        date.setUTCDate(date.getUTCDate() - offsetDays);
+        return date.toISOString().slice(0, 10);
+    }
+
+    /* Deletes only records that can never be read again: spin attempts older
+     * than a week (the duplicate-spin check only looks at today and yesterday)
+     * and day buckets older than the retention window. Returns what it removed. */
+    async function pruneSpinHistory() {
+        const removed = { attempts: 0, spinStats: 0 };
+        if (options.beforeRun && !await options.beforeRun()) return removed;
+        const attemptBefore = isoDay(ATTEMPT_RETENTION_DAYS);
+        let attempts = null;
+        try {
+            attempts = await db.collection('contestAttempts').where('date', '<', attemptBefore).get();
+        } catch (_) {
+            // Records without a `date` field are matched by `createdAt` instead.
+            attempts = await db.collection('contestAttempts')
+                .where('createdAt', '<', new Date(`${attemptBefore}T00:00:00.000Z`)).get();
+        }
+        if (!attempts.empty) {
+            removed.attempts = await commitChunks(attempts.docs.map(doc => batch => batch.delete(doc.ref)));
+        }
+        try {
+            const stats = await db.collection('spinStats').where('date', '<', isoDay(SPIN_STATS_RETENTION_DAYS)).get();
+            if (!stats.empty) {
+                removed.spinStats = await commitChunks(stats.docs.map(doc => batch => batch.delete(doc.ref)));
+            }
+        } catch (_) { /* A missing index must not fail the whole maintenance run. */ }
+        if (removed.attempts || removed.spinStats) {
+            logger.log(`[maintenance] Pruned ${removed.attempts} spin attempt(s) and ${removed.spinStats} old spin bucket(s).`);
+        }
+        return removed;
     }
 
     async function checkAndShiftNotices() {
@@ -77,6 +120,10 @@ function createMaintenance(options = {}) {
         try {
             result.noticesShifted = await checkAndShiftNotices();
             result.bookingsDeleted = await cleanupOldBookings();
+            // Retention: this is the only job that ever deletes old spin data.
+            const pruned = await pruneSpinHistory();
+            if (pruned.attempts) result.attemptsDeleted = pruned.attempts;
+            if (pruned.spinStats) result.spinStatsDeleted = pruned.spinStats;
             lastRun.at = new Date().toISOString();
             lastRun.noticesShifted = result.noticesShifted;
             lastRun.bookingsDeleted = result.bookingsDeleted;
@@ -100,7 +147,7 @@ function createMaintenance(options = {}) {
         });
     }
 
-    return { cleanupOldBookings, checkAndShiftNotices, runNoticeRollover, runAll, schedule, lastRun, timeZone };
+    return { cleanupOldBookings, checkAndShiftNotices, runNoticeRollover, pruneSpinHistory, runAll, schedule, lastRun, timeZone };
 }
 
-module.exports = { createMaintenance, BOOKING_RETENTION_DAYS };
+module.exports = { createMaintenance, BOOKING_RETENTION_DAYS, ATTEMPT_RETENTION_DAYS, SPIN_STATS_RETENTION_DAYS };
