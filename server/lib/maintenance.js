@@ -109,11 +109,6 @@ function createMaintenance(options = {}) {
         return updated;
     }
 
-    async function runNoticeRollover() {
-        if (options.beforeRun && !await options.beforeRun()) throw new Error('Notice rollover skipped during quota drain.');
-        return checkAndShiftNotices();
-    }
-
     async function runAll() {
         const result = { noticesShifted: 0, bookingsDeleted: 0 };
         if (options.beforeRun && !await options.beforeRun()) return { ...result, skipped: 'quota-drain' };
@@ -147,7 +142,7 @@ function createMaintenance(options = {}) {
         });
     }
 
-    return { cleanupOldBookings, checkAndShiftNotices, runNoticeRollover, pruneSpinHistory, runAll, schedule, lastRun, timeZone };
+    return { cleanupOldBookings, checkAndShiftNotices, pruneSpinHistory, runAll, schedule, lastRun, timeZone };
 }
 
 module.exports = { createMaintenance, BOOKING_RETENTION_DAYS, ATTEMPT_RETENTION_DAYS, SPIN_STATS_RETENTION_DAYS };
