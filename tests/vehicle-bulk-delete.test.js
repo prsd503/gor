@@ -132,8 +132,6 @@ function loadAdmin(t) {
         runScripts: 'outside-only',
         beforeParse(win) {
             win.HTMLCanvasElement.prototype.getContext = () => null;
-            win.__confirms = [];
-            win.confirm = message => { win.__confirms.push(String(message)); return true; };
         }
     });
     const { window } = dom;
@@ -199,13 +197,15 @@ test('bulk delete confirms, deletes once through the API and shows the result', 
     Object.defineProperty(doc.getElementById('excelInput'), 'files', { value: [file], configurable: true });
 
     doc.getElementById('bulkDeleteTopBtn').click();
+    for (let i = 0; i < 20 && doc.getElementById('customModal').style.display !== 'block'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.match(doc.getElementById('modalMessage').textContent, /Delete every vehicle listed in "delete\.csv" from Aangan/, 'the in-page dialog names the file and society');
+    window.runConfirmAction(); // the dialog's confirm button
     for (let i = 0; i < 60 && !window.__deleteBody; i++) await new Promise(resolve => setTimeout(resolve, 10));
     await new Promise(resolve => setTimeout(resolve, 60));
 
     assert.ok(window.__deleteBody, 'the plates reach the API');
     assert.equal(window.__deleteBody.society, 'Aangan');
     assert.deepEqual([...window.__deleteBody.plates], ['GJ01AB1234', 'GJ01CD5678', 'GJ99ZZ0000']);
-    assert.match(window.__confirms[0], /Delete every vehicle listed in "delete\.csv" from Aangan/);
 
     const report = doc.getElementById('bulk-delete-report').textContent;
     assert.match(report, /Deleted 2/);
@@ -230,18 +230,23 @@ test('the master danger-zone button uses the same working flow', async (t) => {
     const file = new window.File([DELETE_CSV], 'delete.csv', { type: 'text/csv' });
     Object.defineProperty(doc.getElementById('excelInput'), 'files', { value: [file], configurable: true });
     doc.getElementById('bulkDeleteBtn').click();
+    for (let i = 0; i < 20 && doc.getElementById('customModal').style.display !== 'block'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    window.runConfirmAction(); // the dialog's confirm button
     for (let i = 0; i < 60 && !window.__deleteBody; i++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.ok(window.__deleteBody, 'the danger-zone button also reaches the API');
 });
 
 test('cancelling the confirmation deletes nothing', async (t) => {
     const { window, doc } = loadAdmin(t);
-    window.confirm = () => false;
     const file = new window.File([DELETE_CSV], 'delete.csv', { type: 'text/csv' });
     Object.defineProperty(doc.getElementById('excelInput'), 'files', { value: [file], configurable: true });
     doc.getElementById('bulkDeleteTopBtn').click();
+    for (let i = 0; i < 20 && doc.getElementById('customModal').style.display !== 'block'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(doc.getElementById('customModal').style.display, 'block', 'the in-page dialog asks before deleting');
+    window.closeModal(); // closing the dialog cancels the pending action
     await new Promise(resolve => setTimeout(resolve, 120));
     assert.equal(window.__deleteBody, undefined, 'nothing is sent');
+    assert.equal(doc.getElementById('customModal').style.display, 'none', 'the dialog is closed');
 });
 
 test('a missing file is reported instead of silently doing nothing', async (t) => {

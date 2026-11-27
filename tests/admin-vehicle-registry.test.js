@@ -16,7 +16,6 @@ function loadAdmin(t, { society = 'Aangan', vehicles = [], searchResult } = {}) 
         url: 'https://owlwatcher.test/admin.html',
         runScripts: 'outside-only',
         beforeParse(win) {
-            win.confirm = () => true;
             win.__modal = [];
             win.HTMLCanvasElement.prototype.getContext = () => null;
         }
@@ -24,7 +23,6 @@ function loadAdmin(t, { society = 'Aangan', vehicles = [], searchResult } = {}) 
     const { window } = dom;
     const calls = [];
     window.OWL_API_BASE = 'https://api.test/api';
-    window.alert = () => {};
     window.fetch = async (url, options = {}) => {
         const parsed = new URL(String(url), window.location.href);
         calls.push({ url: parsed, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null });
@@ -117,8 +115,11 @@ test('edit fills the form from the searched record, and delete removes that docu
 
     view.doc.querySelector('[data-action="delete"]').click();
     await view.settle();
+    assert.equal(view.doc.getElementById('customModal').style.display, 'block', 'deleting asks for confirmation in the in-page dialog');
+    view.window.runConfirmAction(); // the dialog's confirm button
+    await view.settle();
     const del = view.calls.find(c => c.method === 'DELETE');
-    assert.ok(del, 'delete calls the API');
+    assert.ok(del, 'delete calls the API only after the dialog is confirmed');
     assert.equal(del.url.pathname, '/api/vehicles/yoUtwBhYTKkPJQPMh9ze', 'the record id is the one from Firestore');
     assert.match(view.doc.getElementById('admin-results').innerHTML, /was deleted/);
 });

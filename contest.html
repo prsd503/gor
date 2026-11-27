@@ -107,6 +107,16 @@
     </div>
 </div>
 
+<!-- Generic notice modal: the app uses in-page dialogs instead of browser alerts. -->
+<div id="noticeModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="noticeModalTitle">
+    <div class="modal-content">
+        <span class="close" role="button" tabindex="0" aria-label="Close" onclick="document.getElementById('noticeModal').style.display='none'">&times;</span>
+        <h2 id="noticeModalTitle"></h2>
+        <p id="noticeModalText"></p>
+        <button type="button" class="btn btn-secondary btn-block" onclick="document.getElementById('noticeModal').style.display='none'">OK</button>
+    </div>
+</div>
+
 <script type="module">
     import { Device } from 'https://cdn.jsdelivr.net/npm/@capacitor/device@latest/+esm';
     const API_BASE_URL = (window.OWL_API_BASE || 'https://us-central1-finder-owl.cloudfunctions.net/api');
@@ -126,7 +136,12 @@
     const attemptsKey = `attempts_ad_${contestId}`;
     const blockKey = `failed_ad_${contestId}`;
     const passedKey = `passed_ad_${contestId}`;
+    // Once this device wins the contest, the page reopens in a restricted
+    // "already won" state instead of offering another spin.
+    const wonKey = `won_ad_${contestId}`;
+    const wonCodeKey = `won_code_ad_${contestId}`;
     let winningPayload = null;
+    let alreadyWon = false;
 
     async function getDeviceIdentifier() {
         try {
@@ -150,14 +165,30 @@
         text.textContent = message;
         area.appendChild(text);
     }
+    function showNoticeModal(title, message) {
+        document.getElementById('noticeModalTitle').textContent = title;
+        document.getElementById('noticeModalText').textContent = message;
+        document.getElementById('noticeModal').style.display = 'block';
+    }
     function showSpinOrSociety() {
         document.getElementById('contestArea').style.display = 'none';
         if (isRegistered) {
             document.getElementById('societySection').style.display = 'block';
         } else {
             validatedSocietyName = 'Guest';
-            document.getElementById('spinSection').style.display = 'block';
+            enterSpinSection();
         }
+    }
+    function enterSpinSection() {
+        document.getElementById('spinSection').style.display = 'block';
+        if (!alreadyWon) return;
+        document.getElementById('rollerDisplay').textContent = '🎉 Already won';
+        document.getElementById('spinNotice').textContent = 'This device has already won this contest, so there are no more spins.';
+        const button = document.getElementById('spinBtn');
+        button.style.display = 'inline-flex';
+        button.disabled = false;
+        button.textContent = 'View winning details';
+        button.onclick = () => showWinningDetails({});
     }
     function showAttempts(remaining) {
         document.getElementById('attemptsNotice').textContent = `⚠️ You have ${remaining} attempt${remaining === 1 ? '' : 's'} left for this contest.`;
@@ -179,13 +210,14 @@
                 contestError('Incorrect. You have used your 2 attempts for this contest.');
             } else {
                 showAttempts(2 - attempts);
-                alert('Incorrect answer. You have 1 attempt left.');
+                showNoticeModal('Incorrect answer', 'You have 1 attempt left for this contest.');
             }
         } catch (_) {
             contestError('Device storage is unavailable. Enable it and reload to play.');
         }
     }
     async function loadContest() {
+        if (localStorage.getItem(wonKey) === 'true') { alreadyWon = true; showSpinOrSociety(); return; }
         if (localStorage.getItem(passedKey) === 'true') { showSpinOrSociety(); return; }
         const attempts = Math.max(0, Number.parseInt(localStorage.getItem(attemptsKey) || '0', 10) || 0);
         if (localStorage.getItem(blockKey) || attempts >= 2) {
@@ -254,7 +286,7 @@
             validatedSocietyName = name;
             linkedFlatNumber = String(record.flatNumber).trim();
             document.getElementById('societySection').style.display = 'none';
-            document.getElementById('spinSection').style.display = 'block';
+            enterSpinSection();
         } catch (err) { error.textContent = err.message || 'Could not verify the society.'; error.style.display = 'block'; }
     }
     window.verifySocietyAndProceed = verifySocietyAndProceed;
@@ -281,13 +313,19 @@
         document.getElementById('retryWinnerBtn').style.display = 'none';
         document.getElementById('winningCode').textContent = '';
         if (!isRegistered) {
-            if (!/^[1-9]\d{8}$/.test(String(payload.winningCode || ''))) {
+            // After a reload the code comes from device storage, not the payload.
+            let code = String(payload.winningCode || '');
+            if (!/^[1-9]\d{8}$/.test(code)) {
+                try { code = String(localStorage.getItem(wonCodeKey) || ''); } catch (_) { code = ''; }
+            }
+            if (!/^[1-9]\d{8}$/.test(code)) {
                 document.getElementById('winnerDetails').textContent = 'A newer guest win has replaced the latest code, and this device has no saved copy. Please contact the team.';
                 return;
             }
+            try { localStorage.setItem(wonKey, 'true'); } catch (_) { /* non-fatal */ }
             document.getElementById('winnerDetails').textContent = 'Your guest win is registered. Keep this code and send it to the Owl Watcher team.';
-            document.getElementById('winningCode').textContent = `Winning code: ${payload.winningCode}`;
-            await setWhatsApp(`Hello Owl Watcher team, I won the contest as a guest. My winning code is ${payload.winningCode}. Please verify my win.`);
+            document.getElementById('winningCode').textContent = `Winning code: ${code}`;
+            await setWhatsApp(`Hello Owl Watcher team, I won the contest as a guest. My winning code is ${code}. Please verify my win.`);
             return;
         }
         document.getElementById('winnerDetails').textContent = 'Verifying your registered winning details…';
@@ -296,6 +334,7 @@
                 body: JSON.stringify({ societyName: validatedSocietyName, flatNumber: linkedFlatNumber, deviceId, contestId, recover: true }) });
             const result = await res.json();
             if (!res.ok) throw new Error(result.error || 'Winner verification failed.');
+            try { localStorage.setItem(wonKey, 'true'); } catch (_) { /* non-fatal */ }
             document.getElementById('winnerDetails').textContent = `Registered win: ${result.societyName}, flat/name ${result.flatNumber}.`;
             await setWhatsApp(`Hello Owl Watcher team, I won the contest. Society: ${result.societyName}. Flat number/name: ${result.flatNumber}. Please verify my win.`);
         } catch (err) {
@@ -329,8 +368,12 @@
             if (!isRegistered && data.won && typeof data.attemptId === 'string') {
                 const codeKey = `guest_winning_code_${data.attemptId}`;
                 try {
-                    if (/^[1-9]\d{8}$/.test(String(data.winningCode || ''))) localStorage.setItem(codeKey, String(data.winningCode));
-                    else data.winningCode = localStorage.getItem(codeKey);
+                    if (/^[1-9]\d{8}$/.test(String(data.winningCode || ''))) {
+                        localStorage.setItem(codeKey, String(data.winningCode));
+                        localStorage.setItem(wonCodeKey, String(data.winningCode));
+                    } else {
+                        data.winningCode = localStorage.getItem(codeKey) || localStorage.getItem(wonCodeKey);
+                    }
                 } catch (_) { /* The current response still contains the code when available. */ }
             }
             if (data.won) {

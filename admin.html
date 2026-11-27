@@ -145,6 +145,18 @@
             </div>
         </section>
 
+        <!-- Maintenance jobs (master login only). Run on demand — there is no
+             scheduled Cloud Run job anymore, so nothing happens until pressed. -->
+        <section class="card card-subtle" id="masterMaintenanceSection" style="display: none;" aria-labelledby="maintenanceTitle">
+            <h2 id="maintenanceTitle">🔧 Scheduled jobs (run on demand)</h2>
+            <p class="note small">Nothing runs on a schedule anymore. Press a button when you want the job to run; each one works across <b>all societies</b>. Both jobs are safe to repeat — if a large run times out, press the same button again to continue.</p>
+            <div class="form-actions">
+                <button type="button" id="btnShiftNotices" class="btn-secondary">Shift daily notices (12am IST rollover)</button>
+                <button type="button" id="btnCleanupBookings" class="btn-secondary">Delete facility bookings older than 7 days</button>
+            </div>
+            <p id="maintenanceStatus" class="note" role="status"></p>
+        </section>
+
         <!-- Spin Statistics Widget (Visible only to MasterAdmin) -->
         <section class="card card-subtle" id="masterAdminSpinSection" style="display: none;" aria-labelledby="spinTitle">
             <h2 id="spinTitle">📊 Society spin counts</h2>
@@ -373,6 +385,8 @@
                 if (masterPanel) masterPanel.style.display = "none";
                 const spinSection = document.getElementById("masterAdminSpinSection");
                 if (spinSection) spinSection.style.display = "none";
+                const maintenanceSection = document.getElementById("masterMaintenanceSection");
+                if (maintenanceSection) maintenanceSection.style.display = "none";
             });
         });
 

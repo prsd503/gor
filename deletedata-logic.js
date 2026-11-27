@@ -64,6 +64,12 @@ function openWhatsApp(url) {
     if (!opened) window.location.href = url;
 }
 
+function showDeleteModal(title, message) {
+    document.getElementById('deleteModalTitle').textContent = title;
+    document.getElementById('deleteModalText').textContent = message;
+    document.getElementById('deleteModal').style.display = 'block';
+}
+
 function showSocietyLabel() {
     const label = document.getElementById('societyLabel');
     if (!label) return;
@@ -105,11 +111,12 @@ onAuthStateChanged(auth, async (user) => {
         btn.addEventListener('click', () => {
             const option = document.getElementById('deleteOption').value;
             const details = document.getElementById('details').value.trim();
-            if (option === 'Specific Vehicle' && !details) {
-                alert("Enter the vehicle number you want removed, or choose another option.");
-                return;
-            }
+        if (option === 'Specific Vehicle' && !details) {
+            showDeleteModal('Enter the vehicle number', 'Enter the vehicle number you want removed, or choose another option.');
+            return;
+        }
             const message = buildRequestMessage(user, option, details);
+            showDeleteModal('WhatsApp opened', 'Send the message to complete the request. Our team will process it.');
             openWhatsApp(`https://wa.me/${teamPhone}?text=${message}`);
         });
     }

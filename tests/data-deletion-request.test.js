@@ -21,7 +21,6 @@ function page(t, { user, teamPhone, society, societyId }) {
     const { window } = dom;
     window.OWL_API_BASE = 'https://api.test/api';
     window.__authCallback = null;
-    window.alert = message => { window.__alert = message; };
 
     const calls = [];
     window.fetch = async (url, options = {}) => {
@@ -91,7 +90,8 @@ test('a specific-vehicle request without a number asks for it instead of sending
     view.doc.getElementById('submitDeleteReq').click();
     await settle();
     assert.equal(view.window.__opened.length, 0, 'nothing is sent');
-    assert.match(view.window.__alert, /vehicle number/i);
+    assert.equal(view.doc.getElementById('deleteModal').style.display, 'block', 'the missing number is an in-page modal, not a browser alert');
+    assert.match(view.doc.getElementById('deleteModalText').textContent, /vehicle number/i);
 });
 
 test('the page falls back safely when the number or the society cannot be loaded', async (t) => {

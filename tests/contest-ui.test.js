@@ -10,7 +10,6 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 10));
 function harness(handler) {
     const dom = new JSDOM(html, { url: 'https://owl.test/contest.html?adImg=https%3A%2F%2Fexample.com%2Fad.png', runScripts: 'outside-only' });
     const { window } = dom;
-    window.alert = () => {};
     window.fetch = async (url, init = {}) => {
         const result = await handler(new URL(url), init);
         return { ok: result.status >= 200 && result.status < 300, status: result.status, json: async () => result.body };
@@ -120,5 +119,48 @@ test('guest can restore its device-cached winning code after another winner over
     await win.executeSpin();
     assert.match(win.document.querySelector('#winningCode').textContent, /123456789/);
     assert.match(new URL(win.document.querySelector('#winnerWhatsApp').href).searchParams.get('text'), /123456789/);
+    win.close();
+});
+
+test('a device that already won the contest reopens it in a restricted state, not a spin', async () => {
+    const adUrl = 'https://example.com/ad.png';
+    const win = harness(url => {
+        if (url.pathname.includes('/verify-device/')) return ok({ registered: false });
+        throw new Error(url.pathname);
+    });
+    win.localStorage.setItem(`won_ad_${adUrl}`, 'true');
+    win.localStorage.setItem(`won_code_ad_${adUrl}`, '882419573');
+    win.localStorage.setItem(`passed_ad_${adUrl}`, 'true');
+    win.localStorage.setItem(`attempts_ad_${adUrl}`, '2');
+    await win.onload();
+
+    assert.equal(win.document.querySelector('#spinSection').style.display, 'block', 'the guest goes straight to the result section');
+    assert.match(win.document.querySelector('#rollerDisplay').textContent, /Already won/);
+    assert.match(win.document.querySelector('#spinNotice').textContent, /already won/i, 'the restricted state is explained');
+    const button = win.document.querySelector('#spinBtn');
+    assert.equal(button.style.display, 'inline-flex', 'the button offers the record, not another spin');
+    assert.match(button.textContent, /View winning details/);
+
+    button.click();
+    await tick();
+    assert.equal(win.document.querySelector('#resultModal').style.display, 'block', 'the winning details open');
+    assert.match(win.document.querySelector('#winningCode').textContent, /882419573/, 'the saved code is restored for the record');
+    assert.match(win.document.querySelector('#winnerDetails').textContent, /registered/);
+    win.close();
+});
+
+test('an incorrect answer with one attempt left is an in-page modal, not a browser alert', async () => {
+    const win = harness(url => {
+        if (url.pathname.includes('/verify-device/')) return ok({ registered: false });
+        if (url.pathname.endsWith('/ads/global')) return ads();
+        throw new Error(url.pathname);
+    });
+    await win.onload();
+    win.document.querySelectorAll('#optionsContainer button')[1].click(); // the wrong option
+    await tick();
+    assert.equal(win.document.querySelector('#noticeModal').style.display, 'block', 'the notice is an in-page modal');
+    assert.match(win.document.querySelector('#noticeModalTitle').textContent, /Incorrect answer/);
+    assert.match(win.document.querySelector('#noticeModalText').textContent, /1 attempt left/);
+    assert.match(win.document.querySelector('#attemptsNotice').textContent, /1 attempt/, 'the remaining attempt is still playable');
     win.close();
 });

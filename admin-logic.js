@@ -11,15 +11,29 @@ let teamPhone = "919033406816";
 let isMasterAdminUser = false;
 
 // --- UI & Global Helpers ---
-window.showModal = (msg, showConfirm = false) => {
+// The app never uses window.alert/confirm: every message and confirmation is
+// an in-page dialog so it keeps working inside the native WebView.
+window.showModal = (msg, showConfirm = false, confirmLabel) => {
     // textContent (not innerText) so the message is real text everywhere,
     // including when the dialog is measured by non-browser renderers.
     document.getElementById('modalMessage').textContent = msg;
     const confirmBtn = document.getElementById('confirmDeleteBtn');
-    if (confirmBtn) confirmBtn.style.display = showConfirm ? 'inline-block' : 'none';
+    if (confirmBtn) {
+        confirmBtn.style.display = showConfirm ? 'inline-block' : 'none';
+        confirmBtn.textContent = confirmLabel || "Confirm delete";
+    }
     document.getElementById('customModal').style.display = 'block';
 };
-window.closeModal = () => { document.getElementById('customModal').style.display = 'none'; };
+window.closeModal = () => {
+    document.getElementById('customModal').style.display = 'none';
+    window.runConfirmAction = null;
+};
+// Replacement for window.confirm: the action only runs after the user presses
+// the dialog's confirm button; closing the dialog cancels it.
+window.confirmAction = (message, action, confirmLabel) => {
+    window.runConfirmAction = () => { window.closeModal(); action(); };
+    window.showModal(message, true, confirmLabel);
+};
 
 window.downloadCSV = async function(content, filename) {
     try {
@@ -105,7 +119,33 @@ window.addEventListener("DOMContentLoaded", async () => {
         if (masterPanel) masterPanel.style.display = "none";
         const spinSection = document.getElementById("masterAdminSpinSection");
         if (spinSection) spinSection.style.display = "none";
+        const maintenanceSection = document.getElementById("masterMaintenanceSection");
+        if (maintenanceSection) maintenanceSection.style.display = "none";
     });
+
+    // --- Master maintenance jobs -------------------------------------------
+    // On-demand replacements for the old scheduled Cloud Run job. Only the
+    // master portal can see the buttons; the server re-checks requireMaster.
+    const maintenanceStatus = document.getElementById("maintenanceStatus");
+    async function runMaintenanceJob(job, button) {
+        button.disabled = true;
+        if (maintenanceStatus) maintenanceStatus.textContent = "Running " + job + "…";
+        try {
+            const res = await authenticatedFetch(`${API_BASE_URL}/maintenance/${job}`, { method: "POST" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+            if (maintenanceStatus) maintenanceStatus.textContent = job === "notices"
+                ? `Done — shifted ${data.shifted} notice(s) across all societies.`
+                : `Done — deleted ${data.deleted} expired booking(s) (older than 7 days) across all societies.`;
+        } catch (err) {
+            console.error("Maintenance job failed:", err);
+            if (maintenanceStatus) maintenanceStatus.textContent = `Could not run the job: ${err.message}`;
+        } finally {
+            button.disabled = false;
+        }
+    }
+    document.getElementById("btnShiftNotices")?.addEventListener("click", e => runMaintenanceJob("notices", e.currentTarget));
+    document.getElementById("btnCleanupBookings")?.addEventListener("click", e => runMaintenanceJob("bookings", e.currentTarget));
 });
 
 
@@ -190,24 +230,25 @@ async function repairSpinData() {
         (document.getElementById('masterSocietyInput') || {}).value || '';
     const resultDiv = document.getElementById('spinStatsResult');
     if (!societyName) return window.showModal("Enter the society name first, then repair its spin data.");
-    if (!window.confirm(`Rewrite the societyId on ${societyName}'s spin documents? This only adds the missing field.`)) return;
-    if (resultDiv) resultDiv.innerHTML = "Repairing spin data...";
-    try {
-        const res = await authenticatedFetch(`${API_BASE_URL}/contest/spinstats/backfill`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ societyName })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `Repair failed (${res.status})`);
-        window.showModal(data.updated
-            ? `${data.society}: repaired ${data.updated} spin document(s). Reload the counts now.`
-            : `${data.society}: every spin document already had its societyId.`);
-        await fetchSocietySpins();
-    } catch (err) {
-        if (resultDiv) resultDiv.innerHTML = "";
-        window.showModal("Repair failed: " + (err.message || err));
-    }
+    window.confirmAction(`Rewrite the societyId on ${societyName}'s spin documents? This only adds the missing field.`, async () => {
+        if (resultDiv) resultDiv.innerHTML = "Repairing spin data...";
+        try {
+            const res = await authenticatedFetch(`${API_BASE_URL}/contest/spinstats/backfill`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ societyName })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `Repair failed (${res.status})`);
+            window.showModal(data.updated
+                ? `${data.society}: repaired ${data.updated} spin document(s). Reload the counts now.`
+                : `${data.society}: every spin document already had its societyId.`);
+            await fetchSocietySpins();
+        } catch (err) {
+            if (resultDiv) resultDiv.innerHTML = "";
+            window.showModal("Repair failed: " + (err.message || err));
+        }
+    }, "Rewrite");
 }
 
 window.fetchSocietySpins = fetchSocietySpins;
@@ -393,18 +434,19 @@ window.editVehicle = (docId) => {
 window.deleteVehicleDoc = async (docId) => {
     const record = registryCache.get(docId);
     const label = record ? record.vehicleNumber : 'this vehicle';
-    if (!window.confirm(`Delete ${label} from the society registry? This cannot be undone.`)) return;
-    try {
-        const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/${encodeURIComponent(docId)}`, { method: 'DELETE' });
-        if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            throw new Error(body.error || `Delete failed (${res.status})`);
+    window.confirmAction(`Delete ${label} from the society registry? This cannot be undone.`, async () => {
+        try {
+            const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/${encodeURIComponent(docId)}`, { method: 'DELETE' });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `Delete failed (${res.status})`);
+            }
+            registryCache.delete(docId);
+            renderVehicleResults([...registryCache.values()], `Updated: ${label} was deleted.`);
+        } catch (err) {
+            window.showModal("Failed to delete vehicle record: " + (err.message || err));
         }
-        registryCache.delete(docId);
-        renderVehicleResults([...registryCache.values()], `Updated: ${label} was deleted.`);
-    } catch (err) {
-        window.showModal("Failed to delete vehicle record: " + (err.message || err));
-    }
+    });
 };
 
 // `registryCache` keeps the last search results so Edit can fill the form.
@@ -1268,6 +1310,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Display the Spin Count Analytics Section specifically for MasterAdmin
                         const spinSection = document.getElementById('masterAdminSpinSection');
                         if (spinSection) spinSection.style.display = 'block';
+
+                        // On-demand maintenance jobs (no scheduled Cloud Run job)
+                        const maintenanceSection = document.getElementById('masterMaintenanceSection');
+                        if (maintenanceSection) maintenanceSection.style.display = 'block';
                     }
                     
                     if (assignedSociety) {
@@ -1472,18 +1518,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.deleteBooking = async (bookingDocId) => {
         if (!bookingDocId) return;
-        if (!window.confirm("Delete this booking? This cannot be undone.")) return;
-        try {
-            const res = await authenticatedFetch(`${API_BASE_URL}/bookings/${encodeURIComponent(bookingDocId)}`, { method: 'DELETE' });
-            if (!res.ok) {
-                const body = await res.json().catch(() => ({}));
-                throw new Error(body.error || `Delete failed (${res.status})`);
+        window.confirmAction("Delete this booking? This cannot be undone.", async () => {
+            try {
+                const res = await authenticatedFetch(`${API_BASE_URL}/bookings/${encodeURIComponent(bookingDocId)}`, { method: 'DELETE' });
+                if (!res.ok) {
+                    const body = await res.json().catch(() => ({}));
+                    throw new Error(body.error || `Delete failed (${res.status})`);
+                }
+                window.showModal("Booking deleted.");
+                loadActiveBookings();
+            } catch (err) {
+                window.showModal("Failed to delete booking: " + (err.message || err));
             }
-            window.showModal("Booking deleted.");
-            loadActiveBookings();
-        } catch (err) {
-            window.showModal("Failed to delete booking: " + (err.message || err));
-        }
+        });
     };
 
     document.getElementById('importBtn')?.addEventListener('click', async () => {
@@ -1558,39 +1605,39 @@ document.addEventListener('DOMContentLoaded', () => {
         const file = document.getElementById('excelInput').files[0];
         if (!file) return window.showModal("Choose the CSV file listing the vehicles to delete.");
         if (!assignedSociety) return window.showModal("Your admin account is not assigned to a society yet.");
-        if (!window.confirm(`Delete every vehicle listed in "${file.name}" from ${assignedSociety}? This cannot be undone.`)) return;
+        window.confirmAction(`Delete every vehicle listed in "${file.name}" from ${assignedSociety}? This cannot be undone.`, async () => {
+            const button = document.getElementById('bulkDeleteTopBtn');
+            const report = document.getElementById('bulk-delete-report');
+            if (button) button.disabled = true;
+            if (report) report.innerHTML = "<p class='small' style='color: var(--ow-muted);'>Deleting the listed vehicles…</p>";
 
-        const button = document.getElementById('bulkDeleteTopBtn');
-        const report = document.getElementById('bulk-delete-report');
-        if (button) button.disabled = true;
-        if (report) report.innerHTML = "<p class='small' style='color: var(--ow-muted);'>Deleting the listed vehicles…</p>";
+            try {
+                const text = await readFileText(file);
+                const plates = parseVehiclePlateCsv(text);
+                if (!plates.length) throw new Error("No vehicle numbers found in the file.");
 
-        try {
-            const text = await readFileText(file);
-            const plates = parseVehiclePlateCsv(text);
-            if (!plates.length) throw new Error("No vehicle numbers found in the file.");
+                const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/bulk-delete`, {
+                    method: 'POST',
+                    body: JSON.stringify({ society: assignedSociety, plates })
+                });
+                const summary = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(summary.error || `Bulk delete failed (${res.status})`);
 
-            const res = await authenticatedFetch(`${API_BASE_URL}/vehicles/bulk-delete`, {
-                method: 'POST',
-                body: JSON.stringify({ society: assignedSociety, plates })
-            });
-            const summary = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(summary.error || `Bulk delete failed (${res.status})`);
-
-            renderBulkDeleteReport(summary);
-            window.showModal(bulkDeleteHeadline(summary));
-            // The registry changed under any open search results.
-            const results = document.getElementById('admin-results');
-            if (results && registryCache.size) {
-                registryCache.clear();
-                if (document.getElementById('adminSearch').value.trim()) document.getElementById('adminSearchBtn')?.click();
+                renderBulkDeleteReport(summary);
+                window.showModal(bulkDeleteHeadline(summary));
+                // The registry changed under any open search results.
+                const results = document.getElementById('admin-results');
+                if (results && registryCache.size) {
+                    registryCache.clear();
+                    if (document.getElementById('adminSearch').value.trim()) document.getElementById('adminSearchBtn')?.click();
+                }
+            } catch (err) {
+                if (report) report.innerHTML = "";
+                window.showModal("Bulk delete failed: " + (err.message || err));
+            } finally {
+                if (button) button.disabled = false;
             }
-        } catch (err) {
-            if (report) report.innerHTML = "";
-            window.showModal("Bulk delete failed: " + (err.message || err));
-        } finally {
-            if (button) button.disabled = false;
-        }
+        });
     }
 
     document.getElementById('bulkDeleteTopBtn')?.addEventListener('click', runBulkVehicleDelete);

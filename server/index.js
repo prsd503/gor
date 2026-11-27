@@ -2089,6 +2089,38 @@ app.patch('/api/ads/:adKey', requireMaster, async (req, res) => {
     } catch (_) { return res.status(500).json({ error: 'Could not update the advertisement.' }); }
 });
 
+// --- MAINTENANCE (master admin only) ---------------------------------------
+// On-demand replacements for the old scheduled Cloud Run job. Nothing on
+// Firebase runs on a timer anymore: the master portal triggers each job by
+// pressing a button, and both jobs are idempotent, so a run that times out
+// mid-way can simply be triggered again to continue. Each job still checks
+// the quota guard (via maintenance's beforeRun) between chunks.
+app.post('/api/maintenance/notices', requireMaster, async (req, res) => {
+    try {
+        const shifted = await maintenance.runNoticeRollover();
+        return res.json({ success: true, shifted });
+    } catch (err) {
+        console.error('notice rollover failed:', err);
+        const drained = /quota drain/i.test(err.message || '');
+        return res.status(drained ? 503 : 500).json({ error: drained
+            ? 'Job paused: the quota guard is draining; try again later.'
+            : 'Could not shift the daily notices right now.' });
+    }
+});
+
+app.post('/api/maintenance/bookings', requireMaster, async (req, res) => {
+    try {
+        const deleted = await maintenance.cleanupOldBookings();
+        return res.json({ success: true, deleted });
+    } catch (err) {
+        console.error('booking cleanup failed:', err);
+        const drained = /quota drain/i.test(err.message || '');
+        return res.status(drained ? 503 : 500).json({ error: drained
+            ? 'Job paused: the quota guard is draining; try again later.'
+            : 'Could not remove expired bookings right now.' });
+    }
+});
+
 // --- FALLBACKS ---
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
