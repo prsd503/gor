@@ -5,6 +5,8 @@
     <!-- API endpoint + automatic failover (Firebase <-> MacBook). Must load before any page script. -->
     <script src="api-env.js"></script>
     <script src="api-config.js"></script>
+    <!-- Society/email hand-off for the deletion request pages. -->
+    <script src="request-context.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&display=swap" rel="stylesheet">
     <title>Owl Watcher | Admin</title>
@@ -348,8 +350,8 @@
                 <h2 id="dangerTitle">Danger zone</h2>
                 <p class="muted small">These actions permanently remove data.</p>
                 <div class="form-actions">
-                    <a href="deletedata.html" class="contact-btn" target="_blank">Bulk data delete</a>
-                    <a href="delete.html" class="btn btn-danger" target="_blank">Delete full account</a>
+                    <button type="button" id="openDataDeleteBtn" class="btn btn-secondary">Bulk data delete</button>
+                    <button type="button" id="openAccountDeleteBtn" class="btn btn-danger">Delete full account</button>
                 </div>
             </section>
         </div>

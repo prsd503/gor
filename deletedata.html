@@ -5,6 +5,8 @@
     <!-- API endpoint + automatic failover (Firebase <-> MacBook). Must load before any page script. -->
     <script src="api-env.js"></script>
     <script src="api-config.js"></script>
+    <!-- Society/email hand-off for the deletion request pages. -->
+    <script src="request-context.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Data | Owl Watcher</title>
     <style>
@@ -49,9 +51,9 @@
             </select>
             <label for="details">Vehicle number (if specific)</label>
             <input type="text" id="details" placeholder="Enter Vehicle Number (if specific)" maxlength="40">
-            <p class="muted small">Your request opens WhatsApp with your society name, the request type and your admin email already filled in.</p>
+            <p class="muted small" id="whatsappHint">Your request opens a WhatsApp chat with the Owl Watcher team (the number is read from our config), with your society name, the request type and your admin email already filled in.</p>
             <div class="form-actions">
-                <button type="button" id="submitDeleteReq" class="btn-success">Submit request via WhatsApp</button>
+                <button type="button" id="submitDeleteReq" class="btn-success" disabled>Submit request via WhatsApp</button>
             </div>
         </section>
 
