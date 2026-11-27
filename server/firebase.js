@@ -24,9 +24,16 @@ setGlobalOptions({
     maxInstances: Number(process.env.MAX_INSTANCES),
     concurrency: Number(process.env.CONCURRENCY),
     memory: '256MiB',
-    timeoutSeconds: 60,
+    // No route legitimately needs a minute: the slowest is a bulk import or a
+    // migration, which are page-sized. A shorter ceiling caps what a stuck
+    // request (and its instance time) can cost.
+    timeoutSeconds: 30,
     minInstances: 0
 });
+
+// Responses are compressed by the Cloud Functions/Cloud Run front end, so no
+// `compression` middleware is needed (it would only add CPU time inside the
+// function). Static hosting on the MacBook fallback is handled by Express there.
 
 // The direct Function URL strips the /api name from the path; normalize once
 // so the gated Express routes work unchanged.

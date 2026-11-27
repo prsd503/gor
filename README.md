@@ -12,6 +12,8 @@
 - [MacBook setup and testing guide](docs/macbook-testing.md)
 - [GitHub Pages → MacBook HTTPS preview and security checklist](docs/github-pages-macbook.md)
 - [Firebase deployment, 80% quota guard, optional failover and migration guide](docs/deployment.md)
+- [Reducing Firebase cost: audit and action plan](docs/firebase-cost-reduction.md) —
+  where the free allowance actually goes, and the cheapest fixes first
 
 The guard pauses application work at 80% of a tracked usage budget. Firebase
 Cloud Functions requires Blaze; delayed metrics and rejected-request invocations

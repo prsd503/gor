@@ -34,7 +34,9 @@ function createQuotaGuard(options = {}) {
     const fallbackUrls = parseFallbackUrls(
         options.fallbackUrls !== undefined ? options.fallbackUrls : (env.QUOTA_FALLBACK_URLS || env.QUOTA_FALLBACK_URL)
     );
-    const refreshMs = Math.max(5000, Number(options.refreshMs || env.QUOTA_REFRESH_MS || 60000) || 60000);
+    /* Monitoring time series are billed per call; a 5 minute window is still far
+     * inside the free band while cutting those calls to a fifth. */
+    const refreshMs = Math.max(5000, Number(options.refreshMs || env.QUOTA_REFRESH_MS || 300000) || 300000);
     const now = typeof options.now === 'function' ? options.now : () => new Date();
     const logger = options.logger || console;
     const fetchUsage = typeof options.fetchUsage === 'function' ? options.fetchUsage : null;

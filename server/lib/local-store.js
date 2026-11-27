@@ -93,7 +93,9 @@ function compareValues(left, right) {
 }
 
 function matchesFilter(data, filter) {
-    const actual = fieldValue(data, filter.field);
+    // `FieldPath.documentId()` shows up as '__name__'; real Firestore supports
+    // it, and the API uses it for exact document-id lookups.
+    const actual = filter.field === '__name__' ? data.__id : fieldValue(data, filter.field);
     const expected = filter.value instanceof Date ? filter.value.toISOString() : filter.value;
     switch (filter.operator) {
         case '==': return actual === expected;
@@ -238,7 +240,7 @@ function createLocalStore(options = {}) {
 
     function runQuery(name, descriptor) {
         const docs = store.collections[name] || {};
-        let entries = Object.entries(docs).map(([id, data]) => ({ id, data }));
+        let entries = Object.entries(docs).map(([id, data]) => ({ id, data, __id: id }));
         if (descriptor.filters.length) {
             entries = entries.filter(entry => descriptor.filters.every(filter => matchesFilter(entry.data, filter)));
         }
@@ -275,6 +277,17 @@ function createLocalStore(options = {}) {
             },
             limit(count) {
                 return query(name, { ...descriptor, limit: count });
+            },
+            /* Firestore's aggregate API: `count()` costs about one read per
+             * thousand documents instead of one read per document. The local
+             * store answers from memory; the read is reported by the db layer. */
+            count() {
+                return {
+                    async get() {
+                        await queue;
+                        return { data: () => ({ count: runQuery(name, descriptor).size }) };
+                    }
+                };
             },
             async get() {
                 await queue;

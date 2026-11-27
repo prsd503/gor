@@ -10,9 +10,16 @@ function strings(value) {
     return [];
 }
 
+// Membership records change rarely but are read on every staff request (and
+// several times per request). A short cache makes repeat requests nearly free
+// while keeping revocation bound to a few seconds. Reads that must observe a
+// brand-new write pass `ttlMs: 0`.
+const MEMBERSHIP_CACHE_MS = 5000;
+
 function createAuthorization(options) {
     const db = options.db;
     const authMode = options.authMode || 'firebase';
+    const membershipTtlMs = options.membershipTtlMs !== undefined ? options.membershipTtlMs : MEMBERSHIP_CACHE_MS;
     if (!db) throw new Error('createAuthorization requires a database handle.');
 
     async function resolveSociety(identifier) {
@@ -20,13 +27,13 @@ function createAuthorization(options) {
         if (!target || target.length > 160 || target.includes('/')) return null;
 
         try {
-            const direct = await db.collection('societies').doc(String(identifier).trim()).get({ fresh: true });
+            const direct = await db.collection('societies').doc(String(identifier).trim()).get();
             if (direct.exists) return societyResult(direct.id, direct.data());
         } catch (_) {
             // A legacy display-name identifier is not a valid document path.
         }
 
-        const snapshot = await db.collection('societies').get({ fresh: true });
+        const snapshot = await db.collection('societies').get();
         const matches = snapshot.docs.filter(doc => {
             const data = doc.data() || {};
             const aliases = [doc.id, data.name, ...strings(data.legacyNames), ...strings(data.aliases)];
@@ -62,14 +69,14 @@ function createAuthorization(options) {
 
         const found = new Map();
         try {
-            const direct = await db.collection(collectionName).doc(email).get({ fresh: true });
+            const direct = await db.collection(collectionName).doc(email).get({ ttlMs: membershipTtlMs });
             if (direct.exists && identityMatches(direct, email, uid)) found.set(direct.id, direct);
         } catch (_) { /* Continue through compatibility lookup. */ }
 
         // Older records have a doc ID that preserves the email's original case,
         // or a differently-cased `email` field. This fallback is server-only.
         if (found.size === 0) {
-            const snapshot = await db.collection(collectionName).get({ fresh: true });
+            const snapshot = await db.collection(collectionName).get({ ttlMs: membershipTtlMs });
             snapshot.forEach(doc => {
                 if (identityMatches(doc, email, uid)) found.set(doc.id, doc);
             });
@@ -143,11 +150,11 @@ function createAuthorization(options) {
         const recordsFor = async collectionName => {
             const found = new Map();
             try {
-                const direct = await db.collection(collectionName).doc(email).get({ fresh: true });
+                const direct = await db.collection(collectionName).doc(email).get({ ttlMs: membershipTtlMs });
                 if (direct.exists) found.set(direct.id, direct);
             } catch (_) { /* Fall through to the email-field scan. */ }
             if (found.size === 0) {
-                const snapshot = await db.collection(collectionName).get({ fresh: true });
+                const snapshot = await db.collection(collectionName).get({ ttlMs: membershipTtlMs });
                 snapshot.forEach(doc => {
                     const data = doc.data() || {};
                     if (normalize(data.email || doc.id) === email) found.set(doc.id, doc);

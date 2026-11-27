@@ -519,11 +519,29 @@
         return { 'X-Firebase-AppCheck': appCheckToken };
     }
 
+    // The API exchanges a Firebase ID token for its own short-lived JWT. Without
+    // an ID token the exchange can only answer 400, so it is skipped: that call
+    // was one guaranteed-error invocation on every page load of the static site.
+    async function getIdTokenIfAvailable() {
+        try {
+            if (typeof window.OWL_GET_ID_TOKEN === 'function') return await window.OWL_GET_ID_TOKEN();
+            if (typeof auth !== 'undefined' && auth && auth.currentUser && typeof auth.currentUser.getIdToken === 'function') {
+                return await auth.currentUser.getIdToken();
+            }
+        } catch (err) {
+            console.error("Failed to read the Firebase ID token:", err);
+        }
+        return null;
+    }
+
     async function getAuthHeaders() {
         try {
+            const idToken = await getIdTokenIfAvailable();
+            if (!idToken) throw new Error('no-session');
             const tokenResponse = await fetch(`${API_BASE_URL}/auth/token`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...NG_HEADERS }
+                headers: { 'Content-Type': 'application/json', ...NG_HEADERS },
+                body: JSON.stringify({ idToken })
             });
             if (tokenResponse.ok) {
                 const tokenData = await tokenResponse.json();
@@ -1070,14 +1088,9 @@
 
         try {
             const headers = await getAuthHeaders();
-            let response = await fetch(`${API_BASE_URL}/ads/local/${encodeURIComponent(societyId)}`, { headers });
-            
-            if (!response.ok) {
-                response = await fetch(`${API_BASE_URL}/ads/local/${encodeURIComponent(societyId.toLowerCase())}`, { headers });
-            }
-            if (!response.ok && currentSociety) {
-                response = await fetch(`${API_BASE_URL}/ads/local/${encodeURIComponent(currentSociety)}`, { headers });
-            }
+            // The API resolves the society document case-insensitively, so one
+            // request is enough; retrying other casings only bought invocations.
+            const response = await fetch(`${API_BASE_URL}/ads/local/${encodeURIComponent(societyId)}`, { headers });
 
             const rawText = response.ok ? await response.text() : "";
             let ads = [];
@@ -1251,7 +1264,8 @@
     }
     
     window.addEventListener("DOMContentLoaded", async () => {
-        await fetchTeamPhone();
+        // One /config read per page load: updateContactUsWhatsAppLink() already
+        // fetches the team phone, so awaiting it separately doubled the call.
         await updateContactUsWhatsAppLink();
         updateAdLinks();
 

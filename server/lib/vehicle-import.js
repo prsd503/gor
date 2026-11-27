@@ -82,9 +82,9 @@ function createVehicleImport(options) {
         // Existing registry for this society, keyed by plate.
         const aliases = society.aliases.slice(0, 30);
         const snapshots = await Promise.all([
-            db.collection('vehicles').where('societyId', '==', society.id).get({ fresh: true }),
-            db.collection('vehicles').where('societyName', 'in', aliases).get({ fresh: true }),
-            db.collection('vehicles').where('society', 'in', aliases).get({ fresh: true })
+            db.collection('vehicles').where('societyId', '==', society.id).get(),
+            db.collection('vehicles').where('societyName', 'in', aliases).get(),
+            db.collection('vehicles').where('society', 'in', aliases).get()
         ]);
         const byPlate = new Map();
         for (const snapshot of snapshots) {
@@ -96,7 +96,7 @@ function createVehicleImport(options) {
             });
         }
 
-        const societyDoc = await db.collection('societies').doc(society.id).get({ fresh: true });
+        const societyDoc = await db.collection('societies').doc(society.id).get();
         const societyData = societyDoc.exists ? societyDoc.data() || {} : {};
         const flatList = Array.isArray(societyData.flatList) ? societyData.flatList
             : (Array.isArray(societyData.flats) ? societyData.flats : []);
@@ -225,23 +225,39 @@ function createVehicleImport(options) {
         // simultaneous resident registration or import cannot exceed it.
         const lockRef = db.collection('vehicleRegistrationLocks').doc(registrationLockId(society.id));
         const societyRef = db.collection('societies').doc(society.id);
+        /* The registry is read ONCE for the whole file; each chunk then only
+         * re-reads the society document (its cap and flat list can change) and
+         * keeps its own tally. Re-reading all three society queries inside every
+         * 100-row transaction multiplied a 2,000-row import's read bill by 20. */
+        const registrySnapshots = await Promise.all([
+            db.collection('vehicles').where('societyId', '==', society.id).get(),
+            db.collection('vehicles').where('societyName', 'in', aliases).get(),
+            db.collection('vehicles').where('society', 'in', aliases).get()
+        ]);
+        // A document can answer all three queries; dedupe by id or the cap count
+        // would be inflated (and the import would reject rows it should add).
+        const seenAtStart = new Set();
+        const platesAtStart = new Set();
+        for (const snapshot of registrySnapshots) snapshot.forEach(doc => {
+            if (seenAtStart.has(doc.id)) return;
+            const data = doc.data() || {};
+            if (!vehicleBelongsTo(data, doc.id, society)) return;
+            seenAtStart.add(doc.id);
+            const plate = normalizePlate(data.vehicleNumber);
+            if (plate) platesAtStart.add(plate);
+        });
+        const countAtStart = seenAtStart.size;
+        let writtenSoFar = 0;
+
         for (let i = 0; i < creates.length; i += 100) {
             const chunk = creates.slice(i, i + 100).map(row => ({ ...row, ref: db.collection('vehicles').doc() }));
             const outcomes = await db.runTransaction(async tx => {
-                const [societySnap, lockSnap, ...snapshots] = await Promise.all([
-                    tx.get(societyRef), tx.get(lockRef),
-                    tx.get(db.collection('vehicles').where('societyId', '==', society.id)),
-                    tx.get(db.collection('vehicles').where('societyName', 'in', aliases)),
-                    tx.get(db.collection('vehicles').where('society', 'in', aliases))
+                const [societySnap, lockSnap] = await Promise.all([
+                    tx.get(societyRef), tx.get(lockRef)
                 ]);
                 if (!societySnap.exists) throw new Error('Society no longer exists.');
-                const current = new Map();
-                for (const snapshot of snapshots) snapshot.forEach(doc => {
-                    const data = doc.data() || {};
-                    if (vehicleBelongsTo(data, doc.id, society)) current.set(doc.id, data);
-                });
-                const existingPlates = new Set([...current.values()].map(data => normalizePlate(data.vehicleNumber)).filter(Boolean));
-                let count = current.size;
+                const existingPlates = new Set(platesAtStart);
+                let count = countAtStart + writtenSoFar;
                 const freshSociety = societySnap.data() || {};
                 const max = totalVehicleLimit(freshSociety);
                 const currentFlats = Array.isArray(freshSociety.flatList) ? freshSociety.flatList : (Array.isArray(freshSociety.flats) ? freshSociety.flats : []);
@@ -267,9 +283,14 @@ function createVehicleImport(options) {
                     }
                 }
                 if (added) {
+                    // The lock write is what makes a concurrent registration or
+                    // import conflict with this chunk instead of both committing.
                     const version = lockSnap.exists ? Number((lockSnap.data() || {}).version) || 0 : 0;
                     tx.set(lockRef, { societyId: society.id, version: version + 1, updatedAt: stamp });
                 }
+                return { result, added };
+            }).then(({ result, added }) => {
+                writtenSoFar += added;
                 return result;
             });
             for (const { row, action, reason } of outcomes) {
