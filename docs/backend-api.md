@@ -14,7 +14,7 @@
 
 # Owl Watcher backend API
 
-Backend code lives in `server/`. It is deployed as the `api` Cloud Function (`https://us-central1-finder-owl.cloudfunctions.net/api`); the static frontend stays on GitHub Pages / the Android app. There is no Firebase Hosting deployment.
+Backend code lives in `server/`. It is deployed as the `api` Cloud Function and is publicly reachable at the **permanent custom domain `https://api.owlwatcher.tech/api`** (Functions console → `api` → Custom domains). The Function's own URL `https://us-central1-finder-owl.cloudfunctions.net/api` remains as a failover in `api-env.js`. The frontend is fixed to the domain in `api-env.js`, so a future backend move only requires remapping the domain — never a frontend update. The static frontend stays on GitHub Pages / the Android app. There is no Firebase Hosting deployment.
 
 ```
 server/index.js               Express app and all routes

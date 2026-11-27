@@ -10,7 +10,10 @@
     'use strict';
 
     var LEGACY_BASES = ['https://api.owlwatcher.tech/api'];
-    var DEFAULT_BASE = 'https://us-central1-finder-owl.cloudfunctions.net/api';
+    // Last resort when a page's api-env.js is missing or invalid: the
+    // permanent custom domain, keeping the stable frontend contract even if
+    // the backend moves to another cloud provider.
+    var DEFAULT_BASE = 'https://api.owlwatcher.tech/api';
     var ACTIVE_KEY = 'owl:api:active';
     var DRAINED_KEY = 'owl:api:drained';
     var DRAIN_COOLDOWN_MS = 10 * 60 * 1000;

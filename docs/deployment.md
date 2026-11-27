@@ -105,9 +105,9 @@ The deployment exports only the `api` Function; there is **no scheduled Function
 Verify after deployment:
 
 ```sh
-curl https://us-central1-finder-owl.cloudfunctions.net/api/health
-curl https://us-central1-finder-owl.cloudfunctions.net/api/quota
-npm run quota:status -- https://us-central1-finder-owl.cloudfunctions.net/api
+curl https://api.owlwatcher.tech/api/health
+curl https://api.owlwatcher.tech/api/quota
+npm run quota:status -- https://api.owlwatcher.tech/api
 ```
 
 The HTTP function accepts `/config` under its function URL as well as `/api/config` on its generated Cloud Run URL. When using the latter, set the API base to `https://YOUR_SERVICE.run.app/api`.
@@ -120,15 +120,15 @@ Only after the authorization release blockers are fixed and the full API is veri
 
 ```js
 window.OWL_API_CONFIG = {
-    primary: 'https://us-central1-finder-owl.cloudfunctions.net/api',
+    primary: 'https://api.owlwatcher.tech/api',
     local: '',
-    fallbacks: []
+    fallbacks: ['https://us-central1-finder-owl.cloudfunctions.net/api']
 };
 ```
 
 All application pages load it before API calls. Existing Auth and App Check behavior is retained. The version popup does not bypass the managed API's drain by making a direct Firestore read.
 
-Keep GitHub Pages for the website. **Firebase Hosting is not deployed at all** (the former API-only Hosting site `api.owlwatcher.tech` and its two stub pages were removed, along with `firebase.api.json` and `scripts/prepare-hosting.js`): the API is reachable only through the Cloud Function URL, and the static frontend stays on GitHub Pages / the Android app. Remove the `api.owlwatcher.tech` custom domain from the Firebase console and its DNS CNAME after switching.
+Keep GitHub Pages for the website. **Firebase Hosting is not deployed at all** (the former API-only Hosting site and its stub pages were removed, along with `firebase.api.json` and `scripts/prepare-hosting.js`): the static frontend stays on GitHub Pages / the Android app, and the API is reachable through the **`api` Function's custom domain `https://api.owlwatcher.tech/api`** (Functions console → `api` → Custom domains; CNAME `api` → `ow-fc-apps-as-dns.google.com` at the DNS provider). That domain is the permanent frontend contract — `api-env.js` is fixed to it, so moving the backend to another cloud later only means remapping the domain. The Firebase Function URL stays in the `fallbacks` list purely as a failover for that transition.
 
 Hostinger is not an authorized backend host; do not direct backend traffic there. This code does not cancel a Hostinger plan or change DNS, and those cleanup actions require separate approval.
 
